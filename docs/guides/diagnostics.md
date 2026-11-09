@@ -28,7 +28,7 @@ you can *see* "the asker was replaced" instead of inferring it.
 | `TargetUnavailable` | the target is dead, awaiting revival | supervise / revive |
 | `SenderLifeEnded` | the author's life ended before delivery | expected after kill/revive |
 | `AnswerTargetChanged` | the asker was replaced; the answer refused rather than misdelivered | re-ask from the new life |
-| `SealedSpeech` | a prepared candidate reached for the world | that's the operator's business to see |
+| `SealedSpeech` | a prepared candidate reached for the world | that's the weaver's business to see |
 | `ForeignAuthority` | an authority another Loom issued | you're on the wrong board |
 | `Exhausted` | a published bound ([which ones](../reference/bounds.md)) | release/redesign, not retry |
 | `AdmissionRevoked` | a scheduled admission met a drifted world — **nothing changed** | read the transaction outcome |

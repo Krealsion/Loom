@@ -303,7 +303,7 @@ def _human_run(r):
         print("  ask %s %s v%d -> %s%s: %s %s%s" % (
             first["correlation"] if count == 1 else "%d..%d" % (first["correlation"],
                                                                  last["correlation"]),
-            first["shape"], first["version"], first["office"],
+            first["shape"], first["version"], first["role"],
             " via " + first["via"] if first["via"] else "", first["outcome"], first["detail"],
             " (%d asks)" % count if count > 1 else ""))
     if r["notes_dropped"]:
@@ -313,11 +313,11 @@ def _human_run(r):
 
 
 def _ask_groups(asks):
-    """Consecutive asks of one shape, office, route and outcome as one line -- a picture fetched
+    """Consecutive asks of one shape, role, route and outcome as one line -- a picture fetched
     in forty chunks is one step to a person; ``--json`` keeps each ask."""
     groups = []
     for a in asks:
-        key = (a["shape"], a["version"], a["office"], a["via"], a["outcome"], a["detail"])
+        key = (a["shape"], a["version"], a["role"], a["via"], a["outcome"], a["detail"])
         if groups and groups[-1][0] == key:
             groups[-1][2] = a
             groups[-1][3] += 1

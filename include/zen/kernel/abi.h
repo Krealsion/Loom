@@ -22,7 +22,7 @@ extern "C" {
  * and refuses any other version before calling into the image, at load and as a replacement for
  * a live participant, naming both; there is no old-image bridge. Rebuild hosts, libraries and
  * images together. What each version carried: docs/reference/dynamic-abi.md */
-#define ZEN_ABI_VERSION 10u
+#define ZEN_ABI_VERSION 11u
 
 /* Delivery provenance (ZEN_PROV_*), one value per delivery. Zero is an ordinary message. Set
  * by the host from bus-owned state; no payload a weave composes produces one. */
@@ -49,15 +49,15 @@ enum {
                                     the host could not carry it out */
     ZEN_ERR_UNKNOWN_SCHEMA = -3, /* the host could not resolve the payload's schema */
     ZEN_ERR_NO_TARGET = -4,      /* the host had no such routing target */
-    /* The sender does not hold the office it asked to speak for; nothing was queued. Not a
+    /* The sender does not hold the role it asked to speak for; nothing was queued. Not a
      * gate refusal. */
     ZEN_ERR_ROLE_AUTHORSHIP_DENIED = -5,
     /* Sense refusals, distinct as their causes are: nothing claimed; the grant does not permit
-     * reading the shape; the shape is not in Claims<...>; the office is not held. */
+     * reading the shape; the shape is not in Claims<...>; the role is not held. */
     ZEN_ERR_SENSE_NO_CLAIM = -6,
     ZEN_ERR_SENSE_NOT_AUTHORIZED = -7,
     ZEN_ERR_SENSE_UNDECLARED = -8,
-    ZEN_ERR_SENSE_OFFICE_NOT_HELD = -9,
+    ZEN_ERR_SENSE_ROLE_NOT_HELD = -9,
     /* A refused joint offer: ZEN_ERR_JOINT_BASE minus the loom::JointRefusal enumerator. A
      * status below the base naming no enumerator reads as NoLiveDelivery, never as accepted. */
     ZEN_ERR_JOINT_BASE = -100,
@@ -73,10 +73,10 @@ typedef struct ZenByteSink {
     void (*write)(void* ctx, const uint8_t* data, size_t len);
 } ZenByteSink;
 
-/* The authorship of one observed claim, filled by the host from its own facts. The office name
+/* The authorship of one observed claim, filled by the host from its own facts. The role name
  * is not here: it crosses through a ZenByteSink like the value, so the name a reader sees is
- * the one authored, at any length. An office sink never written means a personal claim.
- * `office_holder_is_current` is meaningful only for an office claim. The two generation facts
+ * the one authored, at any length. A role sink never written means a personal claim.
+ * `role_holder_is_current` is meaningful only for a role claim. The two generation facts
  * are independent: after a live code replacement the life is current and the incarnation is
  * not. */
 typedef struct ZenSenseBy {
@@ -85,7 +85,7 @@ typedef struct ZenSenseBy {
     uint64_t author_incarnation;
     uint32_t author_life_is_current;         /* 0/1 */
     uint32_t author_incarnation_is_current;  /* 0/1; NOT implied by the line above */
-    uint32_t office_holder_is_current;       /* 0/1; meaningful iff an office was written */
+    uint32_t role_holder_is_current;       /* 0/1; meaningful iff a role was written */
     uint32_t reserved_;                      /* keep the 64-bit field below aligned */
     uint64_t revision;
 } ZenSenseBy;
@@ -119,44 +119,44 @@ typedef struct ZenHostApi {
      * ZEN_ERR_REFUSED means there was no answer to spend: a root's request, or one already
      * answered. */
     ZenStatus (*answer)(void* ctx, const uint8_t* payload, size_t len);
-    /* Office authorship: what a native weave reaches through `mail.as_role(...)`. The library
+    /* Role authorship: what a native weave reaches through `mail.as_role(...)`. The library
      * requests "speak as as_role"; the host verifies the weave bound to this context holds it
      * now and stamps the provenance. ZEN_ERR_ROLE_AUTHORSHIP_DENIED means nothing was queued.
-     * In office_send_to_role, as_role is the office spoken for and to_role the destination,
-     * resolved at delivery. office_publish writes the recipient count to `recipients_out` (may
+     * In role_send_to_role, as_role is the role spoken for and to_role the destination,
+     * resolved at delivery. role_publish writes the recipient count to `recipients_out` (may
      * be NULL), so "zero listeners" and "denied" stay distinct. Strings are NUL-terminated and
      * valid for the call. */
-    ZenStatus (*office_send)(void* ctx, const char* as_role, uint64_t target, uint64_t reply_to,
+    ZenStatus (*role_send)(void* ctx, const char* as_role, uint64_t target, uint64_t reply_to,
                              uint64_t correlation, const uint8_t* payload, size_t len, uint64_t* attempt_out);
-    ZenStatus (*office_send_to_role)(void* ctx, const char* as_role, const char* to_role,
+    ZenStatus (*role_send_to_role)(void* ctx, const char* as_role, const char* to_role,
                                      uint64_t reply_to, uint64_t correlation,
                                      const uint8_t* payload, size_t len, uint64_t* attempt_out);
-    ZenStatus (*office_publish)(void* ctx, const char* as_role, uint64_t reply_to,
+    ZenStatus (*role_publish)(void* ctx, const char* as_role, uint64_t reply_to,
                                 uint64_t correlation, const uint8_t* payload, size_t len,
                                 uint64_t* recipients_out);
     /* Senses: what a native weave reaches through `mail.claim(...)`,
      * `mail.as_role(R).claim(...)` and `mail.latest<T>(...)`. A claim's bytes are admitted
-     * through the gate before they are stored, against the declared claim-set; the office form
+     * through the gate before they are stored, against the declared claim-set; the role form
      * verifies membership now. `revision_out` (may be NULL) receives the claim's revision.
      *
-     * observe and observe_office name the shape by (name, version) and return a copy: the value
-     * through `sink`, the authored office through `office_sink` (written only for an office
+     * observe and observe_role name the shape by (name, version) and return a copy: the value
+     * through `sink`, the authored role through `role_sink` (written only for a role
      * claim, exactly, at any length) and the other authorship facts through `by`. A refusal is
      * one of the four ZEN_ERR_SENSE_* statuses. */
     ZenStatus (*sense_claim)(void* ctx, const uint8_t* payload, size_t len,
                              uint64_t* revision_out);
-    ZenStatus (*sense_office_claim)(void* ctx, const char* as_role, const uint8_t* payload,
+    ZenStatus (*sense_role_claim)(void* ctx, const char* as_role, const uint8_t* payload,
                                     size_t len, uint64_t* revision_out);
     ZenStatus (*sense_observe)(void* ctx, uint64_t author, const char* shape_name,
                                uint32_t shape_version, ZenByteSink sink,
-                               ZenByteSink office_sink, ZenSenseBy* by);
-    ZenStatus (*sense_observe_office)(void* ctx, const char* role, const char* shape_name,
+                               ZenByteSink role_sink, ZenSenseBy* by);
+    ZenStatus (*sense_observe_role)(void* ctx, const char* role, const char* shape_name,
                                       uint32_t shape_version, ZenByteSink sink,
-                                      ZenByteSink office_sink, ZenSenseBy* by);
+                                      ZenByteSink role_sink, ZenSenseBy* by);
     /* Offer the next value of one of this weave's own latest claims for the joint operation
      * `op` (docs/reference/joint-publication.md). Admitted against the declared claim-set; the
      * host checks the operation, bound revision and exact claimant, and keeps the value until
-     * the operator commits or the operation aborts. Nothing is published here. Returns ZEN_OK
+     * the initiator commits or the operation aborts. Nothing is published here. Returns ZEN_OK
      * or ZEN_ERR_JOINT_BASE minus the refusal. The isolated pipe supplies NULL: a child cannot
      * present the exact identity an operation binds. */
     ZenStatus (*sense_offer)(void* ctx, uint64_t op, const uint8_t* payload, size_t len);
@@ -186,7 +186,7 @@ typedef struct ZenWeaveAbi {
     ZenStatus (*revive)(void* instance, const uint8_t* state, size_t len);
     /* Handle an inbound message the host has already gated; may send through `host`.
      * `provenance` is a ZEN_PROV_* value and `attested_sequence` the sequence Loom attested
-     * (for ZEN_PROV_ACTIVATION, else 0). `authored_role` is the office this delivery was
+     * (for ZEN_PROV_ACTIVATION, else 0). `authored_role` is the role this delivery was
      * deliberately authored as, verified by the host; NULL or empty is personal speech. It is
      * its own parameter because it may coexist with an answer or an activation. All three are
      * host-computed facts a library trusts as far as `sender`: none can be forged outbound or
@@ -204,14 +204,14 @@ typedef struct ZenWeaveAbi {
      *   ZEN_OK               Applied.  The library applied the value and stands behind it.
      *   ZEN_CLAIM_DECLINED   Declined. Functioning, it did not apply the value and keeps state
      *                                  of its own, re-claimed at its next delivery. Not held;
-     *                                  the operator is told.
+     *                                  the initiator is told.
      *   any negative status  Failed.   The showing did not complete: ZEN_ERR for an exception
      *                                  from the weaver's handler or `PublishedClaim::Failed`,
      *                                  ZEN_ERR_UNKNOWN_SCHEMA or ZEN_ERR_REFUSED for bytes the
      *                                  library's gate refused. The weave is held (deliveries
      *                                  refused `ApplicationFailed`, its ordinary snapshot
      *                                  refused, this slot not called again for that value)
-     *                                  until reloaded or removed; the operator is told.
+     *                                  until reloaded or removed; the initiator is told.
      *   any other positive   Failed.   Undefined for this slot; never Applied. */
     ZenStatus (*claim_published)(void* instance, const uint8_t* value, size_t len);
 } ZenWeaveAbi;

@@ -1,7 +1,7 @@
 # One gate at every boundary
 
 **Context.** A value crosses many thresholds: bus delivery, persistence,
-dynamic-library seams, IPC, the operator bridge. Each could validate its own
+dynamic-library seams, IPC, the bridge. Each could validate its own
 way — or one authority could judge them all.
 
 **Decision.** `loom::admit()` is the sole conformance authority. Every
@@ -16,7 +16,7 @@ folded in.
   rejected, deliberately untaken, so "one gate, every delivery" stays
   literally true and countable.
 - *Folding grant checks into the gate* — rejected: "may you say this" and "is
-  this well-formed" send an operator to different fixes, and conflating them
+  this well-formed" send a weaver to different fixes, and conflating them
   is how authorization bugs hide inside schema errors.
 
 **Consequences.** A counter (`gate_invocations()`) can prove coverage in

@@ -28,13 +28,13 @@ PROVEN BY — `WeaveRecord::sealed_by` + the routing paths themselves; suite
 
 LAW — A replacement transaction belongs to exact participant lives, is bounded,
 names one incumbent and one candidate exclusively, and produces exactly one
-terminal outcome for the exact operator that began it.
+terminal outcome for the exact initiator that began it.
 
 MEANS
 - bounds are published: 8 concurrent transactions, budget ≤ 1024 steps, 16
   retained outcomes; capacity refuses before anything is touched;
 - one transaction per incumbent AND per candidate;
-- outcomes are evidence, not authority — consumed once, by the operator life
+- outcomes are evidence, not authority — consumed once, by the initiator life
   that began the transaction; a successor inherits nothing.
 
 DOES NOT MEAN

@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Joshua DeMoss
 
 // loom-host, the supplied host: a boot walk the person authors (host/boot_plan.hpp), an
-// operator console, and the authority store that carries their decisions across restarts
+// weaver's console, and the authority store that carries their decisions across restarts
 // (zen/host/authority.hpp). Every part is an ordinary, replaceable participant: ConsoleEngine,
 // WeaveManager, ControlWeave and HostWarden. The three rules it is built around (attributed
 // answers, adoption inside the load, a bounded turn) are in AGENTS.md, beside the code here.
@@ -203,7 +203,7 @@ Options parse_options(int argc, char** argv) {
 
 // ---- the session ------------------------------------------------------------
 
-/// WHAT AN OPERATOR-INITIATED CONVERSATION CAME TO.
+/// WHAT AN WEAVER-INITIATED CONVERSATION CAME TO.
 ///
 /// `Pending` is a real outcome and the reason this is not an `optional<BufferEntry>`: a
 /// weave is entitled to take longer than this host's patience, and the honest report is
@@ -262,9 +262,9 @@ public:
             selection.shapes.push_back(loom::LogRule{k.shape, static_cast<std::size_t>(k.cap)});
         }
         journal_ = std::make_unique<loom::Logger>(bus_, std::move(selection));
-        // The console first: the warden needs its id as the operator seat. It declares its
+        // The console first: the warden needs its id as the weaver seat. It declares its
         // vocabulary because its wildcard accept means "any shape the registry can resolve",
-        // and a shape that only travels to the operator (`zen.AuthorityDescription`, which
+        // and a shape that only travels to the weaver (`zen.AuthorityDescription`, which
         // the warden emits and nothing accepts) would otherwise be refused `SeamUnresolved`.
         console_ = std::make_unique<loom::ConsoleEngine>(
             bus_, std::vector<std::shared_ptr<const loom::Schema>>{
@@ -319,7 +319,7 @@ public:
 
     // ---- links to other hosts ---------------------------------------------------
 
-    /// MOUNT THE LINKS THE PLAN NAMES, each as one ordinary participant holding office
+    /// MOUNT THE LINKS THE PLAN NAMES, each as one ordinary participant holding role
     /// `loom.link.<name>`, and connect each. A link that cannot connect is still mounted --
     /// it answers `unlinked` to every ask and `links connect <name>` tries again -- so a
     /// far host that is not up yet costs the boot one sentence and nothing else.
@@ -342,7 +342,7 @@ public:
             if (raw->connect(kLinkConnectMs, &why)) {
                 said.push_back("  link " + e.name + " -> " + e.connect + ": admitted as '" +
                                raw->established_name() + "' (session " +
-                               std::to_string(raw->session()) + "; office " +
+                               std::to_string(raw->session()) + "; role " +
                                loom::link::role_of(e.name) + ", weave " +
                                std::to_string(id.value) + ")");
             } else {
@@ -355,7 +355,7 @@ public:
 
     // ---- serve mode: the session door and the scoped history reader ---------------------------
 
-    /// MOUNT THE SESSION'S TWO OFFICES AND OPEN THE LISTENER (serve mode only). Both are host
+    /// MOUNT THE SESSION'S TWO ROLES AND OPEN THE LISTENER (serve mode only). Both are host
     /// wiring beside the warden and the links: `loom.session` owns admission to this host and its
     /// lifetime (host/session_door.hpp); `loom.history` reads this host's own Recorder for a client
     /// that is not the console and is given no tap (host/history_reader.hpp). The reader is
@@ -372,7 +372,7 @@ public:
         reader_grant.allow_to_any(loom::session::Records::zen_name,
                                   loom::session::Records::zen_version);
         reader_grant.allow_to_any(loom::Refused::zen_name, loom::Refused::zen_version);
-        // ...and SELF-DESCRIBING, deliberately: a client that knows only the office may ask it
+        // ...and SELF-DESCRIBING, deliberately: a client that knows only the role may ask it
         // what it accepts (`zen.DescribeAccepted`). Describing grants nothing to the asker.
         loom::allow_describe_answers(reader_grant);
         reader_id_ = bus_.register_weave(std::move(reader), reader_grant,
@@ -516,8 +516,8 @@ public:
         return ask != 0 && console_->settled(ask).has_value();
     }
 
-    /// Compose a message from the operator seat, deliver it, and settle its answer: the one
-    /// public path for every operator-initiated conversation here. The console's weave speaks
+    /// Compose a message from the weaver seat, deliver it, and settle its answer: the one
+    /// public path for every weaver-initiated conversation here. The console's weave speaks
     /// as itself under its own grant, and what comes back is an arrival Loom attributed to
     /// this conversation (the correlation it minted, the bus's stamp of who spoke).
     Answer ask(loom::WeaveId target, const char* shape, std::uint32_t version,
@@ -769,7 +769,7 @@ void print_help() {
   start <name> <path> [role]    load an artifact (through the steward — policy decides)
   reload <name> <path>          reload it in place, same id, state carried
   stop <name>                   unload it: that application ends, this host does not
-  list                          what the steward says is loaded, and under which offices
+  list                          what the steward says is loaded, and under which roles
 
 )" << loom::host::authority_help()
               << R"(
@@ -875,7 +875,7 @@ void cmd_status(HostSession& s, const loom::host::BootPlan& plan, const PlanSour
 }
 
 /// This host's half of the `authority` command (zen/host/authority_command.hpp): its console is
-/// the operator seat its warden obeys, and an answer is the one the console settled on that
+/// the weaver seat its warden obeys, and an answer is the one the console settled on that
 /// question's own conversation. A sync is the only route by which delegated authority changes at
 /// a person's request, and it is a message, so it shows on the tap.
 class ConsoleDesk final : public loom::host::AuthorityDesk {
@@ -1295,7 +1295,7 @@ bool dispatch(const std::string& line, HostSession& session, const loom::host::B
         }
         // BOUNDED, like everything else here. A weave whose handler queues its own next
         // message keeps the bus busy for as long as it likes; this host spends a fixed
-        // number of turns on the operator's send and then goes back to serving both.
+        // number of turns on the weaver's send and then goes back to serving both.
         (void)session.service(c.ask, kSettleTurns);
         const loom::SendOutcome o = session.console().outcome(c.ticket);
         if (o.refused) {
@@ -1629,7 +1629,7 @@ int main(int argc, char** argv) {
         std::cout << "  nothing from it was started. Fix " << plan_source.path
                   << " and restart, or start things by hand here.\n";
     }
-    // LINKS BEFORE THE BOOT WALK, so a boot row's weave finds its link's office already held
+    // LINKS BEFORE THE BOOT WALK, so a boot row's weave finds its link's role already held
     // when it is told it is live.
     for (const std::string& line : session.mount_links(plan.links)) {
         std::cout << line << '\n';

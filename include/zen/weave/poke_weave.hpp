@@ -4,7 +4,7 @@
 #ifndef ZEN_WEAVE_POKE_WEAVE_HPP
 #define ZEN_WEAVE_POKE_WEAVE_HPP
 
-// The Poke weave: the participant an operator drives to inspect and change other weaves live.
+// The Poke weave: the participant a weaver drives to inspect and change other weaves live.
 // An ordinary woven Weave with no special powers: an accept-set, and the grant mount<PokeWeave>
 // derives from its Emit<...>. It reaches other weaves only by sending them the poke protocol,
 // which each target's construction layer enforces (poke.hpp), so it cannot reach past what a
@@ -30,7 +30,7 @@
 
 namespace loom {
 
-// ---- the operator command shapes --------------------------------------------
+// ---- the weaver command shapes --------------------------------------------
 // A command names a third-party target; a protocol message arriving at a weave means "you".
 
 /// Inspect a weave's structure: every field, with its tags.

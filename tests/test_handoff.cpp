@@ -170,7 +170,7 @@ struct Garden {
     }
 
     SenseReading ledger_status() {
-        return bus.observe_office(kLedgerRole, "LedgerStatus", 1);
+        return bus.observe_role(kLedgerRole, "LedgerStatus", 1);
     }
     LedgerStatus status() { return from_value<LedgerStatus>(*ledger_status().value); }
 };
@@ -296,11 +296,11 @@ TEST_CASE("the whole authored handoff — quiesce, author the final value, migra
     REQUIRE_MESSAGE(started.ok, started.error);
     const WeaveId candidate = txn.candidate();
 
-    // The candidate is sealed: it has claimed nothing as the office, and cannot.
+    // The candidate is sealed: it has claimed nothing as the role, and cannot.
     SenseReading before = g.ledger_status();
     REQUIRE(before);
     CHECK(before.by.author == g.incumbent);
-    CHECK(before.by.office_holder_is_current);
+    CHECK(before.by.role_holder_is_current);
     CHECK_FALSE(g.bus.observe(candidate, "LedgerStatus", 1));
 
     // 4. THE MIGRATION, authored by a temporary weave with a bus identity.
@@ -440,13 +440,13 @@ TEST_CASE("queued OLD-PROTOCOL traffic is never magically migrated — four posi
         }
     });
 
-    // POSITION 1 — before the boundary, incumbent owns the office. Ordinary
+    // POSITION 1 — before the boundary, incumbent owns the role. Ordinary
     // handling: the old command means what it always meant.
     g.bus.send(g.incumbent, Message(to_value(AddV1{10})));
     g.bus.drain_until_idle();
     CHECK(refusals.empty());
 
-    // POSITION 2 — after the boundary, incumbent STILL owns the office. The
+    // POSITION 2 — after the boundary, incumbent STILL owns the role. The
     // message is delivered (the shape is accepted, the holder is unchanged) and
     // the DOMAIN declines it. This is a domain policy, not a Loom refusal, and
     // the two are deliberately different things.
@@ -468,7 +468,7 @@ TEST_CASE("queued OLD-PROTOCOL traffic is never magically migrated — four posi
     REQUIRE(txn.state() == TxnState::Ready);
 
     // POSITION 3 — queued AROUND the commit, addressed to the ROLE. It is
-    // resolved at delivery, so it reaches whoever holds the office THEN: the
+    // resolved at delivery, so it reaches whoever holds the role THEN: the
     // successor, which does not accept the old shape.
     REQUIRE(txn.commit(1).ok);
     g.bus.send_to_role(kLedgerRole, Message(to_value(AddV1{30})));
@@ -487,26 +487,26 @@ TEST_CASE("queued OLD-PROTOCOL traffic is never magically migrated — four posi
     CHECK(refusals[0] == RefusalReason::NotAccepted);
     CHECK(refusals[1] == RefusalReason::NotAccepted);
     // ...and nothing was transformed: the successor's totals never saw 30 or 40.
-    CHECK(g.bus.observe_office(kLedgerRole, "LedgerStatus", 1));
+    CHECK(g.bus.observe_role(kLedgerRole, "LedgerStatus", 1));
 }
 
 // ---- Senses meet Handoff -----------------------------------------------------
 
-TEST_CASE("across the handoff the office's claim is never relabelled — the incumbent's final "
+TEST_CASE("across the handoff the role's claim is never relabelled — the incumbent's final "
           "claim stays the incumbent's, the successor claims nothing until it does, and then the "
           "role-bound view follows it") {
     Garden g;
     g.start_v1(/*issue_count=*/5, /*add_total=*/50);
     g.load_migrator();
 
-    // The incumbent's latest claim, as the office, while it is still the office.
+    // The incumbent's latest claim, as the role, while it is still the role.
     SenseReading live = g.ledger_status();
     REQUIRE(live);
     CHECK(live.by.author == g.incumbent);
-    CHECK(live.by.office_holder_is_current);
+    CHECK(live.by.role_holder_is_current);
     CHECK(from_value<LedgerStatus>(*live.value).version == "v1");
 
-    // The boundary: the incumbent makes its FINAL claim as the office.
+    // The boundary: the incumbent makes its FINAL claim as the role.
     g.bus.send(g.incumbent, Message(to_value(Quiesce{1})));
     g.bus.drain_until_idle();
     SenseReading final_claim = g.ledger_status();
@@ -520,7 +520,7 @@ TEST_CASE("across the handoff the office's claim is never relabelled — the inc
         g.coordinator_id, g.coordinator_id, kLedgerRole, "ledger.v2", ZEN_SO_HANDOFF_V2, 16});
     REQUIRE_MESSAGE(started.ok, started.error);
 
-    // A SEALED CANDIDATE HAS NO OFFICE CLAIM, and cannot make one.
+    // A SEALED CANDIDATE HAS NO ROLE CLAIM, and cannot make one.
     CHECK_FALSE(g.bus.observe(txn.candidate(), "LedgerStatus", 1));
 
     g.ask_describe();
@@ -530,15 +530,15 @@ TEST_CASE("across the handoff the office's claim is never relabelled — the inc
     g.bus.drain_until_idle();
     REQUIRE(g.bus.role_holder(kLedgerRole) == txn.candidate());
 
-    // The successor's zen.Activated handler claimed as the office — legally,
-    // after activation. Before that handler ran, the office's claim was still the
+    // The successor's zen.Activated handler claimed as the role — legally,
+    // after activation. Before that handler ran, the role's claim was still the
     // predecessor's; the two facts are never merged.
     SenseReading now = g.ledger_status();
     REQUIRE(now);
     CHECK(now.by.author == txn.candidate());
-    CHECK(now.by.office_holder_is_current);
+    CHECK(now.by.role_holder_is_current);
     CHECK(from_value<LedgerStatus>(*now.value).version == "v2");
-    // A replacement of the SAME office key: the revision advanced rather than
+    // A replacement of the SAME role key: the revision advanced rather than
     // resetting, because the role moved in place and the key never died.
     CHECK(now.by.revision == final_revision + 1);
 

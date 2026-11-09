@@ -10,11 +10,11 @@
 // A participant somewhere else -- another host's agent, a monitor -- often wants the same
 // sentences as they happen, without being a listener the producer's host installed, and without a
 // tap on that host's whole bus. A RELAY (`zen/observe/relay.hpp`) is how a host offers that: a
-// subscriber asks the relay's office for one producer's publications of named shapes, the host's
+// subscriber asks the relay's role for one producer's publications of named shapes, the host's
 // policy says yes or no, and from then on the relay tells the subscriber each such publication, in
 // order, numbered, until the subscription ends. docs/reference/observation.md is the contract.
 //
-// OBSERVATION IS ITS OWN AUTHORITY. Asking needs a send rule for `Subscribe` to the relay's office,
+// OBSERVATION IS ITS OWN AUTHORITY. Asking needs a send rule for `Subscribe` to the relay's role,
 // like any ask; being ANSWERED yes is the relay's host policy, and it admits nothing unless the host
 // said otherwise. Neither a send rule, nor knowing a shape, nor being able to inject input or take a
 // picture on that host is permission to observe. And observing grants nothing: a subscriber that
@@ -47,7 +47,7 @@
 
 namespace loom::observe {
 
-/// The office a relay holds.
+/// The role a relay holds.
 inline constexpr const char* kObserveRole = "loom.observe";
 
 /// The two payload encodings a subscriber may ask for: Zen's canonical binary, or Zen's
@@ -74,7 +74,7 @@ struct ShapeRef {
 /// ASK TO OBSERVE `producer`'s publications of `shapes`, from now on. Answered `Subscribed` or
 /// `zen.Refused` (with the relay's or its host's reason).
 ///
-/// `producer` is an OFFICE: what is told is what the office's holder at each delivery published,
+/// `producer` is an ROLE: what is told is what the role's holder at each delivery published,
 /// and each observation names that holder and its incarnation, so a replaced holder is visible.
 /// `latest` names shapes among `shapes` that are STATE rather than occurrences: while the window is
 /// shut the relay keeps only the newest of each, and says how many it stood for. `window` is how
@@ -103,7 +103,7 @@ struct Subscribed {
     std::int64_t subscription = 0;
     std::string relay;       ///< the relay's lifetime: minted when it was made, never reused
     std::string producer;
-    std::int64_t holder = 0; ///< who held the office as the subscription began; 0 when nobody did
+    std::int64_t holder = 0; ///< who held the role as the subscription began; 0 when nobody did
     std::int64_t incarnation = 0;
     std::int64_t window = 0; ///< the window granted
     std::string encoding;
@@ -124,7 +124,7 @@ struct Subscribed {
 /// ONE PUBLICATION, AS THE RELAY HEARD IT. Said to the subscriber; never an answer.
 ///
 /// `producer` and `incarnation` are the bus-stamped publisher and its incarnation at delivery;
-/// `office` is the office it deliberately spoke as, if it did. `cause` is the SUBSCRIBER'S OWN
+/// `role` is the role it deliberately spoke as, if it did. `cause` is the SUBSCRIBER'S OWN
 /// correlation of the settle-requested send whose synchronous dispatch set this publication in
 /// motion, when there was one; it is never another participant's. `delivery` and `published_in` are
 /// the relay bus's sequence numbers of this publication's delivery to the relay and of the delivery
@@ -139,7 +139,7 @@ struct Observed {
     loom::Bytes payload; ///< the published value, in the subscription's encoding
     std::int64_t producer = 0;
     std::int64_t incarnation = 0;
-    std::string office;
+    std::string role;
     std::int64_t coalesced = 0; ///< earlier publications of a `latest` shape this one stands for
     std::int64_t cause = 0;
     std::int64_t delivery = 0;
@@ -149,11 +149,11 @@ struct Observed {
     std::int64_t session = 0;
     using ZenSelf = Observed;
     static constexpr const char* zen_name = "loom.observe.Observed";
-    static constexpr std::uint32_t zen_version = 1;
+    static constexpr std::uint32_t zen_version = 2;
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(subscription), ZEN_FIELD(relay), ZEN_FIELD(seq),
                                ZEN_FIELD(shape), ZEN_FIELD(version), ZEN_FIELD(payload),
-                               ZEN_FIELD(producer), ZEN_FIELD(incarnation), ZEN_FIELD(office),
+                               ZEN_FIELD(producer), ZEN_FIELD(incarnation), ZEN_FIELD(role),
                                ZEN_FIELD(coalesced), ZEN_FIELD(cause), ZEN_FIELD(delivery),
                                ZEN_FIELD(published_in), ZEN_FIELD(link), ZEN_FIELD(epoch),
                                ZEN_FIELD(session));

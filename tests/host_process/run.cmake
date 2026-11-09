@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Joshua DeMoss
 #
 # The supplied host, as a real process: the defects of loom-host's glue (which message answers
-# which question, when an approved permission takes effect, whether the operator is still heard)
+# which question, when an approved permission takes effect, whether the weaver is still heard)
 # are observable only from outside, with a real process, console and loaded artifact.
 # Parameters: ZEN_HOST_EXE, ZEN_WORK, ZEN_GROUP, and for `weaves` also ZEN_PROBE_LIB and
 # ZEN_PROBE_FORGE_LIB.
@@ -329,7 +329,7 @@ if(ZEN_GROUP STREQUAL "weaves")
     # 2. An unrelated `zen.Result` is not this host's answer. The forge variant authors
     # `zen.Result{"1"}` at the console, unasked, landing after the genuine answer. `start` must
     # report the weave the steward loaded and administer that weave, not weave 1, the console,
-    # whose `any shape -> any target` baseline would hand a loaded artifact the operator's reach.
+    # whose `any shape -> any target` baseline would hand a loaded artifact the weaver's reach.
     message(STATUS "host_process/weaves: an unrelated Result is not an answer")
     zen_scenario_dir(unrelated-reply dir)
     zen_write_decisions("${dir}/decisions.json" "\"Startup v1 -> role probe\"")
@@ -356,7 +356,7 @@ quit
               text MATCHES "zen.Result v1  from weave 5  1")
 
     # 3. An ordinary `zen.LoadWeave` produces the same governed participant: adoption lives in the
-    # door, so a weave or an operator sending the steward's own shape cannot load an artifact that
+    # door, so a weave or a weaver sending the steward's own shape cannot load an artifact that
     # `authority show` does not know and whose remembered permissions were never installed.
     message(STATUS "host_process/weaves: a message-driven load is governed too")
     zen_scenario_dir(message-load dir)
@@ -377,7 +377,7 @@ quit
     # 4. The console stays reachable while the bus is busy forever. `Spin` re-arms itself in its
     # own handler, so the queue is never empty again; under an unbounded drain `stop probe` and
     # `quit` would wait in the pipe forever although every handler returns. The `Inspect` between
-    # them shows useful work continuing while the operator is served.
+    # them shows useful work continuing while the weaver is served.
     message(STATUS "host_process/weaves: the console survives an endlessly busy bus")
     zen_scenario_dir(busy-weave dir)
     zen_write_decisions("${dir}/decisions.json"
@@ -591,7 +591,7 @@ endif()
 
 if(ZEN_GROUP STREQUAL "repl")
 
-    # The operator's received ids follow from the script: r1 the first prompt, r2 the Weaver's
+    # The weaver's received ids follow from the script: r1 the first prompt, r2 the Weaver's
     # Ack of the approve, r3 the second prompt, r4 the Weaver's answer to the second approve.
     # A pattern here holds no backslash: zen_check is a macro, so its arguments are parsed a
     # second time, where `\[` is an invalid escape; a literal bracket or dot is written as a
@@ -602,7 +602,7 @@ if(ZEN_GROUP STREQUAL "repl")
     message(STATUS "host_process/repl: approve answers the prompt shown")
     zen_scenario_dir(repl-approve dir)
     zen_run_host("${dir}"
-        "request Work 1 @some.service \"first\"\noperator\nshow r1\napprove r1\nsession\nsend @some.service Work 1 7\nquit\n"
+        "request Work 1 @some.service \"first\"\nweaver\nshow r1\napprove r1\nsession\nsend @some.service Work 1 7\nquit\n"
         "" text code)
     zen_check("approve: the REPL exits 0" code EQUAL 0)
     zen_check("approve: the prompt shows its name" text MATCHES "prompt = [1-9][0-9]*")
@@ -615,7 +615,7 @@ if(ZEN_GROUP STREQUAL "repl")
     message(STATUS "host_process/repl: a second approve on the first prompt")
     zen_scenario_dir(repl-second-press dir)
     zen_run_host("${dir}"
-        "request Work 1 @some.service \"first\"\noperator\nshow r1\napprove r1\nsession\nrequest Work 2 @some.service \"second\"\noperator\nshow r3\napprove r1\nshow r4\nsession\npending\nquit\n"
+        "request Work 1 @some.service \"first\"\nweaver\nshow r1\napprove r1\nsession\nrequest Work 2 @some.service \"second\"\nweaver\nshow r3\napprove r1\nshow r4\nsession\npending\nquit\n"
         "" text code)
     zen_check("second press: the REPL exits 0" code EQUAL 0)
     # The two names, as `show r1` and `show r3` printed them: the checks below follow what the
@@ -648,7 +648,7 @@ if(ZEN_GROUP STREQUAL "repl")
     message(STATUS "host_process/repl: what approve refuses here")
     zen_scenario_dir(repl-refusals dir)
     zen_run_host("${dir}"
-        "request Work 1 @some.service \"first\"\napprove r1\noperator\napprove\napprove r9\nrefuse r1\nrefuse r2\nquit\n"
+        "request Work 1 @some.service \"first\"\napprove r1\nweaver\napprove\napprove r9\nrefuse r1\nrefuse r2\nquit\n"
         "" text code)
     zen_check("refusals: the REPL exits 0" code EQUAL 0)
     zen_check("refusals: approve from the session lens is refused here"
@@ -662,11 +662,11 @@ if(ZEN_GROUP STREQUAL "repl")
 
     # 4. A door typed at the session is shown on the prompt, a yes installs that door, the
     # description says it, and it lets no Work through; a malformed door reaches nobody. The
-    # operator's r1 is the prompt, r2 the Ack, r3 the description; the session's r3 the refusal.
+    # weaver's r1 is the prompt, r2 the Ack, r3 the description; the session's r3 the refusal.
     message(STATUS "host_process/repl: a door asked, shown, approved and described")
     zen_scenario_dir(repl-door dir)
     zen_run_host("${dir}"
-        "request Work 1 @some.service door=some.service/desk:save \"to save\"\noperator\nshow r1\napprove r1\nauthority\nshow r3\nsession\nsend @some.service Work 1 7\nrequest Work 1 @some.service door=some.service/desk* \"bad\"\nshow r3\nquit\n"
+        "request Work 1 @some.service door=some.service/desk:save \"to save\"\nweaver\nshow r1\napprove r1\nauthority\nshow r3\nsession\nsend @some.service Work 1 7\nrequest Work 1 @some.service door=some.service/desk* \"bad\"\nshow r3\nquit\n"
         "" text code)
     zen_check("door: the REPL exits 0" code EQUAL 0)
     zen_check("door: the prompt shows the door it asks for"

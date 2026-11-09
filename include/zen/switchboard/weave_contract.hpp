@@ -84,10 +84,10 @@ public:
         Applied,
         /// Functioning, it did not apply the value: it keeps state of its own and re-claims it
         /// at its next delivery. Recorded Declined against this weave and publication, not
-        /// held; the operator is told.
+        /// held; the initiator is told.
         Declined,
         /// It could not complete the showing: recorded Failed, and the weave is held until
-        /// reloaded or removed; the operator is told. Said by throwing (recorded, then rethrown)
+        /// reloaded or removed; the initiator is told. Said by throwing (recorded, then rethrown)
         /// or by returning it. A loaded weave's slot answering neither `ZEN_OK` nor
         /// `ZEN_CLAIM_DECLINED` crosses back as this.
         Failed,

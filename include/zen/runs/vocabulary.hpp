@@ -57,10 +57,11 @@ namespace loom::runs {
 
 inline constexpr const char* kRunsRole = "loom.runs";
 
-#define LOOM_RUNS_SHAPE(Type, Name)                                                               \
+#define LOOM_RUNS_SHAPE(Type, Name) LOOM_RUNS_SHAPE_AT(Type, Name, 1)
+#define LOOM_RUNS_SHAPE_AT(Type, Name, Version)                                                   \
     using ZenSelf = Type;                                                                         \
     static constexpr const char* zen_name = Name;                                                 \
-    static constexpr std::uint32_t zen_version = 1
+    static constexpr std::uint32_t zen_version = Version
 
 // ---- the catalog --------------------------------------------------------------------------------
 
@@ -77,7 +78,7 @@ struct Tool {
     std::string package;
     std::string name;
     std::string summary;   ///< the package author's one line
-    bool approved = false; ///< may a run of it start now (the operator's decision)
+    bool approved = false; ///< may a run of it start now (the weaver's decision)
     std::string approval;  ///< "any revision" / "revision <digest>" / "not approved: <why>"
     std::string revision;  ///< the package's current content digest
     LOOM_RUNS_SHAPE(Tool, "loom.runs.Tool");
@@ -290,16 +291,16 @@ struct ArtifactPage {
 /// the host's history by that correlation (`loom.history.DeliveriesTo`).
 struct Asked {
     std::int64_t correlation = 0;
-    std::string office;   ///< the office asked (a far office when `via` names a link)
+    std::string role;   ///< the role asked (a far role when `via` names a link)
     std::string via;      ///< the link it crossed, or empty for a local ask
     std::string shape;
     std::int64_t version = 0;
     bool settle = false;
     std::string outcome;  ///< answer / refused / dispatch-refused / unlinked / lost / pending
     std::string detail;
-    LOOM_RUNS_SHAPE(Asked, "loom.runs.Asked");
+    LOOM_RUNS_SHAPE_AT(Asked, "loom.runs.Asked", 2);
     static auto zen_fields() {
-        return std::make_tuple(ZEN_FIELD(correlation), ZEN_FIELD(office), ZEN_FIELD(via),
+        return std::make_tuple(ZEN_FIELD(correlation), ZEN_FIELD(role), ZEN_FIELD(via),
                                ZEN_FIELD(shape), ZEN_FIELD(version), ZEN_FIELD(settle),
                                ZEN_FIELD(outcome), ZEN_FIELD(detail));
     }
@@ -337,7 +338,7 @@ struct Run {
     std::int64_t started_ms = 0; ///< wall clock, for a person
     std::int64_t ended_ms = 0;
     std::string log;             ///< the worker's stdout/stderr file
-    LOOM_RUNS_SHAPE(Run, "loom.runs.Run");
+    LOOM_RUNS_SHAPE_AT(Run, "loom.runs.Run", 2);
     static auto zen_fields() {
         return std::make_tuple(
             ZEN_FIELD(lifetime), ZEN_FIELD(name), ZEN_FIELD(tool), ZEN_FIELD(revision),
@@ -357,7 +358,7 @@ struct RunList {
     std::int64_t active = 0;
     std::int64_t capacity = 0; ///< how many runs this manager holds at most
     std::vector<Run> rows;
-    LOOM_RUNS_SHAPE(RunList, "loom.runs.RunList");
+    LOOM_RUNS_SHAPE_AT(RunList, "loom.runs.RunList", 2);
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(lifetime), ZEN_FIELD(active), ZEN_FIELD(capacity),
                                ZEN_FIELD(rows));
@@ -394,7 +395,7 @@ struct Progress {
 /// One of the worker's asks, as it stands (see `Asked`).
 struct AskReport {
     Asked ask;
-    LOOM_RUNS_SHAPE(AskReport, "loom.runs.AskReport");
+    LOOM_RUNS_SHAPE_AT(AskReport, "loom.runs.AskReport", 2);
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(ask)); }
 };
 
@@ -442,18 +443,29 @@ struct Directive {
 
 #undef LOOM_RUNS_SHAPE
 
+/// One shape by its name and version, as a rule names it.
+struct NamedShape {
+    std::string name;
+    std::uint32_t version = 0;
+};
+
+template <class T>
+NamedShape named_shape() {
+    return NamedShape{T::zen_name, T::zen_version};
+}
+
 /// The shapes a worker must be able to say to its manager, for the rules its manager asks the door
-/// to grant (each `<Name> v1 -> role loom.runs`).
-inline std::vector<std::string> worker_report_shapes() {
-    return {WorkerStarted::zen_name, Progress::zen_name, AskReport::zen_name, Produced::zen_name,
-            Finished::zen_name, Control::zen_name};
+/// to grant (each `<Name> v<version> -> role loom.runs`).
+inline std::vector<NamedShape> worker_report_shapes() {
+    return {named_shape<WorkerStarted>(), named_shape<Progress>(), named_shape<AskReport>(),
+            named_shape<Produced>(),      named_shape<Finished>(), named_shape<Control>()};
 }
 
 /// The shapes a client says to a run manager.
-inline std::vector<std::string> client_request_shapes() {
-    return {ListTools::zen_name, DescribeTool::zen_name, Start::zen_name,  List::zen_name,
-            Get::zen_name,       Cancel::zen_name,       Release::zen_name, Past::zen_name,
-            ArtifactRead::zen_name};
+inline std::vector<NamedShape> client_request_shapes() {
+    return {named_shape<ListTools>(), named_shape<DescribeTool>(), named_shape<Start>(),
+            named_shape<List>(),      named_shape<Get>(),          named_shape<Cancel>(),
+            named_shape<Release>(),   named_shape<Past>(),         named_shape<ArtifactRead>()};
 }
 
 } // namespace loom::runs

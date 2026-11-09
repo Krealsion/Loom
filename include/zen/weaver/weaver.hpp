@@ -18,7 +18,7 @@
 // the other. It keeps workflow state only, at most one request awaiting a person, the answer
 // right taken with it and the name of the prompt that showed it, and reads what a subject may
 // do from `mail.describe_authority(...)` each time, never from a record of its own. One
-// operator seat, one governed subject, one ceiling, at most one request in flight, and a
+// weaver seat, one governed subject, one ceiling, at most one request in flight, and a
 // decision acts only on the prompt it names.
 //
 // It governs Loom message authority and nothing else: it does not contain in-process native
@@ -47,20 +47,20 @@ namespace loom {
 
 // ---- making text safe to put in front of a person --------------------------
 
-/// The most bytes of requester-authored prose an operator prompt will carry.
+/// The most bytes of requester-authored prose a weaver prompt will carry.
 /// Small on purpose: a purpose line is a sentence, and a decision surface that
 /// can be flooded is a decision surface that can be used to push the trusted
 /// facts off the top of somebody's screen.
 inline constexpr std::size_t kMaxPurposeBytes = 200;
 
-/// The most bytes a requested shape name or office name may have. Both become
+/// The most bytes a requested shape name or role name may have. Both become
 /// rules in a `LiveAuthority` and both are shown to a person; neither is a
 /// document.
 inline constexpr std::size_t kMaxNameBytes = 128;
 
 /// How many prompts one Weaver can name. A prompt's name is its Weaver's WeaveId times this, plus
 /// the prompt's place in that Weaver's count, so no two Weavers on one bus put the same name: a
-/// WeaveId is never reused, and a Weaver replacing another in its office has a WeaveId of its own.
+/// WeaveId is never reused, and a Weaver replacing another in its role has a WeaveId of its own.
 /// docs/reference/weaver.md#a-decision-names-the-prompt-it-answers
 inline constexpr std::int64_t kPromptNamesPerWeaver = 1000 * 1000 * 1000;
 
@@ -70,7 +70,7 @@ inline constexpr std::int64_t kPromptNamesPerWeaver = 1000 * 1000 * 1000;
 /// `...[truncated]`. It lives at the Weaver rather than in a renderer, so every renderer of an
 /// `AuthorityPrompt` inherits it. Non-ASCII arrives escaped, never translated.
 /// docs/reference/weaver.md#untrusted-text-at-a-decision-surface
-inline std::string safe_operator_text(std::string_view raw, std::size_t max_bytes) {
+inline std::string safe_weaver_text(std::string_view raw, std::size_t max_bytes) {
     static constexpr char kHex[] = "0123456789abcdef";
     std::string out;
     const bool truncated = raw.size() > max_bytes;
@@ -98,35 +98,35 @@ inline std::string safe_operator_text(std::string_view raw, std::size_t max_byte
 /// door, `ControlRequested v1 -> role zengine.workshop door zengine.files/*`. Rendered from the
 /// snapshot the Kernel handed back, never from a string the Weaver kept, so it cannot disagree
 /// with the bus. A role is printed as a role, never as the weave holding it now: role authority
-/// follows whoever holds the office at delivery.
+/// follows whoever holds the role at delivery.
 inline std::string render_rule(const SendRule& rule) {
     std::string out =
         rule.any_shape ? std::string("any shape")
-                       : safe_operator_text(rule.shape_name, kMaxNameBytes) + " v" +
+                       : safe_weaver_text(rule.shape_name, kMaxNameBytes) + " v" +
                              std::to_string(rule.shape_version);
     out += " -> ";
     if (rule.any_target) {
         out += "any target";
     } else if (!rule.target_role.empty()) {
-        out += "role " + safe_operator_text(rule.target_role, kMaxNameBytes);
+        out += "role " + safe_weaver_text(rule.target_role, kMaxNameBytes);
     } else {
         out += "weave #" + std::to_string(rule.target.value);
     }
     if (rule.door) {
-        out += " door " + safe_operator_text(rule.door->text(), kMaxDoorBytes);
+        out += " door " + safe_weaver_text(rule.door->text(), kMaxDoorBytes);
     }
     return out;
 }
 
 /// One observe rule, as a person reads it: `observe Tick v1`. Spelled with its
 /// own verb because reading a shape and being allowed to send one are different
-/// permissions, and an operator scanning a list must not have to infer which
+/// permissions, and a weaver scanning a list must not have to infer which
 /// kind a line is from its punctuation.
 inline std::string render_rule(const ObserveRule& rule) {
     if (rule.any_shape) {
         return "observe any shape";
     }
-    return "observe " + safe_operator_text(rule.shape_name, kMaxNameBytes) + " v" +
+    return "observe " + safe_weaver_text(rule.shape_name, kMaxNameBytes) + " v" +
            std::to_string(rule.shape_version);
 }
 
@@ -148,7 +148,7 @@ inline std::vector<std::string> render_authority(const LiveAuthority& authority)
 /// Workflow counters, and nothing else: no rule, no subject, no record of what was granted.
 /// Both count what happened; neither is consulted to decide anything.
 struct WeaverState {
-    std::int64_t prompts = 0;   ///< authority requests put to the operator
+    std::int64_t prompts = 0;   ///< authority requests put to the weaver
     std::int64_t installed = 0; ///< approvals that actually installed a rule
 
     ZEN_SHAPE(WeaverState, 1, ZEN_FIELD(prompts), ZEN_FIELD(installed));
@@ -165,16 +165,16 @@ class Weaver final
                               RefuseAuthorityV1>,
                        Emit<AuthorityPrompt, AuthorityGranted, AuthorityDescription, Refused, Ack>> {
 public:
-    /// `authority` names the governed subject and the ceiling; `operator_seat` is the weave
+    /// `authority` names the governed subject and the ceiling; `weaver_seat` is the weave
     /// whose word counts as the user's. Both come from the host at bootstrap, and no message
     /// changes either. Throws `std::invalid_argument` when the seat is the governed subject: a
     /// session approving its own requests could widen itself up to the ceiling (GATE-05). A
     /// capability with no subject is accepted and governs nobody.
-    Weaver(GrantAuthority authority, WeaveId operator_seat)
-        : authority_(std::move(authority)), operator_seat_(operator_seat) {
-        if (authority_.subject().valid() && operator_seat == authority_.subject()) {
+    Weaver(GrantAuthority authority, WeaveId weaver_seat)
+        : authority_(std::move(authority)), weaver_seat_(weaver_seat) {
+        if (authority_.subject().valid() && weaver_seat == authority_.subject()) {
             throw std::invalid_argument(
-                "loom::Weaver: the operator seat must not be the governed session — a subject "
+                "loom::Weaver: the weaver seat must not be the governed session — a subject "
                 "that decides its own authority requests can widen itself up to the ceiling");
         }
     }
@@ -184,7 +184,7 @@ public:
     WeaveId governed_session() const noexcept { return authority_.subject(); }
 
     /// The weave whose decisions this Weaver treats as the user's.
-    WeaveId operator_seat() const noexcept { return operator_seat_; }
+    WeaveId weaver_seat() const noexcept { return weaver_seat_; }
 
     /// Is a human decision outstanding? Answered by the answer right itself
     /// rather than by a bool beside it: one thing is pending exactly when there
@@ -221,12 +221,12 @@ public:
         }
         // ONE PENDING REQUEST. A second ask does not displace the one a person is
         // deciding — it is refused, visibly, and the first stays exactly what the
-        // operator was shown. Overwriting would silently retarget the next
-        // approval onto a request the operator never saw.
+        // weaver was shown. Overwriting would silently retarget the next
+        // approval onto a request the weaver never saw.
         if (has_pending_request()) {
             (void)mail.answer(
                 Refused{"another authority request from this session is already awaiting the "
-                        "operator; this Weaver decides one at a time"});
+                        "weaver; this Weaver decides one at a time"});
             return;
         }
         const AuthorityView view = mail.describe_authority(authority_);
@@ -252,7 +252,7 @@ public:
         const std::int64_t name = next_prompt_name();
         if (name == 0) {
             (void)mail.answer(Refused{"this Weaver cannot name another prompt; nothing was put "
-                                      "to the operator"});
+                                      "to the weaver"});
             return;
         }
         // TAKE THE ANSWER AWAY WITH US. The human is not in this call stack, and
@@ -275,16 +275,16 @@ public:
         ++prompts_named_;
         request_ = Requested{name, ask.shape, version, ask.to_role, std::move(door)};
         ++state_.prompts;
-        // The operator sees the prompt's name, the door and the rule AS PARSED, the
+        // The weaver sees the prompt's name, the door and the rule AS PARSED, the
         // requester's identity AS STAMPED, and the requester's prose AS ESCAPED — and
-        // nothing that claims the destination office, or its door, currently exists.
-        (void)mail.send(operator_seat_,
+        // nothing that claims the destination role, or its door, currently exists.
+        (void)mail.send(weaver_seat_,
                         AuthorityPrompt{request_.prompt,
                                         request_.door ? request_.door->text() : std::string{},
                                         static_cast<std::int64_t>(mail.sender().value),
                                         request_.shape, static_cast<std::int64_t>(request_.version),
                                         request_.to_role, kGrantLifetime,
-                                        safe_operator_text(ask.purpose, kMaxPurposeBytes)});
+                                        safe_weaver_text(ask.purpose, kMaxPurposeBytes)});
     }
 
     /// A version 1 request names no door: it is the request for the door-less rule it names.
@@ -295,12 +295,12 @@ public:
     // ---- the human decides --------------------------------------------------
 
     void on(const ApproveAuthority& decision, Mail& mail) {
-        if (!from_operator(mail) || !names_pending(decision.prompt, mail)) {
+        if (!from_weaver_seat(mail) || !names_pending(decision.prompt, mail)) {
             return;
         }
         const AuthorityView view = mail.describe_authority(authority_);
         if (!view.available) {
-            // The session died while the operator was deciding. WeaveIds are
+            // The session died while the weaver was deciding. WeaveIds are
             // never reused, so this authority can never be inherited by whatever
             // mounts next: abandon the conversation and install nothing.
             release_deferred(answer_, mail);
@@ -323,9 +323,9 @@ public:
         if (!change) {
             // THE HUMAN DOES NOT OUTRANK THE CAPABILITY. A yes that the ceiling
             // does not cover installs nothing, and both the session and the
-            // operator are told which no it was.
+            // weaver are told which no it was.
             (void)answer_deferred(answer_, mail,
-                                  Refused{"the operator approved, but this Weaver does not hold "
+                                  Refused{"the weaver approved, but this Weaver does not hold "
                                           "the authority to delegate that"});
             clear_pending();
             (void)mail.answer(Refused{refusal_for(change.outcome)});
@@ -344,13 +344,13 @@ public:
     }
 
     void on(const RefuseAuthority& decision, Mail& mail) {
-        if (!from_operator(mail) || !names_pending(decision.prompt, mail)) {
+        if (!from_weaver_seat(mail) || !names_pending(decision.prompt, mail)) {
             return;
         }
         // The user said no, so the session hears no — as the authenticated answer
         // to the request it actually sent. A refusal is an answer, never silence:
         // a session left waiting cannot tell a decision from a lost message.
-        (void)answer_deferred(answer_, mail, Refused{"the operator refused this request"});
+        (void)answer_deferred(answer_, mail, Refused{"the weaver refused this request"});
         clear_pending();
         (void)mail.answer(Ack{});
     }
@@ -358,18 +358,18 @@ public:
     /// A version 1 decision names no prompt, so it cannot say which request it decides: it
     /// changes nothing, whatever is pending, and the seat is told why.
     void on(const ApproveAuthorityV1&, Mail& mail) {
-        if (from_operator(mail)) {
+        if (from_weaver_seat(mail)) {
             refuse_unnamed(mail);
         }
     }
     void on(const RefuseAuthorityV1&, Mail& mail) {
-        if (from_operator(mail)) {
+        if (from_weaver_seat(mail)) {
             refuse_unnamed(mail);
         }
     }
 
     void on(const RevokeAuthority&, Mail& mail) {
-        if (!from_operator(mail)) {
+        if (!from_weaver_seat(mail)) {
             return;
         }
         // THE WHOLE OVERLAY, AT ONCE. Installing the empty authority is
@@ -379,9 +379,9 @@ public:
         // delegation door cannot subtract from, so the session keeps its right to
         // come back and ask again.
         //
-        // A request still awaiting the operator is deliberately NOT touched:
+        // A request still awaiting the weaver is deliberately NOT touched:
         // revoking acts on authority that is installed, and the pending question
-        // is a separate thing the operator can still answer either way.
+        // is a separate thing the weaver can still answer either way.
         const GrantChange change = mail.delegate_authority(authority_, LiveAuthority::nothing());
         if (!change) {
             (void)mail.answer(Refused{refusal_for(change.outcome)});
@@ -391,13 +391,13 @@ public:
     }
 
     void on(const DescribeAuthority&, Mail& mail) {
-        // Two readers, one subject. The operator inspects what it governs; the
+        // Two readers, one subject. The weaver inspects what it governs; the
         // session inspects ITSELF, which tells it only what it could already
         // discover by trying things. Nobody else is answered, and nobody at all
         // can ask about another subject — the shape has no field for one.
-        if (mail.sender() != operator_seat_ && mail.sender() != governed_session()) {
+        if (mail.sender() != weaver_seat_ && mail.sender() != governed_session()) {
             (void)mail.answer(Refused{"this Weaver describes its governed session only to that "
-                                      "session and to the operator seat"});
+                                      "session and to the weaver seat"});
             return;
         }
         const AuthorityView view = mail.describe_authority(authority_);
@@ -415,11 +415,11 @@ public:
     }
 
 private:
-    /// What a yes lasts for. Stated to the operator on every prompt because Loom
+    /// What a yes lasts for. Stated to the weaver on every prompt because Loom
     /// has no one-shot grant and a decision surface that let a person assume
     /// otherwise would be describing a weaker grant than the one it is making.
     static constexpr const char* kGrantLifetime =
-        "until the operator revokes, or the session dies (this is NOT a one-time allow)";
+        "until the weaver revokes, or the session dies (this is NOT a one-time allow)";
 
     /// The pending request, parsed, and the name of the prompt that showed it. It
     /// is the RULE, not the message: the requester's prose never reaches here, so
@@ -437,12 +437,12 @@ private:
     /// the one the bus answered by delivering the message at all. Refusing is
     /// speech and reveals nothing: the sender already knows it reached us, and
     /// the refusal names no seat.
-    bool from_operator(Mail& mail) {
-        if (mail.sender() == operator_seat_) {
+    bool from_weaver_seat(Mail& mail) {
+        if (mail.sender() == weaver_seat_) {
             return true;
         }
         (void)mail.answer(Refused{"authority decisions here are only accepted from the configured "
-                                  "operator seat"});
+                                  "weaver seat"});
         return false;
     }
 
@@ -495,11 +495,11 @@ private:
         request_ = Requested{};
     }
 
-    /// STRUCTURE ONLY. A request must name one shape, one version and one office,
+    /// STRUCTURE ONLY. A request must name one shape, one version and one role,
     /// and at most one door in the door grammar, in bytes that are safe to print and
     /// short enough to read. It is deliberately NOT checked against the world:
     /// whether that role is currently held, whether anything currently accepts that
-    /// shape, and whether the office has that door, are questions about
+    /// shape, and whether the role has that door, are questions about
     /// configuration, not about authority — and answering them to an untrusted
     /// requester would turn a policy door into a service directory.
     static bool well_formed(const RequestAuthority& ask, std::optional<Door>* door,
@@ -523,7 +523,7 @@ private:
             *door = Door::parse(ask.door, &bad);
             if (!*door) {
                 *why = "the requested door is malformed: " +
-                       safe_operator_text(bad, 2 * kMaxDoorBytes);
+                       safe_weaver_text(bad, 2 * kMaxDoorBytes);
                 return false;
             }
         }
@@ -547,7 +547,7 @@ private:
     /// somewhere different. A single "failed" would send all four to the same
     /// wrong place.
     ///
-    /// None of these says whether the requested office exists. Loom checks
+    /// None of these says whether the requested role exists. Loom checks
     /// authority BEFORE it resolves a role, precisely so a refusal cannot be used
     /// to enumerate what is running, and a policy refusal must not become the
     /// oracle the delivery path refuses to be.
@@ -576,7 +576,7 @@ private:
     /// a switchboard — a capability naming one subject and one ceiling.
     GrantAuthority authority_;
     /// Who the user is, decided by the host and unchangeable by any message.
-    WeaveId operator_seat_;
+    WeaveId weaver_seat_;
     // ---- policy workflow state (NEVER authority state) ----------------------
     Requested request_{};
     DeferredAnswer answer_{};

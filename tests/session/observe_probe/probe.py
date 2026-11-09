@@ -22,7 +22,7 @@ import time
 
 from loom_session.tool import LinkOutcome, NotAnswered, Refused
 
-OFFICE = "far.ticker"
+ROLE = "far.ticker"
 
 
 def run(ctx):
@@ -36,7 +36,7 @@ def run(ctx):
             rec = {"step": verb}
             if verb == "subscribe":
                 try:
-                    s = ctx.observe(OFFICE, arg.get("shapes", ["ProbeTick@1", "ProbeState@1"]),
+                    s = ctx.observe(ROLE, arg.get("shapes", ["ProbeTick@1", "ProbeState@1"]),
                                     via=link, latest=arg.get("latest", []),
                                     window=int(arg.get("window", 0)))
                     subs[arg.get("as", "s")] = s
@@ -46,7 +46,7 @@ def run(ctx):
                     rec.update(ok=False, refused=str(err))
             elif verb == "ask":
                 try:
-                    a = ctx.ask(OFFICE, "ObserveProbeCommand",
+                    a = ctx.ask(ROLE, "ObserveProbeCommand",
                                 {"verb": arg["verb"], "count": int(arg.get("count", 0))},
                                 via=link, settle=bool(arg.get("settle", False)), timeout=30.0)
                     rec.update(ok=True, answer=a.shape, correlation=a.correlation)

@@ -155,7 +155,7 @@ TEST_CASE("the policy is asked twice, and the first ask is before the file is op
     Kernel kernel(bus, rec.policy());
 
     const std::uint64_t opened_before = kernel_lifetime_counts().libraries_opened;
-    const LoadResult lr = kernel.load("t", ZEN_SO_WEAVE, "some.office");
+    const LoadResult lr = kernel.load("t", ZEN_SO_WEAVE, "some.role");
 
     CHECK_FALSE(lr.ok);
     // EXACTLY ONE question. That is the load-bearing assertion: a `speak` question
@@ -169,7 +169,7 @@ TEST_CASE("the policy is asked twice, and the first ask is before the file is op
     CHECK(q.kind == AdmissionKind::Load);
     CHECK(q.name == "t");
     CHECK(q.path == ZEN_SO_WEAVE);
-    CHECK(q.role == "some.office");
+    CHECK(q.role == "some.role");
     // The identity is the file's bytes, and it is the SAME identity the isolation
     // ledger keys by — one answer to "is this the build I approved", not two. It was
     // in the policy's hands at `open`, before any library had been opened.

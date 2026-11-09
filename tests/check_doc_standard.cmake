@@ -49,7 +49,7 @@ endfunction()
 # clock, or the page's own history in the forms that narrated a change every time they were read
 # by hand -- a heading marked RETIRED or *retired*, "used to be", "was renamed", "formerly", and a
 # bold note opening "It used to" or "Retired with". A behaviour that ends ("a holder that no longer
-# holds its office") and a technical phase ("the two-phase shutdown", "a phase of its own") are
+# holds its role") and a technical phase ("the two-phase shutdown", "a phase of its own") are
 # neither. Sets ${out} to the words found, or "".
 function(zen_doc_standard_told line out)
     set(${out} "" PARENT_SCOPE)
@@ -169,7 +169,7 @@ foreach(told_line
     endif()
 endforeach()
 foreach(plain_line
-        "A holder that no longer holds its office is forgotten, and its lease with it."
+        "A holder that no longer holds its role is forgotten, and its lease with it."
         "The two-phase shutdown observes the whole group before it claims the end."
         "A run waits in a phase of its own, with the session still open."
         "Each phase of the shutdown has its own bound, and in that phase nothing is sent."

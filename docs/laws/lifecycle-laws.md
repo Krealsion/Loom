@@ -38,20 +38,20 @@ PROVEN BY — the control door asks `Kernel::accepts` first; suite `manager`.
 
 ## LIFE-03 — The sequence is finite and honest
 
-LAW — Activation sequences are monotonic within an operator lineage, never
+LAW — Activation sequences are monotonic within an initiator lineage, never
 reused after an aborted attempt, and the allocator refuses at the boundary
 rather than wrapping.
 
 MEANS
 - consumer identity is the pair (attested sender, sequence) — per attesting
-  operator, checked by the consumer's cursor;
+  initiator, checked by the consumer's cursor;
 - gaps are legal (a scheduled-then-refused admission spends its number);
 - at `INT64_MAX` or a negative revived lineage the door refuses, naming the
   boundary — it does not brick.
 
 DOES NOT MEAN
-- that sequences are globally unique across operators, or that Loom owns
-  allocation (the operator supplies the number).
+- that sequences are globally unique across initiators, or that Loom owns
+  allocation (the initiator supplies the number).
 
 PROVEN BY — `activation_block()` preflight; suites `manager`, `kernel`
 (sequence passthrough and gap cases).
@@ -113,7 +113,7 @@ MEANS
   callback has exited — by normal return **or** by exception unwind — and gets
   the weave then;
 - the refusal is total, because the check precedes every mutation: no role
-  released, no personal or office claim forgotten, no deferred conversation
+  released, no personal or role claim forgotten, no deferred conversation
   abandoned, no transaction invalidated, no registry entry erased, no ownership
   transferred;
 - it covers **both** paths that call `Weave::handle` — ordinary delivery and the

@@ -14,7 +14,7 @@ this one), starts a worker for it, and the worker calls ``run(ctx)`` with a ``Co
         return "one line saying what passed"
 
 WHAT A TOOL MAY SAY is its session's grant -- the rules its package ``asks`` for, as far as the
-operator let the run manager pass them on. A refused send is an exception here, never a silent
+weaver let the run manager pass them on. A refused send is an exception here, never a silent
 nothing. WHAT A TOOL CAN TOUCH on this machine is NOT bounded by any of that: it runs as the
 session's user, with that user's files and network. This is a working environment, not a
 sandbox, and nothing here says otherwise.
@@ -94,10 +94,10 @@ class LinkOutcome(Exception):
 class Pending(object):
     """One ask in flight. ``wait()`` returns its Answer or raises what became of it."""
 
-    def __init__(self, ctx, correlation, office, shape, version, via, settle):
+    def __init__(self, ctx, correlation, role, shape, version, via, settle):
         self.ctx = ctx
         self.correlation = correlation
-        self.office = office
+        self.role = role
         self.shape = shape
         self.version = version
         self.via = via
@@ -106,7 +106,7 @@ class Pending(object):
         self.outcome = None
 
     def describe(self):
-        where = "%s via link %s" % (self.office, self.via) if self.via else self.office
+        where = "%s via link %s" % (self.role, self.via) if self.via else self.role
         return "%s v%d -> %s%s (conversation %d)" % (self.shape, self.version, where,
                                                      " [settle]" if self.settle else "",
                                                      self.correlation)
@@ -229,24 +229,24 @@ class Context(object):
 
     # ---- asking -----------------------------------------------------------------------------
 
-    def ask_async(self, office, shape, fields=None, version=1, via=None, settle=False):
+    def ask_async(self, role, shape, fields=None, version=1, via=None, settle=False):
         """Send one ask; returns a ``Pending``. ``via`` names a link: the ask crosses to the far
-        host's ``office`` and is answered through the link (``zen/bridge/link.hpp``)."""
+        host's ``role`` and is answered through the link (``zen/bridge/link.hpp``)."""
         self._check_cancel()
         if via:
             inner = self.conn.encode(shape, fields, version)
-            corr = self.conn.ask("loom.link.Ask", {"role": office, "target": 0,
+            corr = self.conn.ask("loom.link.Ask", {"role": role, "target": 0,
                                                    "payload": inner, "settle": bool(settle)},
                                  role="loom.link." + via)
         else:
-            corr = self.conn.ask(shape, fields, version, role=office, settle=settle)
-        p = Pending(self, corr, office, shape, version, via, settle)
+            corr = self.conn.ask(shape, fields, version, role=role, settle=settle)
+        p = Pending(self, corr, role, shape, version, via, settle)
         self._pending[corr] = p
         return p
 
-    def ask(self, office, shape, fields=None, version=1, via=None, settle=False, timeout=60.0):
+    def ask(self, role, shape, fields=None, version=1, via=None, settle=False, timeout=60.0):
         """Ask and wait for its answer (see ``Pending.wait``)."""
-        return self.ask_async(office, shape, fields, version, via, settle).wait(timeout)
+        return self.ask_async(role, shape, fields, version, via, settle).wait(timeout)
 
     # ---- observing --------------------------------------------------------------------------
 
@@ -261,8 +261,8 @@ class Context(object):
         descriptors the relay sends. The subscription is released in this run's cleanup phase,
         however the run ends. See ``loom_session.observe`` for what each item means."""
         requested = observe.shape_refs(shapes)
-        for word in observe.WORDS:  # described now, so no word waits on the host as it arrives
-            self.conn.schema(word, 1)
+        for word, version in observe.WORD_VERSIONS:  # described now, so none waits as it arrives
+            self.conn.schema(word, version)
         fields = {"producer": producer, "shapes": requested, "latest": list(latest),
                   "encoding": "compat", "window": int(window),
                   "label": label or ("run:" + self.name)}
@@ -317,9 +317,9 @@ class Context(object):
 
     def _report_ask(self, p, outcome, detail):
         self.conn.ask("loom.runs.AskReport", {"ask": {
-            "correlation": p.correlation, "office": p.office, "via": p.via or "",
+            "correlation": p.correlation, "role": p.role, "via": p.via or "",
             "shape": p.shape, "version": p.version, "settle": bool(p.settle),
-            "outcome": outcome, "detail": detail[:400]}}, role=RUNS_ROLE, fire=True)
+            "outcome": outcome, "detail": detail[:400]}}, version=2, role=RUNS_ROLE, fire=True)
 
     # ---- producing files --------------------------------------------------------------------
 

@@ -4,7 +4,7 @@
 
 A cleanup that only writes a file proves nothing about a cancelled run's authority: the file
 system was never in question. These two ask the bus. One asks the session door, which this run
-was granted; the other asks an office it was never granted, which the bus refuses. Both run
+was granted; the other asks a role it was never granted, which the bus refuses. Both run
 after the cancellation that ended the tool's ordinary work, and each is recorded as what it
 came to -- `done` for the one the door answered, the bus's own refusal for the other.
 """
@@ -29,7 +29,7 @@ def run(ctx):
             raise RuntimeError("the bus refused this cleanup's ask: %s" % err)
 
     if ctx.inputs.get("refuse", True):
-        ctx.on_cleanup(not_granted, "ask an office this run was never granted")
+        ctx.on_cleanup(not_granted, "ask a role this run was never granted")
     ctx.on_cleanup(describe, "ask the door, which this run may ask")
     ctx.hold(ctx.inputs.get("hold", "go"), "waiting with two bus cleanups registered")
     return "released without being cancelled; the cleanups ran anyway (described %d)" % (

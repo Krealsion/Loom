@@ -7,8 +7,8 @@
 // HOW AN ORDINARY WEAVE SPEAKS ACROSS A LINK, and what it hears back.
 //
 // A host that links to another host mounts a LINK -- an ordinary participant of its own that
-// holds the socket (`zen/bridge/client.hpp`) and an office local weaves address. A local weave
-// cannot name a far participant in its own vocabulary: the far office is a string only the
+// holds the socket (`zen/bridge/client.hpp`) and a role local weaves address. A local weave
+// cannot name a far participant in its own vocabulary: the far role is a string only the
 // crossing understands, so the ask crosses the local bus inside an ENVELOPE the link accepts,
 // carrying the far address and the serialized message.
 //
@@ -59,7 +59,7 @@
 //
 // WHAT THE LOCAL HISTORY KEEPS. Every frame the far host ships to the link's session becomes a
 // `Crossed` record the link says to ITSELF on this bus, before it acts on it: the far session,
-// the name the far host established, the far bus's stamp and office, the attempt, what kind of
+// the name the far host established, the far bus's stamp and role, the attempt, what kind of
 // frame it was and the bytes. The host's Recorder and Logger see it as the ordinary delivery it
 // is -- the link's account of what arrived, never a local observation of the far execution --
 // and an answer the link then hands on names that record as its dispatch parent. Only the
@@ -80,12 +80,12 @@
 
 namespace loom::link {
 
-/// ASK ACROSS THE LINK: deliver `payload` (serialized value bytes) to the far office `role`, or
+/// ASK ACROSS THE LINK: deliver `payload` (serialized value bytes) to the far role `role`, or
 /// to the far WeaveId `target` when `role` is empty. The asker's correlation on THIS message is
 /// the one its answer comes back under; `settle` holds the answer until the far host says what
 /// the ask set in motion there has been dispatched.
 struct Ask {
-    std::string role;   ///< the far office; empty means "the far WeaveId in `target`"
+    std::string role;   ///< the far role; empty means "the far WeaveId in `target`"
     std::int64_t target = 0;
     loom::Bytes payload;
     bool settle = false;
@@ -164,7 +164,7 @@ struct Crossed {
     std::string kind;          ///< one of the spellings below
     std::int64_t attempt = 0;  ///< the crossing this names (the far correlation); 0 for `ended`
     std::int64_t far_sender = 0; ///< the far bus's stamp on a delivery
-    std::string far_role;      ///< the office the far sender spoke as, by the far bus's word
+    std::string far_role;      ///< the role the far sender spoke as, by the far bus's word
     std::string shape;         ///< the far payload's claimed shape, when there is one
     std::int64_t version = 0;
     std::string reason;        ///< the far host's sentence, or why the session ended
@@ -187,12 +187,12 @@ inline constexpr const char* kCrossedSendRefused = "send-refused";
 inline constexpr const char* kCrossedSettled = "settled";
 inline constexpr const char* kCrossedEnded = "ended";            ///< the session is over
 
-/// The office a link holds, from its name: `loom.link.<name>`.
+/// The role a link holds, from its name: `loom.link.<name>`.
 inline std::string role_of(std::string_view link_name) {
     return "loom.link." + std::string(link_name);
 }
 
-/// Compose the envelope for one typed message to a far office.
+/// Compose the envelope for one typed message to a far role.
 template <class T>
 Ask ask_role(std::string_view far_role, const T& msg, bool settle = false) {
     Ask a;

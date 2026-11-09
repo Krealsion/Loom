@@ -136,7 +136,7 @@ void run_authority_command(AuthorityStore& store, const HostWarden& warden, Auth
         // AND WHAT THE BUS ACTUALLY THINKS, which is the line that matters: asked of
         // the live authority through the warden, so a file that disagrees with the
         // running system shows up here instead of being believed. Asked as a MESSAGE,
-        // by the operator seat, exactly as anything else here is — and settled on this
+        // by the weaver seat, exactly as anything else here is — and settled on this
         // host's own conversation, so it is this artifact's authority and not whatever
         // description happened to arrive most recently.
         const WardenAnswer a = desk.describe(name);

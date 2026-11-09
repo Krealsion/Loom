@@ -4,17 +4,17 @@
 #ifndef ZEN_SWITCHBOARD_DOOR_HPP
 #define ZEN_SWITCHBOARD_DOOR_HPP
 
-// A door: a name on a send rule to an office, finer than the office, that the office itself
+// A door: a name on a send rule to a role, finer than the role, that the role itself
 // judges at the act. Loom holds the grammar -- it parses a door, refuses a malformed one in
 // words, says whether one door contains another, and renders it -- and never what a door names:
 // a door rule is read by its owner through `describe_authority`, and no delivery carries one.
 // docs/reference/capabilities.md#doors
 //
 //   door       pane door | root door
-//   pane door  <office> "/" "*"                     every door beneath the office
-//            | <office> "/" <pane>                  the pane's own door
-//            | <office> "/" <pane> ":" <id>         a control of the pane
-//   root door  <root> ":" <id>                      a root the office declares (`arrange:<id>`)
+//   pane door  <role> "/" "*"                     every door beneath the role
+//            | <role> "/" <pane>                  the pane's own door
+//            | <role> "/" <pane> ":" <id>         a control of the pane
+//   root door  <root> ":" <id>                      a root the role declares (`arrange:<id>`)
 //   id         <name> | "*" | <name> ".*"           one id, every id, every id beneath <name>
 //   name       segments of [A-Za-z0-9_-] joined by single dots
 //
@@ -49,7 +49,7 @@ public:
         };
         const std::string quoted = "'" + std::string(text.substr(0, kMaxDoorBytes)) + "'";
         if (text.empty()) {
-            return refuse("a door is not empty: it is <office>/<pane>[:<id>], <office>/*, or "
+            return refuse("a door is not empty: it is <role>/<pane>[:<id>], <role>/*, or "
                           "<root>:<id>");
         }
         if (text.size() > kMaxDoorBytes) {
@@ -59,14 +59,14 @@ public:
         door.text_ = std::string(text);
         const std::size_t slash = text.find('/');
         if (slash != std::string_view::npos) {
-            // A pane door: <office>/*, <office>/<pane>, or <office>/<pane>:<id>.
-            const std::string_view office = text.substr(0, slash);
+            // A pane door: <role>/*, <role>/<pane>, or <role>/<pane>:<id>.
+            const std::string_view role = text.substr(0, slash);
             const std::string_view rest = text.substr(slash + 1);
             std::string bad;
-            if (!plain_name(office, &bad)) {
-                return refuse(quoted + " is not a door: its office " + bad);
+            if (!plain_name(role, &bad)) {
+                return refuse(quoted + " is not a door: its role " + bad);
             }
-            door.head_ = std::string(office);
+            door.head_ = std::string(role);
             if (rest == "*") {
                 door.pane_ = "*";
                 return door;
@@ -75,7 +75,7 @@ public:
             const std::string_view pane = rest.substr(0, colon);
             if (!plain_name(pane, &bad)) {
                 return refuse(quoted + " is not a door: its pane " + bad +
-                              " ('*' stands alone, as <office>/* or <office>/<pane>:*)");
+                              " ('*' stands alone, as <role>/* or <role>/<pane>:*)");
             }
             door.pane_ = std::string(pane);
             if (colon == std::string_view::npos) {
@@ -89,8 +89,8 @@ public:
         // A root door: <root>:<id>.
         const std::size_t colon = text.find(':');
         if (colon == std::string_view::npos) {
-            return refuse(quoted + " is not a door: a door is <office>/<pane>[:<id>], "
-                                   "<office>/*, or <root>:<id>");
+            return refuse(quoted + " is not a door: a door is <role>/<pane>[:<id>], "
+                                   "<role>/*, or <root>:<id>");
         }
         std::string bad;
         if (!plain_name(text.substr(0, colon), &bad)) {
@@ -107,8 +107,8 @@ public:
     /// The door as written, which is the door as parsed: the grammar has one spelling per door.
     const std::string& text() const noexcept { return text_; }
 
-    /// Does this door contain `inner`, segment by segment? A door contains itself; `<office>/*`
-    /// contains every pane door of that office; `<office>/<pane>:*` contains the pane's controls
+    /// Does this door contain `inner`, segment by segment? A door contains itself; `<role>/*`
+    /// contains every pane door of that role; `<role>/<pane>:*` contains the pane's controls
     /// and not the pane's own door; an id ending `.*` contains the ids beneath it and not itself
     /// without the star. A pane door and a root door contain one another in neither direction.
     bool contains(const Door& inner) const {
@@ -122,7 +122,7 @@ public:
             return true;
         }
         if (inner.pane_ != pane_) {
-            return false; // a different pane, or `<office>/*`, which is wider
+            return false; // a different pane, or `<role>/*`, which is wider
         }
         if (id_.empty() || inner.id_.empty()) {
             return id_.empty() && inner.id_.empty(); // the pane's own door contains only itself
@@ -215,7 +215,7 @@ private:
 
     std::string text_;
     bool rooted_ = false;          ///< a root door (`<root>:<id>`) rather than a pane door
-    std::string head_;             ///< the office of a pane door, or the root of a root door
+    std::string head_;             ///< the role of a pane door, or the root of a root door
     std::string pane_;             ///< a pane door's pane, or "*"; empty for a root door
     std::vector<std::string> id_;  ///< the id's dot segments, the last possibly "*"; empty: none
 };

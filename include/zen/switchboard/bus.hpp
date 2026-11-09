@@ -16,7 +16,7 @@
 
 namespace loom {
 
-/// A queued attempt, from an ordinary directed or role-addressed send (office-authored ones
+/// A queued attempt, from an ordinary directed or role-addressed send (role-authored ones
 /// included, natively and across the ABI). It proves enqueue, not delivery; zero is invalid.
 /// A host reads the outcome with Switchboard::outcome(); an opted-in sender learns some later
 /// refusals by notice (docs/reference/messaging.md#sender-visible-dispatch-refusal). A loaded
@@ -26,10 +26,10 @@ struct Ticket {
     bool valid() const noexcept { return seq != 0; }
 };
 
-/// The result of an office-authored publication (MSG-07): `authored` says whether the office
+/// The result of a role-authored publication (MSG-07): `authored` says whether the role
 /// spoke at all, and `recipients` counts the fanout only when it did, so a refusal and an
 /// authorized publication nobody accepts stay distinct.
-struct OfficePublication {
+struct RolePublication {
     bool authored = false;
     std::size_t recipients = 0;
 
@@ -98,25 +98,25 @@ public:
         return Ticket{};
     }
 
-    // ---- deliberate office authorship (MSG-07) ------------------------------
+    // ---- deliberate role authorship (MSG-07) ------------------------------
     // A weave may author one statement as a role it holds; Loom verifies the membership then
-    // and stamps the fact on the delivery. Each `office_*` verb takes the office first and the
+    // and stamps the fact on the delivery. Each `role_*` verb takes the role first and the
     // ordinary verb's parameters after. The ordinary grant still authorizes the delivery. The
     // defaults refuse: an invalid Ticket or unauthored publication means nothing was queued,
     // and a refusal is never sent as personal speech instead.
 
     /// Author `msg` as `as_role`, to a direct target. An invalid Ticket means authorship was
     /// refused and nothing was queued.
-    virtual Ticket office_send(std::string_view as_role, WeaveId target, Message msg) {
+    virtual Ticket role_send(std::string_view as_role, WeaveId target, Message msg) {
         (void)as_role;
         (void)target;
         (void)msg;
         return Ticket{};
     }
 
-    /// Author `msg` as `as_role`, to whoever holds `to_role`: the office spoken for is verified
+    /// Author `msg` as `as_role`, to whoever holds `to_role`: the role spoken for is verified
     /// now, the destination resolved at delivery, and the two are carried separately.
-    virtual Ticket office_send_to_role(std::string_view as_role, std::string_view to_role,
+    virtual Ticket role_send_to_role(std::string_view as_role, std::string_view to_role,
                                        Message msg) {
         (void)as_role;
         (void)to_role;
@@ -126,15 +126,15 @@ public:
 
     /// Author `msg` as `as_role`, published to every accepter. "Authorship refused" and
     /// "authorized, zero recipients" stay distinct.
-    virtual OfficePublication office_publish(std::string_view as_role, Message msg) {
+    virtual RolePublication role_publish(std::string_view as_role, Message msg) {
         (void)as_role;
         (void)msg;
-        return OfficePublication{};
+        return RolePublication{};
     }
 
     // ---- Senses (SENSE-01..05) -----------------------------------------------
     // Claiming sits beside send and publish: a participant deliberately makes something
-    // available, personally or, deliberately, as an office it holds. Observing is the one verb
+    // available, personally or, deliberately, as a role it holds. Observing is the one verb
     // here that returns data rather than queueing; it is synchronous, and the reading owns its
     // value. The defaults refuse.
 
@@ -145,9 +145,9 @@ public:
         return SenseClaimResult{};
     }
 
-    /// Claim `value` as the office `as_role`, verified now; a refusal stores nothing and is never
+    /// Claim `value` as the role `as_role`, verified now; a refusal stores nothing and is never
     /// made a personal claim.
-    virtual SenseClaimResult office_claim(std::string_view as_role, Value value) {
+    virtual SenseClaimResult role_claim(std::string_view as_role, Value value) {
         (void)as_role;
         (void)value;
         return SenseClaimResult{};
@@ -162,9 +162,9 @@ public:
         return SenseReading{};
     }
 
-    /// The latest claim made as the office `role`. A predecessor's claim survives the role
+    /// The latest claim made as the role `role`. A predecessor's claim survives the role
     /// moving, marked stale, never relabelled as the successor's.
-    virtual SenseReading observe_office(std::string_view role, std::shared_ptr<const Schema> shape) {
+    virtual SenseReading observe_role(std::string_view role, std::shared_ptr<const Schema> shape) {
         (void)role;
         (void)shape;
         return SenseReading{};
@@ -197,10 +197,10 @@ public:
     }
 
     // ---- Joint publication of latest claims ------------------------------------
-    // On the Bus, so an operator is an ordinary weave holding a capability and a claimant
+    // On the Bus, so an initiator is an ordinary weave holding a capability and a claimant
     // offers from its own delivery (zen/switchboard/sense.hpp,
     // docs/reference/joint-publication.md). The defaults refuse with `NoLiveDelivery`. A loaded
-    // weave's Bus overrides `offer_claim` only, so its operator verbs are refused by name.
+    // weave's Bus overrides `offer_claim` only, so its initiator verbs are refused by name.
 
     /// Claimant: offer the next value of my own key (me, the value's shape) for operation `op`:
     /// admitted against the declared claim-set, checked against the bound revision, and kept
@@ -211,20 +211,20 @@ public:
         return JointResult{false, JointRefusal::NoLiveDelivery};
     }
 
-    /// Operator: bind the exact claimants and current revisions of `keys` into one operation.
+    /// Initiator: bind the exact claimants and current revisions of `keys` into one operation.
     /// Each key must hold a claim whose claimant holds a role in the authority's ceiling, and
     /// no other live operation may bind it. The authority must name this weave's current life
-    /// and incarnation, or the call meets `NotOperator`.
+    /// and incarnation, or the call meets `NotInitiator`.
     virtual JointBegin begin_joint(const JointAuthority& authority, std::vector<ClaimKey> keys) {
         (void)authority;
         (void)keys;
         return JointBegin{false, 0, JointRefusal::NoLiveDelivery};
     }
 
-    /// Operator: publish. Revalidates everything, then exchanges every offered value into its
+    /// Initiator: publish. Revalidates everything, then exchanges every offered value into its
     /// claim record in one step. `ok` is the commitment: false means nothing was published. A
-    /// failed revalidation of this operator's own Preparing operation aborts it with `why`; a
-    /// request that was not its to make (another operator's operation, or a capability for a
+    /// failed revalidation of this initiator's own Preparing operation aborts it with `why`; a
+    /// request that was not its to make (another initiator's operation, or a capability for a
     /// life or incarnation that is gone) is refused with no effect on that record.
     virtual JointResult commit_joint(const JointAuthority& authority, std::uint64_t op) {
         (void)authority;
@@ -232,22 +232,22 @@ public:
         return JointResult{false, JointRefusal::NoLiveDelivery};
     }
 
-    /// Operator: end a Preparing operation without publishing; its offers are released.
+    /// Initiator: end a Preparing operation without publishing; its offers are released.
     virtual JointResult cancel_joint(const JointAuthority& authority, std::uint64_t op) {
         (void)authority;
         (void)op;
         return JointResult{false, JointRefusal::NoLiveDelivery};
     }
 
-    /// Operator: the operation's state and, when terminal, why.
+    /// Initiator: the operation's state and, when terminal, why.
     virtual JointStatus joint_status(const JointAuthority& authority, std::uint64_t op) {
         (void)authority;
         (void)op;
         return JointStatus{JointState::Missing, JointRefusal::NoLiveDelivery};
     }
 
-    /// Operator: release a terminal record it has consumed, Committed or Aborted, so its slot
-    /// may be reused (SENSE-07). The bus never reuses an unreleased record under its operator.
+    /// Initiator: release a terminal record it has consumed, Committed or Aborted, so its slot
+    /// may be reused (SENSE-07). The bus never reuses an unreleased record under its initiator.
     /// Afterwards the operation reads Missing; the per-key facts stay on the claim records.
     /// Refused `WrongState` while Preparing (cancel it instead), `NoSuchOperation` once released.
     virtual JointResult release_joint(const JointAuthority& authority, std::uint64_t op) {

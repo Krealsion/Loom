@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (c) 2026 Joshua DeMoss
-"""A DIRECT ask that asks to be settled, through the real bridge, of an office whose answering
+"""A DIRECT ask that asks to be settled, through the real bridge, of a role whose answering
 sets more work in motion on the host's own bus.
 
-Starting a run is such an office: the manager does not answer at once -- it registers the run
+Starting a run is such a role: the manager does not answer at once -- it registers the run
 with the session door first, waits for the door's answer, starts the worker process, and only
 then answers the client that asked. All of that is what THIS send set in motion, and the host's
 settlement for this send is its word that all of it has been dispatched.

@@ -547,7 +547,7 @@ TEST_CASE("a broad ceiling contains narrower rules, in every direction that is r
           GrantOutcome::ExceedsCeiling);
 }
 
-TEST_CASE("an office rule and a weave rule never contain one another, whoever holds the office") {
+TEST_CASE("a role rule and a weave rule never contain one another, whoever holds the role") {
     Switchboard bus;
     // The service holds the role — so "Work -> role svc" and "Work -> service.id"
     // pick out the same weave TODAY. They must still not contain one another:
@@ -574,15 +574,15 @@ TEST_CASE("an office rule and a weave rule never contain one another, whoever ho
         return out.outcome;
     };
 
-    // Ceiling names the OFFICE; the request names the weave that holds it.
+    // Ceiling names the ROLE; the request names the weave that holds it.
     CHECK(try_with(host_grant_authority(bus, session.id,
                                         LiveAuthority{}.allow_to_role("Work", 1, "svc")),
                    LiveAuthority{}.allow("Work", 1, service)) == GrantOutcome::ExceedsCeiling);
-    // Ceiling names the WEAVE; the request names the office it currently holds.
+    // Ceiling names the WEAVE; the request names the role it currently holds.
     CHECK(try_with(host_grant_authority(bus, session.id, LiveAuthority{}.allow("Work", 1, service)),
                    LiveAuthority{}.allow_to_role("Work", 1, "svc")) ==
           GrantOutcome::ExceedsCeiling);
-    // Each contains itself, and a different office is a different destination.
+    // Each contains itself, and a different role is a different destination.
     CHECK(try_with(host_grant_authority(bus, session.id,
                                         LiveAuthority{}.allow_to_role("Work", 1, "svc")),
                    LiveAuthority{}.allow_to_role("Work", 1, "svc")) == GrantOutcome::Installed);
@@ -1129,7 +1129,7 @@ TEST_CASE("every administration outcome is reachable and named") {
 }
 
 // =========================================================================
-// Doors: a name on a send rule to an office, which that office judges.
+// Doors: a name on a send rule to a role, which that role judges.
 // =========================================================================
 
 TEST_CASE("a door is read by its grammar, and every other spelling is refused in words") {
@@ -1179,7 +1179,7 @@ TEST_CASE("a door contains whole segments, never a prefix of one") {
         REQUIRE(i.has_value());
         return o->contains(*i);
     };
-    // An office's `*` contains every door beneath the office, and no other office's.
+    // A role's `*` contains every door beneath the role, and no other role's.
     CHECK(contains("zengine.files/*", "zengine.files/files:files.open"));
     CHECK(contains("zengine.files/*", "zengine.files/files"));
     CHECK(contains("zengine.files/*", "zengine.files/files:*"));
@@ -1214,7 +1214,7 @@ TEST_CASE("a door contains whole segments, never a prefix of one") {
                          "zengine.builder-pane/builder:builder.build-realize"));
     CHECK_FALSE(contains("zengine.builder-pane/builder:builder.build",
                          "zengine.builder-pane/builder:builder.build.x"));
-    // A root an office declares is its own tree.
+    // A root a role declares is its own tree.
     CHECK(contains("arrange:*", "arrange:split_1"));
     CHECK_FALSE(contains("arrange:*", "arrange-evil:split_1"));
     CHECK_FALSE(contains("arrange:*", "arrange/p"));
@@ -1234,7 +1234,7 @@ TEST_CASE("a door rule permits its door and no other") {
                                *Door::parse("zengine.files/files")));
     CHECK_FALSE(a.permits_role("ControlRequested", 1, "zengine.workshop",
                                *Door::parse("zengine.files/*")));
-    // The rest of the rule still counts: another office, shape or version is another rule.
+    // The rest of the rule still counts: another role, shape or version is another rule.
     CHECK_FALSE(a.permits_role("ControlRequested", 1, "zengine.other", open));
     CHECK_FALSE(a.permits_role("OtherRequested", 1, "zengine.workshop", open));
     CHECK_FALSE(a.permits_role("ControlRequested", 2, "zengine.workshop", open));
@@ -1266,8 +1266,8 @@ TEST_CASE("the door axis is disjoint both ways, and delivery asks only the door-
     CHECK_FALSE(door_only.permits_role("ControlRequested", 1, "zengine.workshop"));
     CHECK_FALSE(door_only.permits("ControlRequested", 1, WeaveId{}));
 
-    // The same at the real boundary: a subject holding only a door rule to an office is refused
-    // when it speaks to that office, since delivery asks the door-less question.
+    // The same at the real boundary: a subject holding only a door rule to a role is refused
+    // when it speaks to that role, since delivery asks the door-less question.
     Switchboard bus;
     auto owned = std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{
         work_schema()});
@@ -1344,7 +1344,7 @@ TEST_CASE("a ceiling of doors delegates the doors it contains and nothing beside
     CHECK(try_with(plain, door_rule("zengine.files/*")) == GrantOutcome::ExceedsCeiling);
     const GrantAuthority wide = host_grant_authority(bus, session.id, LiveAuthority{}.allow_any());
     CHECK(try_with(wide, door_rule("zengine.files/*")) == GrantOutcome::ExceedsCeiling);
-    // The office still counts: the same door to another office is another rule.
+    // The role still counts: the same door to another role is another rule.
     CHECK(try_with(files, LiveAuthority{}.allow_to_role("ControlRequested", 1, "zengine.other",
                                                         *Door::parse("zengine.files/*"))) ==
           GrantOutcome::ExceedsCeiling);

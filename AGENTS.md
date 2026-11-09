@@ -130,7 +130,7 @@ in `docs/laws/population-laws.md`.
 ## The supplied host, and who decides what a loaded artifact may do
 
 `loom-host` (`src/host/`) is the one executable this project installs: a boot walk from a file
-the person wrote, an operator console with authority in it, and two per-install files
+the person wrote, a weaver's console with authority in it, and two per-install files
 (`loom-boot.json`, `loom-authority.json`). It is a replaceable default assembled from ordinary
 participants — `ConsoleEngine`, `WeaveManager`, `ControlWeave`, and `loom::host::HostWarden` — and
 holds no privilege the package does not export. Human route: `docs/guides/running-loom.md`;
@@ -177,7 +177,7 @@ authority, whole or refused. Every session is compat-encoded. The scoped reader
 (`src/host/history_reader.hpp`) reads the Recorder and is blacklisted from it. The run manager
 `loom-runs` (`src/runs/`) is an ordinary loadable weave — task policy, not host root — with its
 Python runtime beside it. **Every delivery is gated, answers included**: host wiring grants its
-own answer shapes; the operator grants a loaded manager its typed answers. Python is optional:
+own answer shapes; the weaver grants a loaded manager its typed answers. Python is optional:
 gate `runs` carries the C++ `runs` suite, gate `python` the process journey `session_journey`
 (declared absent without an interpreter).
 
@@ -240,12 +240,12 @@ application; what it found is evidence (`docs/evidence/night-lab.md`), not contr
   (`Switchboard::send_as_fenced`, `docs/reference/messaging.md`), and across a link, `settle`.
 - `Committed` at commit-call time — commit *schedules*; `AdmissionPending` is real (PR-07).
 - Prepared replacement preserves incumbent state — it does not (PR-09).
-- `send_to_role` says anything about the sender's office (MSG-04) — office speech is its own
+- `send_to_role` says the sender speaks as a role (MSG-04) — speaking as one is its own
   explicit, verified act (`mail.as_role(...)`, MSG-07), and merely holding a role attaches nothing.
 - A committed activation is answerable (LIFE-05).
 - A reachable bridge socket is admitted — it is not; a connection has no proxy and acts on
   nothing until the host's `BridgeAdmission` policy answers its Hello with a grant, a refusal or a
-  deferred decision. The operator policy admits everything that reaches it, and no policy adds
+  deferred decision. The weaver policy admits everything that reaches it, and no policy adds
   transport security (`docs/reference/bridge.md`).
 - A grant bounds what in-process native code can *touch* — it bounds speech only; a `dlopen`ed
   weave shares this address space (`docs/guides/dynamic-weaves.md`).

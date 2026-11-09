@@ -107,7 +107,7 @@ void cmd_describe(const loom::ConsoleEngine& engine, const std::vector<Token>& t
 }
 
 // Render the engine's NeedsInput as a plain prompt: the still-open fields and the values the
-// ladder could not safely place. The operator re-sends with explicit `field=value`.
+// ladder could not safely place. The weaver re-sends with explicit `field=value`.
 void print_needs_input(const loom::Composed& c) {
     std::cout << "  needs input — the ladder could not unambiguously place every value.\n"
                  "  fill the open fields and re-send with field=value:\n";

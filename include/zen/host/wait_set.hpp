@@ -6,9 +6,9 @@
 
 // What a source of outside events waits on, said as a claim, and what the host's one wait tells
 // it back. A source -- a window, a console reader, a child's pipes, a crossing's sockets -- claims
-// its `WaitSet` as its office, its latest word; a host that rests through `loom::host::Reactor`
-// (zen/host/reactor.hpp) reads the claims of the offices it trusts, waits once on all of them and
-// on its own deadline, and sends each office a `Waited`. Only the host sends one: a source reads
+// its `WaitSet` as its role, its latest word; a host that rests through `loom::host::Reactor`
+// (zen/host/reactor.hpp) reads the claims of the roles it trusts, waits once on all of them and
+// on its own deadline, and sends each role a `Waited`. Only the host sends one: a source reads
 // one from any other sender as nothing. The handles mean something only in this process.
 // docs/guides/running-loom.md#a-host-that-rests-until-something-is-ready
 
@@ -21,7 +21,7 @@
 
 namespace loom::host {
 
-/// WHAT A SOURCE WAITS ON, claimed as its office. `handles` are waited on for readiness and never
+/// WHAT A SOURCE WAITS ON, claimed as its role. `handles` are waited on for readiness and never
 /// consumed by the wait (an auto-reset event is the one exception: the wait that sees it resets
 /// it, so its source is told once per signal): on Windows each is a `HANDLE` waited for signalled,
 /// on POSIX a descriptor waited for readable or hung up. `writable` is POSIX's: descriptors waited
@@ -44,7 +44,7 @@ struct WaitSet {
     }
 };
 
-/// WHAT THE HOST'S WAIT SAYS TO A SOURCE'S OFFICE, about the claim of revision `revision`.
+/// WHAT THE HOST'S WAIT SAYS TO A SOURCE'S ROLE, about the claim of revision `revision`.
 /// `held`: the wait holds it, so what it names reaches the source through the wait and the source
 /// may stop polling; false says why not in `why`, and the source polls as it would with no host
 /// waiting. `ready`: something it names is ready now. A source is told when the wait first holds

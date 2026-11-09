@@ -158,8 +158,8 @@ def main():
         return e
 
     s = connection()
-    corr = s.ask("zen.Ack", {}, role="office", settle=True)
-    check("S0 the request to settle goes out on the wire", s.channel.sent == [(corr, "office", True)],
+    corr = s.ask("zen.Ack", {}, role="role", settle=True)
+    check("S0 the request to settle goes out on the wire", s.channel.sent == [(corr, "role", True)],
           s.channel.sent)
     s.channel.frames.append(delivered(corr, True))
     s.poll(0.0)
@@ -179,7 +179,7 @@ def main():
           a.shape == "zen.Ack" and s.open_asks() == [])
 
     s2 = connection()
-    corr = s2.ask("zen.Ack", {}, role="office", settle=True)
+    corr = s2.ask("zen.Ack", {}, role="role", settle=True)
     s2.channel.frames.append(settled_frame(corr))
     s2.poll(0.0)
     settled_only = not s2.done(corr)
@@ -189,7 +189,7 @@ def main():
           "the answer then completes it", settled_only and a2.shape == "zen.Ack")
 
     s3 = connection()
-    corr = s3.ask("zen.Ack", {}, role="office", settle=True)
+    corr = s3.ask("zen.Ack", {}, role="role", settle=True)
     refused = wire.Event("send-refused")
     refused.correlation = corr
     refused.reason = "no grant for zen.Ack"
@@ -203,7 +203,7 @@ def main():
           "motion to settle", "no grant" in refusal, refusal)
 
     s4 = connection()
-    corr = s4.ask("zen.Ack", {}, role="office")  # settlement NOT requested
+    corr = s4.ask("zen.Ack", {}, role="role")  # settlement NOT requested
     s4.channel.frames.append(delivered(corr, True))
     a4 = s4.wait(corr, 1.0)
     check("S6 without the request, the attested answer alone is still enough",
@@ -476,7 +476,7 @@ def main():
     watched = dict(shapes)
     watched[("loom.observe.Observed", 1)] = word_schema("loom.observe.Observed", common + [
         ("shape", text), ("version", int_t), ("payload", bytes_t), ("producer", int_t),
-        ("incarnation", int_t), ("office", text), ("coalesced", int_t), ("cause", int_t),
+        ("incarnation", int_t), ("role", text), ("coalesced", int_t), ("cause", int_t),
         ("delivery", int_t), ("published_in", int_t)])
     watched[("loom.observe.Gap", 1)] = word_schema("loom.observe.Gap", common + [
         ("lost", int_t), ("reason", text)])

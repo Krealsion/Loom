@@ -4,7 +4,7 @@
 #ifndef ZEN_HOST_HISTORY_READER_HPP
 #define ZEN_HOST_HISTORY_READER_HPP
 
-// A scoped reader over the host's own Recorder, answered by message: office `loom.history`,
+// A scoped reader over the host's own Recorder, answered by message: role `loom.history`,
 // asked `DeliveriesTo{participant}` and `Delivery{seq}` (zen/session/vocabulary.hpp) by a
 // client that is not the console and has no tap. It adds no memory: every answer is read off
 // the Recorder in its own four words, and a row descended from a link's own `loom.link.Crossed`

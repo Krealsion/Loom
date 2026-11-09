@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Joshua DeMoss
 
 // THE HOST'S ONE WAIT (zen/host/reactor.hpp), over real handles -- an event on Windows, a pipe on
-// POSIX, a crossing's sockets: a trusted office's claim held and woken, an untrusted one never
+// POSIX, a crossing's sockets: a trusted role's claim held and woken, an untrusted one never
 // read, the bound told, a closed handle and an untaken wake let go rather than spun on, the
 // deadline kept, and a crossing's answer queued in a turn ending the wait at once. Times are bounds
 // far from either answer, so a busy machine moves no verdict.
@@ -123,7 +123,7 @@ struct SourceState {
     ZEN_SHAPE(SourceState, 1, ZEN_FIELD(heard));
 };
 
-/// A SOURCE as a window or a reader is one: it claims its wait set as its office, takes a wake by
+/// A SOURCE as a window or a reader is one: it claims its wait set as its role, takes a wake by
 /// clearing what woke it and claiming anew, and reads a `Waited` from anyone but the host as
 /// nothing.
 class Source final : public WeaveBase<Source, SourceState, Accept<ClaimYourWait, Waited>, Emit<>,
@@ -145,9 +145,9 @@ public:
             }
         }
     }
-    void claim(Mail& mail) { (void)mail.as_role(office).claim(set()); }
+    void claim(Mail& mail) { (void)mail.as_role(role).claim(set()); }
 
-    std::string office;
+    std::string role;
     std::function<WaitSet()> set;
     std::function<void()> on_ready;
     bool takes_wakes = true;
@@ -164,12 +164,12 @@ public:
     bool held() const { return !heard.empty() && heard.back().held; }
 };
 
-Source* mount(Switchboard& bus, std::string office, std::function<WaitSet()> set) {
+Source* mount(Switchboard& bus, std::string role, std::function<WaitSet()> set) {
     auto owned = std::make_unique<Source>();
     Source* raw = owned.get();
-    raw->office = office;
+    raw->role = role;
     raw->set = std::move(set);
-    const WeaveId id = bus.register_weave(std::move(owned), Grant{}, office);
+    const WeaveId id = bus.register_weave(std::move(owned), Grant{}, role);
     raw->zen_set_self(id);
     bus.send(id, Message(to_value(ClaimYourWait{})));
     return raw;
@@ -202,7 +202,7 @@ std::int64_t turn(Switchboard& bus, Reactor& wait, std::int64_t ms, Reactor::Wok
 
 TEST_SUITE("host_reactor") {
 
-TEST_CASE("a trusted office's source is held, woken when ready, and the wait lasts its deadline "
+TEST_CASE("a trusted role's source is held, woken when ready, and the wait lasts its deadline "
           "when nothing is") {
     Switchboard bus;
     Signal sig;
@@ -219,10 +219,10 @@ TEST_CASE("a trusted office's source is held, woken when ready, and the wait las
     // Nothing ready: the wait lasts its deadline.
     const std::int64_t idle = turn(bus, wait, 60, &woke);
     CHECK(woke.deadline);
-    CHECK(woke.offices == 0);
+    CHECK(woke.roles == 0);
     CHECK(idle >= 40);
 
-    // Ready from another thread: the wait ends long before its deadline and wakes the office.
+    // Ready from another thread: the wait ends long before its deadline and wakes the role.
     std::thread setter([&sig] {
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
         sig.set();
@@ -232,13 +232,13 @@ TEST_CASE("a trusted office's source is held, woken when ready, and the wait las
     setter.join();
     CHECK(took < 2500);
     CHECK_FALSE(woke.deadline);
-    CHECK(woke.offices == 1);
+    CHECK(woke.roles == 1);
     (void)bus.pump_pending();
     CHECK(src->readies() == 1);
     CHECK(wait.sources().front().wakes == 1);
 }
 
-TEST_CASE("an office the host did not trust is never waited on and never told") {
+TEST_CASE("a role the host did not trust is never waited on and never told") {
     Switchboard bus;
     Signal sig;
     sig.set(); // ready from the start: a wait holding it would end at once
@@ -260,7 +260,7 @@ TEST_CASE("a Waited from any participant but the host is nothing to its source")
     Source* src = mount(bus, "test.source", [&sig] { return of({sig.handle()}); });
     (void)bus.pump_pending();
     auto forger = std::make_unique<Source>();
-    forger->office = "test.forger";
+    forger->role = "test.forger";
     const WeaveId fid =
         bus.register_weave(std::move(forger), Grant{}.allow_to_role("loom.host.Waited", 1,
                                                                    "test.source"),
@@ -285,9 +285,9 @@ TEST_CASE("a source that does not take its wake is held no longer, and the wait 
     wait.trust("test.stuck");
     Reactor::Woke woke;
     (void)turn(bus, wait, 0, &woke); // held, and ready at once: the first wake is told
-    CHECK(woke.offices == 1);
+    CHECK(woke.roles == 1);
     (void)turn(bus, wait, 5000, &woke); // ready again under the same claim: held no longer
-    CHECK(woke.offices == 0);
+    CHECK(woke.roles == 0);
     (void)bus.pump_pending();
     REQUIRE_FALSE(src->heard.empty());
     CHECK_FALSE(src->heard.back().held);
@@ -367,10 +367,10 @@ TEST_CASE("a source the host stops trusting is told it is held no longer") {
     CHECK_FALSE(wait.trusts("test.source"));
     (void)bus.pump_pending();
     CHECK_FALSE(src->held());
-    CHECK(src->heard.back().why == "the host no longer waits on this office");
+    CHECK(src->heard.back().why == "the host no longer waits on this role");
 }
 
-TEST_CASE("an office's next holder starts unheld and is told for itself") {
+TEST_CASE("a role's next holder starts unheld and is told for itself") {
     Switchboard bus;
     Signal sig;
     Source* first = mount(bus, "test.source", [&sig] { return of({sig.handle()}); });
@@ -456,7 +456,7 @@ TEST_CASE("a crossing is waited on: a connection, its Hello and an answer queued
     bus.send(WeaveId{client.session()}, Message(to_value(sent)));
     const std::int64_t took = turn(bus, wait, 5000, &woke);
     CHECK(took < 2500);
-    CHECK(woke.offices == 1);
+    CHECK(woke.roles == 1);
     (void)bus.pump_pending(); // the door services
     bool delivered = false;
     const Clock::time_point d = Clock::now();

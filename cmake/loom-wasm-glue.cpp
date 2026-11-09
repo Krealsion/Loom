@@ -33,26 +33,26 @@ LOOM_WASM_IMPORT(answer_deferred) int32_t zh_answer_deferred(uint64_t token, con
                                                              size_t n);
 LOOM_WASM_IMPORT(release_deferred) void zh_release_deferred(uint64_t token);
 LOOM_WASM_IMPORT(answer) int32_t zh_answer(const uint8_t* p, size_t n);
-LOOM_WASM_IMPORT(office_send) int32_t zh_office_send(const char* as_role, uint64_t target,
+LOOM_WASM_IMPORT(role_send) int32_t zh_role_send(const char* as_role, uint64_t target,
                                                      uint64_t reply_to, uint64_t correlation,
                                                      const uint8_t* p, size_t n,
                                                      uint64_t* attempt_out);
-LOOM_WASM_IMPORT(office_send_to_role) int32_t
-zh_office_send_to_role(const char* as_role, const char* to_role, uint64_t reply_to,
+LOOM_WASM_IMPORT(role_send_to_role) int32_t
+zh_role_send_to_role(const char* as_role, const char* to_role, uint64_t reply_to,
                        uint64_t correlation, const uint8_t* p, size_t n, uint64_t* attempt_out);
-LOOM_WASM_IMPORT(office_publish) int32_t zh_office_publish(const char* as_role, uint64_t reply_to,
+LOOM_WASM_IMPORT(role_publish) int32_t zh_role_publish(const char* as_role, uint64_t reply_to,
                                                            uint64_t correlation, const uint8_t* p,
                                                            size_t n, uint64_t* recipients_out);
 LOOM_WASM_IMPORT(sense_claim) int32_t zh_sense_claim(const uint8_t* p, size_t n,
                                                      uint64_t* revision_out);
-LOOM_WASM_IMPORT(sense_office_claim) int32_t zh_sense_office_claim(const char* as_role,
+LOOM_WASM_IMPORT(sense_role_claim) int32_t zh_sense_role_claim(const char* as_role,
                                                                    const uint8_t* p, size_t n,
                                                                    uint64_t* revision_out);
-// The two library sinks of an observation cross as handles, 0 the value and 1 the office: the
+// The two library sinks of an observation cross as handles, 0 the value and 1 the role: the
 // host writes each back through `zw_sink_deliver` before the import returns.
 LOOM_WASM_IMPORT(sense_observe) int32_t zh_sense_observe(uint64_t author, const char* shape_name,
                                                          uint32_t shape_version, ZenSenseBy* by);
-LOOM_WASM_IMPORT(sense_observe_office) int32_t zh_sense_observe_office(const char* role,
+LOOM_WASM_IMPORT(sense_observe_role) int32_t zh_sense_observe_role(const char* role,
                                                                        const char* shape_name,
                                                                        uint32_t shape_version,
                                                                        ZenSenseBy* by);
@@ -90,34 +90,34 @@ ZenStatus g_answer_deferred(void*, uint64_t t, const uint8_t* p, size_t n) {
 }
 void g_release_deferred(void*, uint64_t t) { zh_release_deferred(t); }
 ZenStatus g_answer(void*, const uint8_t* p, size_t n) { return zh_answer(p, n); }
-ZenStatus g_office_send(void*, const char* as, uint64_t t, uint64_t r, uint64_t c,
+ZenStatus g_role_send(void*, const char* as, uint64_t t, uint64_t r, uint64_t c,
                         const uint8_t* p, size_t n, uint64_t* a) {
-    return zh_office_send(as, t, r, c, p, n, a);
+    return zh_role_send(as, t, r, c, p, n, a);
 }
-ZenStatus g_office_send_to_role(void*, const char* as, const char* to, uint64_t r, uint64_t c,
+ZenStatus g_role_send_to_role(void*, const char* as, const char* to, uint64_t r, uint64_t c,
                                 const uint8_t* p, size_t n, uint64_t* a) {
-    return zh_office_send_to_role(as, to, r, c, p, n, a);
+    return zh_role_send_to_role(as, to, r, c, p, n, a);
 }
-ZenStatus g_office_publish(void*, const char* as, uint64_t r, uint64_t c, const uint8_t* p,
+ZenStatus g_role_publish(void*, const char* as, uint64_t r, uint64_t c, const uint8_t* p,
                            size_t n, uint64_t* recipients) {
-    return zh_office_publish(as, r, c, p, n, recipients);
+    return zh_role_publish(as, r, c, p, n, recipients);
 }
 ZenStatus g_sense_claim(void*, const uint8_t* p, size_t n, uint64_t* revision) {
     return zh_sense_claim(p, n, revision);
 }
-ZenStatus g_sense_office_claim(void*, const char* as, const uint8_t* p, size_t n,
+ZenStatus g_sense_role_claim(void*, const char* as, const uint8_t* p, size_t n,
                                uint64_t* revision) {
-    return zh_sense_office_claim(as, p, n, revision);
+    return zh_sense_role_claim(as, p, n, revision);
 }
 
 /// An observation's two sinks held for its length, and the ones before them restored after: an
 /// observation made from inside a sink's write leaves the outer one intact.
 struct ObserveSinks {
     ZenByteSink saved[2];
-    ObserveSinks(ZenByteSink value, ZenByteSink office)
+    ObserveSinks(ZenByteSink value, ZenByteSink role)
         : saved{g_observe_sinks[0], g_observe_sinks[1]} {
         g_observe_sinks[0] = value;
-        g_observe_sinks[1] = office;
+        g_observe_sinks[1] = role;
     }
     ~ObserveSinks() {
         g_observe_sinks[0] = saved[0];
@@ -128,14 +128,14 @@ struct ObserveSinks {
 };
 
 ZenStatus g_sense_observe(void*, uint64_t author, const char* name, uint32_t version,
-                          ZenByteSink value, ZenByteSink office, ZenSenseBy* by) {
-    const ObserveSinks held(value, office);
+                          ZenByteSink value, ZenByteSink role_sink, ZenSenseBy* by) {
+    const ObserveSinks held(value, role_sink);
     return zh_sense_observe(author, name, version, by);
 }
-ZenStatus g_sense_observe_office(void*, const char* role, const char* name, uint32_t version,
-                                 ZenByteSink value, ZenByteSink office, ZenSenseBy* by) {
-    const ObserveSinks held(value, office);
-    return zh_sense_observe_office(role, name, version, by);
+ZenStatus g_sense_observe_role(void*, const char* role, const char* name, uint32_t version,
+                               ZenByteSink value, ZenByteSink role_sink, ZenSenseBy* by) {
+    const ObserveSinks held(value, role_sink);
+    return zh_sense_observe_role(role, name, version, by);
 }
 ZenStatus g_sense_offer(void*, uint64_t op, const uint8_t* p, size_t n) {
     return zh_sense_offer(op, p, n);
@@ -150,13 +150,13 @@ const ZenHostApi kHostApi{.ctx                  = nullptr,
                           .answer_deferred      = &g_answer_deferred,
                           .release_deferred     = &g_release_deferred,
                           .answer               = &g_answer,
-                          .office_send          = &g_office_send,
-                          .office_send_to_role  = &g_office_send_to_role,
-                          .office_publish       = &g_office_publish,
+                          .role_send          = &g_role_send,
+                          .role_send_to_role  = &g_role_send_to_role,
+                          .role_publish       = &g_role_publish,
                           .sense_claim          = &g_sense_claim,
-                          .sense_office_claim   = &g_sense_office_claim,
+                          .sense_role_claim   = &g_sense_role_claim,
                           .sense_observe        = &g_sense_observe,
-                          .sense_observe_office = &g_sense_observe_office,
+                          .sense_observe_role = &g_sense_observe_role,
                           .sense_offer          = &g_sense_offer};
 
 } // namespace
@@ -200,7 +200,7 @@ LOOM_WASM_EXPORT(zw_claim_published) int32_t zw_claim_published(void* instance,
     const ZenWeaveAbi* abi = zen_weave_abi();
     return abi->claim_published == nullptr ? ZEN_ERR : abi->claim_published(instance, value, len);
 }
-// The host writes an observed value (handle 0) or office (handle 1) into the library's own sink,
+// The host writes an observed value (handle 0) or role (handle 1) into the library's own sink,
 // while the observation's import is still on the stack.
 LOOM_WASM_EXPORT(zw_sink_deliver) void zw_sink_deliver(int32_t handle, const uint8_t* data,
                                                        size_t len) {

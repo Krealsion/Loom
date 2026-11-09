@@ -109,7 +109,7 @@ endfunction()
 # line, so the `//` in a URL opens no comment; character literals stay. Its limits all read more
 # text, never less, and the caller de-duplicates. A `/* */` comment is found by cutting after each
 # `*/` (`;` is gone, so it is free to cut with) and reading each piece from its first `/*`: a scan,
-# since CMake's regex recurses per character, and a `/*` in a `//` comment (`office/*`) would walk
+# since CMake's regex recurses per character, and a `/*` in a `//` comment (`role/*`) would walk
 # a long file past a Windows thread's stack.
 function(zen_doc_comments content out)
     string(REGEX REPLACE "\"[^\"\n]*\"" "" code "${content}")
@@ -382,7 +382,7 @@ endif()
 
 # A `/*` inside a `//` comment, then a long file, then an unbalanced `[` and two real comments:
 # read without the regex engine's recursion meeting the stack, and read whole.
-string(REPEAT "// office/* is a door, said in a line comment\n" 4096 long_walk)
+string(REPEAT "// role/* is a door, said in a line comment\n" 4096 long_walk)
 zen_doc_comments("${long_walk}char c = '[' /* see docs/a.md [1] */ int b/* docs/b.md */" walked)
 if(NOT walked MATCHES "/[*] see docs/a[.]md [[]1[]] [*]/" OR NOT walked MATCHES "docs/b[.]md")
     message(FATAL_ERROR

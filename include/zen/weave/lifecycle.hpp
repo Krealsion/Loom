@@ -76,7 +76,7 @@ struct ClaimBequest {
 };
 
 // ---- activation (LIFE-01, LIFE-02) ------------------------------------------
-// `zen.Activated` means exactly: "the lifecycle operator that sent this has committed a new code
+// `zen.Activated` means exactly: "the lifecycle initiator that sent this has committed a new code
 // incarnation at this address." Not that the weave is healthy, ready, a role holder, that
 // state was kept, that a predecessor existed, that a replacement was graceful, that resources
 // are there, that anything should start, that earlier work should be repeated, or that the
@@ -85,7 +85,7 @@ struct ClaimBequest {
 // A weave participates by listing it in its accept-set; a sender asks first and otherwise stays
 // silent, so a non-participant hears nothing. Its identity is the bus-stamped sender plus
 // `sequence`, monotonic within that sender's revived lineage and unique nowhere else. Any weave
-// granted the shape can send one, so a consumer checks the stamped sender against the operator
+// granted the shape can send one, so a consumer checks the stamped sender against the initiator
 // it trusts, or requires Loom's attestation (`Mail::lifecycle_attested`), and treats a sequence
 // no newer than that sender's last as a duplicate. No role field and no cause field.
 //

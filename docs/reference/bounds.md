@@ -19,7 +19,7 @@ and held by review alone.
 | `kMaxPreparedReplacements` | <!-- value kMaxPreparedReplacements -->8<!-- /value --> | `CapacityExhausted` before anything is inspected |
 | `kMaxPreparationBudget` | <!-- value kMaxPreparationBudget -->1024<!-- /value --> | larger requests refused at `begin` |
 | `kMaxTerminalOutcomes` | <!-- value kMaxTerminalOutcomes -->16<!-- /value --> | oldest outcome dropped (evidence, not authority) |
-| `kMaxJointOperations` | <!-- value kMaxJointOperations -->8<!-- /value --> | joint-publication records **live or unreleased** per bus; `Exhausted` at `begin`, nothing reused — a record is kept until its operator releases it, so an operator that never releases meets this bound and never another operator's outstanding outcome ([joint publication](joint-publication.md#the-records-lifetime-and-release)) |
+| `kMaxJointOperations` | <!-- value kMaxJointOperations -->8<!-- /value --> | joint-publication records **live or unreleased** per bus; `Exhausted` at `begin`, nothing reused — a record is kept until its initiator releases it, so an initiator that never releases meets this bound and never another initiator's outstanding outcome ([joint publication](joint-publication.md#the-records-lifetime-and-release)) |
 | `kMaxJointKeys` | <!-- value kMaxJointKeys -->4<!-- /value --> | keys one operation binds; `Exhausted` at `begin` |
 | `kMaxJointOfferBytes` | <!-- value kMaxJointOfferBytes KiB -->64<!-- /value --> KiB | one offered value's serialized size; `TooLarge` at `offer` — a joint publication carries facts, not documents |
 | `kMaxFences` | <!-- value kMaxFences -->64<!-- /value --> | fences held (open or settled, not yet released) per bus; a fenced send past it queues **nothing** and returns an invalid ticket — never an unfenced send in its place ([fences](messaging.md#fences-when-what-one-send-set-in-motion-has-been-dispatched)). Ids are monotonic and never reused |
@@ -78,13 +78,13 @@ saying so, so a cap can never be mistaken for an ending.
 The Logger holds **no records in memory** — only counters and its selection — so
 "uncapped" is a statement about the file and never about RAM.
 
-## Console (operator history)
+## Console (weaver history)
 
 Both windows are **history**: past observations kept for inspection, on which
 nothing is owed. That is what makes discarding the oldest legitimate here and
 illegitimate for a backlog. They are shared by the in-process `ConsoleEngine`
 and the client-side `RemoteConsole` -- the same two constants, the same window
-type, so the local and remote operator see the same horizon.
+type, so the local and remote weaver see the same horizon.
 
 | Bound | Value | Unit | What it bounds | Overflow behavior |
 |---|---|---|---|---|
@@ -100,8 +100,8 @@ is the opposite — dropping one loses a question somebody asked or an answer th
 have not read — so a new tracked conversation is **refused at capacity and every
 held one is left untouched** ([ANS-05](messaging.md#the-askers-own-book)). The send
 still happens; what it loses is attribution, and `Submitted::ask == 0` says so
-rather than handing back a handle that can never settle. Thirty-two is an
-operator's number: a person driving a console by hand does not hold dozens of open
+rather than handing back a handle that can never settle. Thirty-two is a
+weaver's number: a person driving a console by hand does not hold dozens of open
 questions, and `asks` lists them when they do.
 
 **Holding is something a caller asks for, and then owes back.** A send holds
@@ -124,7 +124,7 @@ every consumer unable to tell an answer it had earned from a reply-shaped messag
 any participant may send.
 
 **Why those two numbers.** The tap matches `kJournalCapacity` deliberately: one
-tap entry is roughly one journal entry, so an operator who can still *see* an
+tap entry is roughly one journal entry, so a weaver who can still *see* an
 event on the tap can still *ask* the journal what became of it. The buffer is
 sixteen times smaller because the unit is far heavier -- a `TapEvent` is a few
 short strings, while a wire-arrived `Value` is bounded only by
@@ -140,7 +140,7 @@ window, never a lifetime total a later console inherits.
 **Labels are identities, not positions.** `buffer_at(N)` answers for the reply
 labelled `mN`; the retained range is `m(evicted+1) .. m(evicted+size)`. An
 evicted label refuses and says it was evicted -- it never re-binds to whatever
-reply now occupies that slot, so a reference an operator wrote down either
+reply now occupies that slot, so a reference a weaver wrote down either
 still means what it meant or fails loudly. Eviction is visible without asking:
 the tap and buffer panes carry it in their headings.
 
@@ -206,7 +206,7 @@ A host that rests between turns waits on its sources once, on its dispatch threa
 
 | Bound | Value | Unit | What it bounds | Overflow behavior |
 |---|---|---|---|---|
-| `kMaxWaitedHandles` | <!-- value kMaxWaitedHandles -->62<!-- /value --> | handles | everything one wait holds: every held office's handles and descriptors, and a watched console's | the office whose claim would pass it is **not held**, in the order the host trusted its offices, and is told why (`loom.host.Waited`, `held` false); its source polls as it would with no host waiting |
+| `kMaxWaitedHandles` | <!-- value kMaxWaitedHandles -->62<!-- /value --> | handles | everything one wait holds: every held role's handles and descriptors, and a watched console's | the role whose claim would pass it is **not held**, in the order the host trusted its roles, and is told why (`loom.host.Waited`, `held` false); its source polls as it would with no host waiting |
 
 **Why <!-- value kMaxWaitedHandles -->62<!-- /value -->.** A Windows wait takes 64 handles, and the
 host's takes two of them itself: the thread's message queue and the high-resolution timer that is
@@ -260,13 +260,13 @@ An observation belongs to its terminal instance, not a later instance under the 
 entry is placed by the HOST at mount, so there is no traffic that can grow it and
 nothing to evict. Everything untrusted traffic can grow is in the table above.
 
-## Bridge (remote operator)
+## Bridge (remote weaver)
 
 What the component *is*, and what it trusts: [bridge](bridge.md).
 
 | Bound | Value | Behavior |
 |---|---|---|
-| `kMaxOperatorConnections` | <!-- value kMaxOperatorConnections -->32<!-- /value --> | accept-then-shed, `declined_count()` visible |
+| `kMaxWeaverConnections` | <!-- value kMaxWeaverConnections -->32<!-- /value --> | accept-then-shed, `declined_count()` visible |
 | `kMaxHelloFieldBytes` | <!-- value kMaxHelloFieldBytes -->256<!-- /value --> | the longest claimed name or credential a Hello may carry; over it the connection is refused before the policy is asked -- a peer has earned nothing yet |
 | `kMaxSettlingPerConnection` | <!-- value kMaxSettlingPerConnection -->8<!-- /value --> | settle-requested sends one connection may have waiting on their settlement; past it the Send is refused before the bus (`SendRefused`), and so is one the bus's `kMaxFences` cannot fence |
 | `LinkWeave::kMaxOpenAsks` (the supplied host) | <!-- value kMaxOpenAsks -->16<!-- /value --> | crossings one link holds open at once; a new ask past it is told `refused` and every open one is untouched. Each open crossing holds a deferred answer, which counts against the Loom-wide `kMaxDeferredAnswers`, so a link keeps well inside it |
@@ -280,7 +280,7 @@ refuses in words at the limit; none evicts anything a client is still owed.
 
 | Bound | Value | Behavior |
 |---|---|---|
-| connections to a session host | 32 | the bridge's `kMaxOperatorConnections`, shared by clients and run workers |
+| connections to a session host | 32 | the bridge's `kMaxWeaverConnections`, shared by clients and run workers |
 | `SessionDoor::kMaxExpectations` | <!-- value kMaxExpectations -->32<!-- /value --> | run registrations held at once (expected, or admitted and still connected); past it `ExpectRun` is refused and nothing is registered. A registration leaves when its worker's connection ends, when its registrar forgets it, or when its registrar leaves the bus |
 | `SessionDoor::kMaxRulesPerRun` | <!-- value kMaxRulesPerRun -->32<!-- /value --> | rules one run may ask to be granted |
 | `SessionDoor::kMaxRunNameBytes` | <!-- value kMaxRunNameBytes -->64<!-- /value --> | a run name, of letters, digits, `-`, `_` and `.` only, so an established `run:<name>` is one plain token wherever it is printed |

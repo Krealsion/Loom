@@ -6,7 +6,7 @@
 
 // The session's door: who may attach to a persistent host (`loom-host --serve`), as whom, and
 // under what grant. Host wiring, never task policy: it owns the one loopback listener, the
-// admission of every Hello, the lifetime id and office `loom.session`. The owner's key admits
+// admission of every Hello, the lifetime id and role `loom.session`. The owner's key admits
 // a client with exactly the client vocabularies and no tap; a registered one-time credential
 // admits a run worker with only rules its registrar's approved authority contains; anything
 // else is refused. A registrar leaving the bus severs its workers; every session is compat.
@@ -129,7 +129,7 @@ public:
         }
     }
 
-    // ---- the office ----------------------------------------------------------------------------
+    // ---- the role ----------------------------------------------------------------------------
 
     void on(const session::Describe&, Mail& mail) { (void)mail.answer(description()); }
 
@@ -172,7 +172,7 @@ public:
                                       " rules"});
             return;
         }
-        // THE CEILING: what the operator approved for the artifact this registrar IS, read from
+        // THE CEILING: what the weaver approved for the artifact this registrar IS, read from
         // the warden's capability and the store -- never from anything the message says.
         const std::string artifact = warden_ != nullptr ? warden_->artifact_of(registrar)
                                                         : std::string();
@@ -191,7 +191,7 @@ public:
                 (void)mail.answer(Refused{"run '" + r.run + "': " + why});
                 return;
             }
-            if (!own_office(one, registrar) && !ceiling.contains(one)) {
+            if (!own_role(one, registrar) && !ceiling.contains(one)) {
                 const std::string who = artifact.empty() ? std::string("its registrar") : "'" + artifact + "'";
                 (void)mail.answer(Refused{
                     "run '" + r.run + "' asks for '" + text + "', which " + who +
@@ -236,7 +236,7 @@ public:
         (void)mail.answer(Ack{}); // nothing held under that name: forgetting it again changes nothing
     }
 
-    /// The description, as the office answers it (the host's own `status` reads the same).
+    /// The description, as the role answers it (the host's own `status` reads the same).
     session::Description description() const {
         session::Description d;
         d.lifetime = facts_.lifetime;
@@ -270,7 +270,7 @@ public:
         return d;
     }
 
-    /// Exactly the shapes a client may say, to exactly the offices that answer them.
+    /// Exactly the shapes a client may say, to exactly the roles that answer them.
     static Grant client_grant() {
         Grant g;
         g.allow_to_role(session::Describe::zen_name, session::Describe::zen_version,
@@ -281,8 +281,8 @@ public:
                         session::kHistoryRole);
         g.allow_to_role(session::Delivery::zen_name, session::Delivery::zen_version,
                         session::kHistoryRole);
-        for (const std::string& shape : runs::client_request_shapes()) {
-            g.allow_to_role(shape, 1, runs::kRunsRole);
+        for (const runs::NamedShape& shape : runs::client_request_shapes()) {
+            g.allow_to_role(shape.name, shape.version, runs::kRunsRole);
         }
         return g;
     }
@@ -317,8 +317,8 @@ private:
         return true;
     }
 
-    /// Does `one` (a single parsed rule) address only an office `registrar` holds right now?
-    bool own_office(const LiveAuthority& one, WeaveId registrar) const {
+    /// Does `one` (a single parsed rule) address only a role `registrar` holds right now?
+    bool own_role(const LiveAuthority& one, WeaveId registrar) const {
         if (bus_ == nullptr || !one.observe_rules().empty() || one.rules().size() != 1) {
             return false;
         }

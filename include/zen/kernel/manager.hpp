@@ -69,7 +69,7 @@
 
 namespace loom {
 
-// ---- the lifecycle-operator command shapes ---------------------------------
+// ---- the lifecycle-initiator command shapes ---------------------------------
 // Registered by hand so the wire names carry the "zen." prefix.
 
 /// Load a weave, optionally binding it to a role.

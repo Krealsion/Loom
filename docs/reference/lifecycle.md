@@ -41,7 +41,7 @@ published. A showing that failed holds the weave; `swap_state` returns every
 Failed key to Pending, so the successor is shown again (its own attempt, never
 a retry by the incarnation that failed), and a reload is thereby the repair of
 a held weave. `unregister_weave` takes the claim record with the weave, and a
-part it was never shown reads Lost. The operator's own replacement, death or
+part it was never shown reads Lost. The initiator's own replacement, death or
 removal retires every operation record it began
 ([joint publication](joint-publication.md#repair), [SENSE-06, SENSE-07](../laws/sense-laws.md)).
 
@@ -95,7 +95,7 @@ Trust is **provenance, not shape**: `mail.lifecycle_attested()` +
 ordinary enqueue can preserve ([ANS-07](../laws/answer-authority-laws.md)). An
 ordinary `zen.Activated` — however well-granted — is a costume; consumers
 (e.g. Zengine's `ActivationCursor`) ignore it. Consumer identity is the pair
-(attested sender, sequence), monotonic per operator lineage
+(attested sender, sequence), monotonic per initiator lineage
 ([LIFE-03](../laws/lifecycle-laws.md)).
 
 Two attesting roads exist:

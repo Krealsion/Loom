@@ -47,7 +47,7 @@ struct Operate {
     ZEN_SHAPE(Operate, 1, ZEN_FIELD(name), ZEN_FIELD(path));
 };
 
-/// Asks the operator to read the counter's grant into the log.
+/// Asks the initiator to read the counter's grant into the log.
 struct Describe {
     std::int64_t n = 0;
     ZEN_SHAPE(Describe, 1, ZEN_FIELD(n));
@@ -67,7 +67,7 @@ struct Heard {
     CountAnswer answer;
 };
 
-/// One reload's outcome as the operator heard it.
+/// One reload's outcome as the initiator heard it.
 struct Outcome {
     bool acknowledged = false;
     std::string reason;
@@ -126,10 +126,10 @@ std::string authority_line(const AuthorityView& v) {
 
 /// Asks the Weave Manager for one reload per Operate, and keeps what it answered. It holds the
 /// right to read the counter's grant, which the host minted it, and reads it on each Describe.
-class Operator final : public WeaveBase<Operator, Tally, Accept<Operate, Describe, Ack, Refused>,
+class Initiator final : public WeaveBase<Initiator, Tally, Accept<Operate, Describe, Ack, Refused>,
                                         Emit<ReloadWeave>> {
 public:
-    Operator(Log& log, WeaveId manager, GrantAuthority reader)
+    Initiator(Log& log, WeaveId manager, GrantAuthority reader)
         : log_(log), manager_(manager), reader_(std::move(reader)) {}
 
     void on(const Describe&, Mail& mail) {
@@ -227,10 +227,10 @@ int main(int argc, char** argv) {
 
     Log log;
     const WeaveId client = mount<Client>(bus, log, counter.id, counter_fs.id, args.asks);
-    const WeaveId operator_id =
-        mount<Operator>(bus, log, manager, host_describe_only_authority(bus, counter.id));
+    const WeaveId initiator_id =
+        mount<Initiator>(bus, log, manager, host_describe_only_authority(bus, counter.id));
     auto read_authority = [&]() {
-        bus.send(operator_id, Message(to_value(Describe{})));
+        bus.send(initiator_id, Message(to_value(Describe{})));
         bus.drain_until_idle();
         return log.authority.empty() ? std::string("not read") : log.authority.back();
     };
@@ -281,7 +281,7 @@ int main(int argc, char** argv) {
         bus.send(client, Message(to_value(Turn{t})));
         const auto op = plan.find(t);
         if (op != plan.end()) {
-            bus.send(operator_id, Message(to_value(op->second)));
+            bus.send(initiator_id, Message(to_value(op->second)));
         }
         bus.send(client, Message(to_value(Turn{t})));
         const auto started = std::chrono::steady_clock::now();

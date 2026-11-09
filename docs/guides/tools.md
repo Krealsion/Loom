@@ -165,9 +165,9 @@ change is in `.github/workflows/ci.yml`; these are the routes on this page, run 
 
 | | Configuration | What was run |
 |---|---|---|
-| WSL Ubuntu 22.04, GCC 11.4.0 | Release, tests off | install, installed-package witness, external `find_package` consumer, the whole operator journey |
+| WSL Ubuntu 22.04, GCC 11.4.0 | Release, tests off | install, installed-package witness, external `find_package` consumer, the whole weaver journey |
 | WSL Ubuntu 22.04, GCC 11.4.0 | Debug, tests on | the official lane (`tests/verify.cmake`) |
-| Windows, MinGW-w64 GCC 15.2.0 (MSYS2) | Debug, `LOOM_ENABLE_WINDOWS_KERNEL=ON` | install, installed-package witness, external consumer, the operator journey, the official lane |
+| Windows, MinGW-w64 GCC 15.2.0 (MSYS2) | Debug, `LOOM_ENABLE_WINDOWS_KERNEL=ON` | install, installed-package witness, external consumer, the weaver journey, the official lane |
 | Windows, MSVC 19.50 (VS 2026) | Debug, `LOOM_ENABLE_WINDOWS_KERNEL=ON` | install, installed-package witness, the official lane |
 
 macOS and Clang: not run. A default Windows build (kernel **off**) builds and consoles,

@@ -19,11 +19,11 @@ Value mind(Switchboard& sb, WeaveId id) {
 }
 } // namespace
 TEST_SUITE("dispatch_loaded") {
-    static void dispatch_role_and_office_semantics(const char* image) {
-        // Both miswired callbacks can succeed here: the addressed role is also an
-        // office the author holds, and all recipients accept the SAME payload.
+    static void dispatch_role_and_role_semantics(const char* image) {
+        // Both miswired callbacks can succeed here: the addressed role is also a
+        // role the author holds, and all recipients accept the SAME payload.
         // Snapshot receipts do not depend on sending a report through either door.
-        for (const std::string mode : {"role", "office-publish", "publish", "direct", "office-denied"}) {
+        for (const std::string mode : {"role", "as-role-publish", "publish", "direct", "as-role-denied"}) {
             CAPTURE(mode);
             Switchboard sb;
             Kernel kernel(sb, sbfx::fixture_admission());
@@ -34,7 +34,7 @@ TEST_SUITE("dispatch_loaded") {
             struct Delivery {
                 std::uint64_t target;
                 std::uint64_t attempt;
-                std::string office;
+                std::string role;
             };
             std::vector<Delivery> deliveries;
             sb.add_observer([&](const BusEvent& ev) {
@@ -51,16 +51,16 @@ TEST_SUITE("dispatch_loaded") {
             }
             sb.pump_pending();
             REQUIRE(sb.pending() == 0);
-            const bool denied = mode == "office-denied";
-            const bool office = mode == "office-publish";
+            const bool denied = mode == "as-role-denied";
+            const bool authored = mode == "as-role-publish";
             const bool addressed = mode == "role" || mode == "direct";
             sb.send(loaded.id, Message(to_value(dispatch_test::Command{
-                denied ? "office-publish" : mode, static_cast<std::int64_t>(first.id.value),
+                denied ? "as-role-publish" : mode, static_cast<std::int64_t>(first.id.value),
                 denied ? "not-held" : "dispatch.author", "77"})));
             sb.pump_pending();
             const auto state = mind(sb, loaded.id);
-            CHECK(state.get("authored")->as_bool() == office);
-            CHECK(state.get("recipients")->as_int() == (office ? 3 : 0));
+            CHECK(state.get("authored")->as_bool() == authored);
+            CHECK(state.get("recipients")->as_int() == (authored ? 3 : 0));
             CHECK(state.get("queued")->as_int() == (addressed ? 1 : 0));
             const auto& attempts = state.get("attempts")->as_list();
             REQUIRE(attempts.size() == (addressed ? 1u : 0u));
@@ -71,9 +71,9 @@ TEST_SUITE("dispatch_loaded") {
             std::vector<std::uint64_t> actual;
             for (const auto& delivery : deliveries) {
                 actual.push_back(delivery.target);
-                CHECK(delivery.office == (office ? "dispatch.author" : ""));
+                CHECK(delivery.role == (authored ? "dispatch.author" : ""));
                 if (addressed) { CHECK(delivery.attempt == attempt); }
-                if (office) { CHECK(delivery.attempt > 3); }
+                if (authored) { CHECK(delivery.attempt > 3); }
             }
             std::vector<std::uint64_t> expected;
             if (mode == "role") { expected = {loaded.id.value}; }
@@ -86,15 +86,15 @@ TEST_SUITE("dispatch_loaded") {
         }
     }
 
-    TEST_CASE("ABI v7: loaded role sends and office publications have distinct successful semantics") {
-        dispatch_role_and_office_semantics(ZEN_SO_DISPATCH);
+    TEST_CASE("ABI v7: loaded role sends and role publications have distinct successful semantics") {
+        dispatch_role_and_role_semantics(ZEN_SO_DISPATCH);
     }
-    ZEN_BOXED_TWIN("a boxed image's role sends and office publications have distinct successful "
+    ZEN_BOXED_TWIN("a boxed image's role sends and role publications have distinct successful "
                    "semantics",
-                   dispatch_role_and_office_semantics, ZEN_BOX_DISPATCH)
+                   dispatch_role_and_role_semantics, ZEN_BOX_DISPATCH)
 
     static void dispatch_refusal_attempts(const char* image) {
-        for (const std::string mode : {"direct", "role", "office-direct", "office-role"}) {
+        for (const std::string mode : {"direct", "role", "as-role-direct", "as-role-to-role"}) {
             Switchboard sb;
             Kernel kernel(sb, sbfx::fixture_admission());
             auto target = register_probe(sb, {schema_of<dispatch_test::Payload>()});
@@ -122,10 +122,10 @@ TEST_SUITE("dispatch_loaded") {
             CHECK_FALSE(state.get("answer_right")->as_bool());
             CHECK(state.get("reason")->as_text() == "CapabilityDenied");
             CHECK(state.get("correlation")->as_text() == "18446744073709551615");
-            CHECK(state.get("role")->as_text() ==
-                  (mode.find("role") != std::string::npos ? role : ""));
+            const bool to_role = mode == "role" || mode == "as-role-to-role";
+            CHECK(state.get("role")->as_text() == (to_role ? role : ""));
             CHECK(state.get("target")->as_text() ==
-                  (mode.find("role") != std::string::npos ? "" : std::to_string(target.id.value)));
+                  (to_role ? "" : std::to_string(target.id.value)));
             CHECK(sb.pending() == 0);
         }
     }
@@ -158,12 +158,12 @@ TEST_SUITE("dispatch_loaded") {
         CHECK(sb.pending() == 0);
         CHECK(mind(sb, loaded.id).get("queued")->as_int() == 1);
         CHECK(target.weave->handled_names.size() == 1);
-        // A loaded office request from a non-holder remains an immediate rejection.
+        // A loaded role request from a non-holder remains an immediate rejection.
         auto other = kernel.load("other", image);
         REQUIRE(other.ok);
         sb.send(other.id,
                 Message(to_value(dispatch_test::Command{
-                    "office-direct", static_cast<std::int64_t>(target.id.value), "", "1"})));
+                    "as-role-direct", static_cast<std::int64_t>(target.id.value), "", "1"})));
         sb.pump_pending();
         CHECK(sb.pending() == 0);
         CHECK(mind(sb, other.id).get("queued")->as_int() == 0);
@@ -243,8 +243,8 @@ TEST_SUITE("dispatch_loaded") {
     // records a delivery, never a handler that failed.
     static void dispatch_door_refused(const char* image) {
         for (const std::string mode :
-             {"direct", "role", "office-direct", "office-role", "publish", "office-publish",
-              "answer", "spend-unknown", "claim-unheard", "office-claim-unheard",
+             {"direct", "role", "as-role-direct", "as-role-to-role", "publish", "as-role-publish",
+              "answer", "spend-unknown", "claim-unheard", "as-role-claim-unheard",
               "offer-unheard"}) {
             CAPTURE(mode);
             Switchboard sb;
@@ -280,7 +280,7 @@ TEST_SUITE("dispatch_loaded") {
 
     static void dispatch_observer_throws(const char* image) {
         for (const std::string mode :
-             {"office-publish", "answer", "spend-unknown", "claim-unheard"}) {
+             {"as-role-publish", "answer", "spend-unknown", "claim-unheard"}) {
             CAPTURE(mode);
             Switchboard sb;
             Kernel kernel(sb, sbfx::fixture_admission());
@@ -297,7 +297,7 @@ TEST_SUITE("dispatch_loaded") {
                     throw std::runtime_error("an observer that throws");
                 }
             });
-            // office-publish names an office the image does not hold.
+            // as-role-publish names a role the image does not hold.
             sb.send(loaded.id,
                     Message(to_value(dispatch_test::Command{mode, 0, "not.held", "77"})));
             CHECK_NOTHROW(sb.pump_pending());

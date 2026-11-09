@@ -4,7 +4,7 @@
 // A plain REPL presentation of the terminal core that owns no terminal semantics: it parses a
 // line, names a participant, calls the core and renders what came back. It hosts its own Loom
 // in this process (no socket, no remote anything) with three lenses, never silently crossed:
-// `session>` the governed participant, `operator>` the seat the Weaver treats as the user, a
+// `session>` the governed participant, `weaver>` the seat the Weaver treats as the user, a
 // different weave, and `debug>` the host itself reading its own registry and tap. A command is
 // authored by its prompt's participant alone: no fallback, no retry with more authority.
 
@@ -30,14 +30,14 @@ namespace {
 using loom::lex_arg;
 // The address half of the command grammar is shared with every other presentation of this
 // core, as the value half is: one parser, in <zen/terminal/input_lex.hpp>, so `#12`,
-// `@office` and `*` cannot come to mean two things.
+// `@role` and `*` cannot come to mean two things.
 using loom::parse_address;
 using loom::parse_u64;
 using loom::Token;
 using loom::tokenize;
 
 constexpr const char* kServiceRole = "some.service";
-constexpr const char* kWeaverRole = "loom.weaver";
+constexpr const char* kWeaverRole = loom::kPolicyRole;
 /// The doors of the service's one pane that this host's Weaver may hand out.
 constexpr const char* kServiceDoors = "some.service/desk:*";
 
@@ -68,7 +68,7 @@ struct Nothing {
     ZEN_SHAPE(Nothing, 1, ZEN_FIELD(n));
 };
 
-/// An ordinary service in an ordinary office. It answers questions and does work,
+/// An ordinary service in an ordinary role. It answers questions and does work,
 /// and it reports WHO it heard from — the fact the whole architecture protects.
 class Service final
     : public loom::WeaveBase<Service, Nothing, loom::Accept<Work, Query>, loom::Emit<Reply>> {
@@ -76,7 +76,7 @@ public:
     void on(const Work& w, loom::Mail& mail) {
         std::cout << "  [service] Work{" << w.n << "} from weave #" << mail.sender().value
                   << (mail.sender() == expected_session
-                          ? "   (the SESSION — not the operator, not the Weaver)"
+                          ? "   (the SESSION — not the weaver, not the Weaver)"
                           : "")
                   << '\n';
     }
@@ -232,7 +232,7 @@ void print_message(const loom::ReceivedMessage& m) {
                       << "` decides it, and nothing else";
         } else if (is_prompt && f.name == "door") {
             std::cout << "     <- the door a yes opens, as the Weaver parsed it (empty: none); "
-                         "the office it names judges it";
+                         "the role it names judges it";
         } else if (is_prompt && f.name == "requester") {
             std::cout << "     <- the Weaver's own trusted fact (the bus-stamped requester)";
         }
@@ -265,8 +265,8 @@ int main() {
         .accepts(loom::schema_of<loom::Refused>())
         .accepts(loom::schema_of<loom::Ack>());
 
-    loom::TerminalVocabulary operator_vocab;
-    operator_vocab.knows(loom::schema_of<loom::ApproveAuthority>())
+    loom::TerminalVocabulary weaver_seat_vocab;
+    weaver_seat_vocab.knows(loom::schema_of<loom::ApproveAuthority>())
         .knows(loom::schema_of<loom::RefuseAuthority>())
         .knows(loom::schema_of<loom::RevokeAuthority>())
         .knows(loom::schema_of<loom::DescribeAuthority>())
@@ -291,18 +291,18 @@ int main() {
         bus, std::make_unique<loom::TerminalSession>("session", std::move(session_vocab), order),
         std::move(session_grant));
 
-    // ---- the operator seat: a DIFFERENT weave -------------------------------
+    // ---- the weaver seat: a DIFFERENT weave -------------------------------
     //
-    // Four rules, all of them "say one decision to the policy office". No allow_any, no tap, no
+    // Four rules, all of them "say one decision to the policy role". No allow_any, no tap, no
     // discovery, no host root: none is needed to be the user.
-    loom::Grant operator_grant;
-    operator_grant.allow_to_role("zen.ApproveAuthority", 2, kWeaverRole);
-    operator_grant.allow_to_role("zen.RefuseAuthority", 2, kWeaverRole);
-    operator_grant.allow_to_role("zen.RevokeAuthority", 1, kWeaverRole);
-    operator_grant.allow_to_role("zen.DescribeAuthority", 1, kWeaverRole);
+    loom::Grant weaver_seat_grant;
+    weaver_seat_grant.allow_to_role("zen.ApproveAuthority", 2, kWeaverRole);
+    weaver_seat_grant.allow_to_role("zen.RefuseAuthority", 2, kWeaverRole);
+    weaver_seat_grant.allow_to_role("zen.RevokeAuthority", 1, kWeaverRole);
+    weaver_seat_grant.allow_to_role("zen.DescribeAuthority", 1, kWeaverRole);
     const loom::MountedTerminal seat = loom::host_mount_terminal(
-        bus, std::make_unique<loom::TerminalSession>("operator", std::move(operator_vocab), order),
-        std::move(operator_grant));
+        bus, std::make_unique<loom::TerminalSession>("weaver", std::move(weaver_seat_vocab), order),
+        std::move(weaver_seat_grant));
 
     // The pairing — and the refusal to be one participant. Constructing this throws if the two
     // are the same weave.
@@ -394,7 +394,7 @@ int main() {
                   << "     session       weave #" << session.id.value
                   << "   base: RequestAuthority/DescribeAuthority -> role " << kWeaverRole
                   << ", Query -> role " << kServiceRole << "\n"
-                  << "     operator seat weave #" << seat.id.value
+                  << "     weaver seat weave #" << seat.id.value
                   << "   base: Approve/Refuse/Revoke/DescribeAuthority -> role " << kWeaverRole
                   << "\n"
                   << "     weaver        weave #" << weaver_id.value << "   role " << kWeaverRole
@@ -402,7 +402,7 @@ int main() {
                   << kServiceRole << " (and at door " << kServiceDoors << ")\n"
                   << "     service       weave #" << service_id.value << "   role " << kServiceRole
                   << "\n"
-                     "     the operator seat is a WeaveId this host designated. It is NOT an\n"
+                     "     the weaver seat is a WeaveId this host designated. It is NOT an\n"
                      "     authenticated human, an account, or a login. There is none.\n";
     };
 
@@ -418,8 +418,8 @@ as the current participant:
   send <addr> <Shape> <v> [args...]      author one message; expect no answer
   ask  <addr> <Shape> <v> [args...]      author one message; wait for LOOM's answer to it
   request <Shape> <v> @<role> [door=<door>] [purpose]
-                                ask the policy office for one exact send right, or a door
-  authority                     ask the policy office what my authority is right now
+                                ask the policy role for one exact send right, or a door
+  authority                     ask the policy role what my authority is right now
   pending                       the conversations I am waiting on
   await [turns]                 pump the host loop until my asks settle (bounded)
   cancel <ask>                  stop waiting LOCALLY (the far end is not told)
@@ -448,19 +448,19 @@ debug lens only (the HOST looking - powers no participant has):
                  "        send @some.service Work 1 7          (no authority yet; watch the refusal "
                  "receipt)\n"
                  "        request Work 1 @some.service \"so I can finish the job\"\n"
-                 "        operator   -> show r1  -> approve r1\n"
+                 "        weaver   -> show r1  -> approve r1\n"
                  "        session    -> send @some.service Work 1 7\n\n"
                  "  'help' for everything.\n\n";
 
-    enum class Lens { Session, Operator, Debug };
+    enum class Lens { Session, Weaver, Debug };
     Lens lens = Lens::Session;
     const auto lens_name = [](Lens l) {
-        return l == Lens::Session ? "session" : (l == Lens::Operator ? "operator" : "debug");
+        return l == Lens::Session ? "session" : (l == Lens::Weaver ? "weaver" : "debug");
     };
     const auto participant = [&desk](Lens l) -> loom::TerminalSession& {
         // EXPLICIT, ALWAYS. The lens names the author; nothing here ever substitutes the other
         // one, in either direction, for any reason.
-        return l == Lens::Operator ? desk.operator_seat() : desk.acting();
+        return l == Lens::Weaver ? desk.weaver_seat() : desk.acting();
     };
 
     // What this presentation has already shown, in observation order. Everything past it that
@@ -480,11 +480,11 @@ debug lens only (the HOST looking - powers no participant has):
         }
         const std::size_t tap_before = tap.size();
 
-        if (cmd == "session" || cmd == "operator" || cmd == "debug") {
+        if (cmd == "session" || cmd == "weaver" || cmd == "debug") {
             // Moving the hand is a PRESENTATION act, recorded as one in the transcript of the
             // participant being left, so a chronology shows when the author changed.
             const Lens next = cmd == "session" ? Lens::Session
-                                               : (cmd == "operator" ? Lens::Operator : Lens::Debug);
+                                               : (cmd == "weaver" ? Lens::Weaver : Lens::Debug);
             if (lens != Lens::Debug) {
                 participant(lens).record_notice("presentation switched to the " + cmd + " lens");
             }
@@ -596,12 +596,12 @@ debug lens only (the HOST looking - powers no participant has):
                     }
                     print_result(me.request_authority(tok[1].text, static_cast<std::int64_t>(v),
                                                       tok[3].text.substr(1), purpose,
-                                                      loom::kPolicyOffice, door));
+                                                      loom::kPolicyRole, door));
                 }
             } else if (cmd == "authority") {
                 print_result(me.describe_authority());
             } else if (cmd == "approve" || cmd == "refuse" || cmd == "revoke") {
-                // A CONVENIENCE, NEVER A PRIVILEGE. Each is one ordinary message from the operator
+                // A CONVENIENCE, NEVER A PRIVILEGE. Each is one ordinary message from the weaver
                 // seat's own door, asked so the Weaver's Ack or Refused comes back as the
                 // authenticated answer to it. The generic ask path expresses exactly the same
                 // thing — and from the session lens it is judged by Loom, not by this file.
@@ -614,10 +614,10 @@ debug lens only (the HOST looking - powers no participant has):
                     "Authority";
                 const std::uint32_t version = decides ? 2 : 1;
                 std::uint64_t n = 0;
-                if (lens != Lens::Operator) {
+                if (lens != Lens::Weaver) {
                     std::cout << "  refused by this PRESENTATION: `" << cmd
-                              << "` is an operator-seat convenience, and this presentation will\n"
-                                 "  not quietly change who is speaking. Type `operator` to move "
+                              << "` is a weaver-seat convenience, and this presentation will\n"
+                                 "  not quietly change who is speaking. Type `weaver` to move "
                                  "the hand — or author\n  it yourself with `ask @"
                               << kWeaverRole << ' ' << shape << ' ' << version
                               << (decides ? " prompt=<n>" : "")

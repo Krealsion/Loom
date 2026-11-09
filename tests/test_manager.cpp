@@ -76,7 +76,7 @@ std::string text_field(const loom::Value& v, const char* field) {
 }
 
 // Drive one console-composed command at `target` and return the buffer entry it
-// produced. The operator's whole gesture, in one line.
+// produced. The weaver's whole gesture, in one line.
 struct Answer {
     std::string name;
     loom::Value value;
@@ -276,7 +276,7 @@ TEST_CASE("a load failure is a Refused with its why, relayed to the asker — no
     CHECK_FALSE(r.kernel.is_loaded("bad"));
 }
 
-// ---- reload-in-place: a refusal reaches the operator ------------------------
+// ---- reload-in-place: a refusal reaches the weaver ------------------------
 
 TEST_CASE("reload-in-place keeps the WeaveId and transplants the state") {
     Rig r;
@@ -304,7 +304,7 @@ TEST_CASE("reload-in-place refuses a differently-shaped library, and the asker f
     drive(r.engine, r.manager, "zen.LoadWeave", {lit("t"), lit(ZEN_SO_WEAVE), lit("")});
     const WeaveId id = r.kernel.weave_id("t");
 
-    // A reload the incumbent's state contract refuses reaches the operator as a refusal,
+    // A reload the incumbent's state contract refuses reaches the weaver as a refusal,
     // self-contained.
     Answer a = drive(r.engine, r.manager, "zen.ReloadWeave", {lit("t"), lit(ZEN_SO_V2)});
     CHECK(a.name == "zen.Refused");
@@ -422,7 +422,7 @@ TEST_CASE("a swap takes effect behind queued traffic — and the incumbent's in-
     // OUTBOUND, the honest half: the incumbent replied to both, but only the FIRST Pong was
     // delivered before the unload. The second was still queued when the incumbent was
     // unregistered, and a queued message belongs to the LIFE that authored it (MSG-03), so it
-    // is refused as `SenderLifeEnded`, not the `CapabilityDenied` that would send an operator to
+    // is refused as `SenderLifeEnded`, not the `CapabilityDenied` that would send a weaver to
     // a grant. Unregistering ANY weave mid-queue does this; a swap makes it routine.
     REQUIRE(answered_by.size() == 1);
     CHECK(answered_by[0] == incumbent);
@@ -555,7 +555,7 @@ TEST_CASE("a forged answer from a third party is dropped, and does not poison th
     std::vector<TapRecord> tap;
     r.bus.add_observer([&tap](const BusEvent& e) { tap.push_back(to_record(e)); });
 
-    // Queue the operator's load and the impostor's trigger together, so the
+    // Queue the weaver's load and the impostor's trigger together, so the
     // forged answer is delivered to the Manager BEFORE the door's real one.
     Composed c = r.engine.compose(r.manager, "zen.LoadWeave",
                                   1, {lit("real"), lit(ZEN_SO_WEAVE), lit("")});
@@ -569,7 +569,7 @@ TEST_CASE("a forged answer from a third party is dropped, and does not poison th
     // correctly dropped. The pin is "delivered AND ignored", never just "absent".
     CHECK(delivered_count(tap, "zen.Result", r.manager) == 2); // the forgery, then the door's
 
-    // Exactly one answer reached the operator, and it is the door's.
+    // Exactly one answer reached the weaver, and it is the door's.
     REQUIRE(r.engine.buffer_size() == 1);
     const auto entry = r.engine.buffer_at(1);
     REQUIRE(entry.has_value());
@@ -996,7 +996,7 @@ TEST_CASE("a participating load is told, once, that it is live") {
 
     REQUIRE(acts.size() == 1);
     CHECK(acts[0].kind == EventKind::Delivered);
-    CHECK(acts[0].target == id);        // the newly loaded weave, not the operator
+    CHECK(acts[0].target == id);        // the newly loaded weave, not the weaver
     CHECK(acts[0].sender == r.control); // stamped by the bus as the door's, not claimed
     const ActivationLog log = activation_log(r.bus, id);
     CHECK(log.activations == 1);
@@ -1081,7 +1081,7 @@ TEST_CASE("the direct control door activates too — the fact is not the Manager
     CHECK(acts[0].sender == r.control);
     CHECK(activation_log(r.bus, id).activations == 1);
 
-    // The direct operator got the normal answer, exactly once...
+    // The direct weaver got the normal answer, exactly once...
     REQUIRE(d->results.size() == 1);
     CHECK(d->results[0] == std::to_string(id.value));
     // ...and the steward was never touched: no relay outstanding, no sequence
@@ -1501,7 +1501,7 @@ TEST_CASE("the Manager is poke-inspectable like any weave: its bookkeeping is no
 namespace {
 
 /// A weave holding a real LifecycleAuthority: the test standing in for a HOST that wired a
-/// second lifecycle operator, to drive the attestation from angles the honest door never would
+/// second lifecycle weaver, to drive the attestation from angles the honest door never would
 /// (a sequence disagreeing with its payload, an aim at a bystander). A test can mint the
 /// authority and no weave can: the host decides who conducts lifecycle.
 struct RogueState {
@@ -1515,10 +1515,10 @@ struct RogueOrder {
     ZEN_SHAPE(RogueOrder, 1, ZEN_FIELD(target), ZEN_FIELD(announce), ZEN_FIELD(claim));
 };
 
-class RogueOperator : public WeaveBase<RogueOperator, RogueState, Accept<RogueOrder>,
+class RogueInitiator : public WeaveBase<RogueInitiator, RogueState, Accept<RogueOrder>,
                                        Emit<loom::Activated>> {
 public:
-    explicit RogueOperator(loom::LifecycleAuthority authority) : authority_(authority) {}
+    explicit RogueInitiator(loom::LifecycleAuthority authority) : authority_(authority) {}
 
     void on(const RogueOrder& o, Mail& mail) {
         ++state_.n;
@@ -1587,7 +1587,7 @@ TEST_CASE("an attestation minted for one sequence cannot authenticate another") 
     // A genuine authority, used dishonestly: Loom is asked to attest sequence 7
     // while the payload claims 8. Loom records what it was asked to attest, so
     // the two disagree and the consumer sees it.
-    const WeaveId rogue = mount<RogueOperator>(r.bus, host_lifecycle_authority(r.bus));
+    const WeaveId rogue = mount<RogueInitiator>(r.bus, host_lifecycle_authority(r.bus));
     r.bus.send(rogue, Message(to_value(RogueOrder{static_cast<std::int64_t>(live.value), 7, 8})));
     r.bus.drain_until_idle();
     CHECK(activation_log(r.bus, live).activations == 1); // unchanged
@@ -1619,7 +1619,7 @@ TEST_CASE("an attestation is bound to the incarnation it names — announcing to
     // express "a proof for a, spent on b": the target is an argument to the
     // minting call, so the binding is not a check that could be skipped — it is
     // the only thing that decides where the attested message goes.
-    const WeaveId rogue = mount<RogueOperator>(r.bus, host_lifecycle_authority(r.bus));
+    const WeaveId rogue = mount<RogueInitiator>(r.bus, host_lifecycle_authority(r.bus));
     r.bus.send(rogue, Message(to_value(RogueOrder{static_cast<std::int64_t>(a.value), 5, 5})));
     r.bus.drain_until_idle();
     CHECK(activation_log(r.bus, a).activations == 2);

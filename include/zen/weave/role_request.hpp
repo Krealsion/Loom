@@ -12,7 +12,7 @@
 namespace loom {
 
 // One role-addressed attempt, using the caller's correlation sequence and ordinary Mail
-// (or Mail::Office) send. Matching never consumes the record: validate the reply's meaning,
+// (or Mail::Role) send. Matching never consumes the record: validate the reply's meaning,
 // then forget it explicitly. No retry, timeout, cancellation or completion policy.
 // See docs/reference/messaging.md#one-role-addressed-request.
 class RoleRequest {

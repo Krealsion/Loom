@@ -12,7 +12,7 @@ written against, not this one.
                                               │
    ┌──────────────┬───────────────┬───────────┴────────┬──────────────────┐
  loom (core)  zen-switchboard  zen-kernel          zen-isolation      console/bridge
- schema/value  gated FIFO bus  dynamic weaves     out-of-process      the operator's
+ schema/value  gated FIFO bus  dynamic weaves     out-of-process      the weaver's
  gate/registry grants/answers  across a C ABI     OS sandbox          seat, local and
  serialization lifecycle/      sealed candidates  (abuse-tier,        remote
                replacement     hot-reload         confirmed, honest)

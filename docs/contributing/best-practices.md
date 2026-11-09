@@ -114,8 +114,8 @@ Laws MSG-01 to MSG-12 in [messaging](../laws/messaging-laws.md) and ANS-01 to AN
   [MSG-09](../laws/messaging-laws.md#msg-09--a-dispatch-turn-can-be-bounded-without-bending-fifo)
 - **A correlation identifies and never authenticates.**
   [ANS-05](../laws/answer-authority-laws.md#ans-05--correlation-identifies-it-never-authenticates)
-- **Addressing a role says nothing about the sender's office.**
-  [MSG-04](../laws/messaging-laws.md#msg-04--role-addressing-is-destination-not-office)
+- **Addressing a role says nothing about the role a sender speaks as.**
+  [MSG-04](../laws/messaging-laws.md#msg-04--role-addressing-is-destination-not-authorship)
 - **A handler that throws costs its delivery, not the bus.**
   [MSG-10](../laws/messaging-laws.md#msg-10--a-callback-that-throws-costs-the-delivery-not-the-bus)
 - **When something did not arrive, tap the bus and read the refusal's reason as a direction.**
@@ -218,7 +218,7 @@ the suites `terminal`, `weaver`, `console`, `recorder`, `logger`, `sense` and `o
 - **The Weaver changes authority and performs nothing**, and a grant is not a lease.
   [The flow](../reference/weaver.md#the-flow) and
   [a policy delegate's death does not revoke what it granted](../reference/known-seams.md#a-policy-delegates-death-does-not-revoke-what-it-granted)
-- **A Weaver's decision names the prompt it answers**, and an operator decides by the prompt it
+- **A Weaver's decision names the prompt it answers**, and a weaver decides by the prompt it
   shows, never by whatever is pending.
   [A decision names the prompt it answers](../reference/weaver.md#a-decision-names-the-prompt-it-answers)
 - **Reading a Sense takes its own observe rule.**

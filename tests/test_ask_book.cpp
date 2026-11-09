@@ -220,15 +220,15 @@ TEST_CASE("correlation 0 is the sentinel and never a conversation") {
     CHECK(book.waiting_on(a.id));
 }
 
-TEST_CASE("an ask to an OFFICE cannot name its respondent, and says so") {
+TEST_CASE("an ask to an ROLE cannot name its respondent, and says so") {
     AskBook book(4);
-    const AskOpened a = book.open_to_role("some.office", "Query", 1);
+    const AskOpened a = book.open_to_role("some.role", "Query", 1);
     REQUIRE(a);
     const PendingAsk& p = book.entries().front();
     CHECK(p.to_role());
-    CHECK(p.role == "some.office");
+    CHECK(p.role == "some.role");
     CHECK_FALSE(p.respondent.valid());
-    // WHOEVER HELD THE OFFICE AT DELIVERY is not knowable here, so the record does not
+    // WHOEVER HELD THE ROLE AT DELIVERY is not knowable here, so the record does not
     // pretend to constrain it -- the correlation is the whole wall, and a caller that
     // needs more has Loom's own answer provenance, which this type cannot supply.
     CHECK(book.settle(a.correlation, kBob));

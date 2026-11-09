@@ -6,7 +6,7 @@
 
 // The request/reply relay: forward a request to a named target, and relay its answer back to
 // whoever asked, matched by correlation and by the target as bus-stamped sender. For a weave
-// fronting a protocol for an operator, such as the poke weave. It keeps only the correlation
+// fronting a protocol for a weaver, such as the poke weave. It keeps only the correlation
 // bookkeeping (RelayState) and two moves, forward and relay: no expected-reply registry, no
 // timeout. RelayState is ordinary weave state, snapshotted, revived and inspectable.
 //

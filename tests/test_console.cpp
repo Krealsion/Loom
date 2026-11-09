@@ -776,7 +776,7 @@ TEST_CASE("input: an unknown control byte maps to Action::None and changes nothi
 }
 
 // ---- console history is bounded by capacity, never by lifetime throughput ---------------------
-// The console is the operator's window, so it is the process left running for weeks. Both
+// The console is the weaver's window, so it is the process left running for weeks. Both
 // surfaces are HISTORY: nothing is owed on them, so the oldest may be discarded, but never
 // silently, and a label never quietly re-binds to a different reply. Each case asserts three
 // things together: the retained population, the eviction count, and the IDENTITY of what is kept.
@@ -785,7 +785,7 @@ namespace {
 
 // One tap event per send, each with a UNIQUE identity, without registering a weave per event: a
 // send to an unregistered id is refused, and the refusal is a real bus event carrying the target
-// the operator asked for. That makes tap entry i recognizable as tap entry i, which is what pins
+// the weaver asked for. That makes tap entry i recognizable as tap entry i, which is what pins
 // off-by-one — a count alone cannot tell a window that slid by one from one that slid by two.
 constexpr std::uint64_t kProbeTargetBase = 1'000'000;
 
@@ -950,7 +950,7 @@ TEST_CASE("a reference to an evicted reply refuses and SAYS SO; a retained one i
     for (std::size_t i = 1; i <= 3; ++i) {
         deliver(static_cast<std::int64_t>(i));
     }
-    // What $m3.seq means BEFORE any eviction — the value an operator would have written down.
+    // What $m3.seq means BEFORE any eviction — the value a weaver would have written down.
     std::string err;
     const std::optional<Cell> before = engine.resolve_ref(Ref{"m3", "seq"}, &err);
     REQUIRE(before.has_value());
@@ -1022,7 +1022,7 @@ TEST_CASE("a fresh console starts a fresh retention window") {
     CHECK_FALSE(fresh.buffer_at(1).has_value()); // labels restart, because the history did
 }
 
-TEST_CASE("the operator can SEE that older evidence was discarded") {
+TEST_CASE("the weaver can SEE that older evidence was discarded") {
     Switchboard bus;
     ConsoleEngine engine(bus);
     Registered responder = register_probe(bus, {ping_schema(), pong_schema()});
@@ -1208,7 +1208,7 @@ TEST_CASE("every buffered arrival carries who sent it and which conversation it 
 
     auto m1 = engine.buffer_at(1);
     REQUIRE(m1.has_value());
-    // The two facts the window keeps. Without them an operator reading `buffer` cannot tell an
+    // The two facts the window keeps. Without them a weaver reading `buffer` cannot tell an
     // answer they earned from a message somebody volunteered.
     CHECK(m1->sender == responder.id);
     CHECK(m1->correlation != 0);

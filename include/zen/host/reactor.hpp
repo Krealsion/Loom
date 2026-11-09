@@ -6,10 +6,10 @@
 
 // THE HOST'S ONE WAIT. After each turn a host that rests waits once, on its dispatch thread, on
 // every source it trusts and on the deadline it gives, instead of each source polling on a beat
-// of its own. A source says what it waits on as its office's claim (`WaitSet`,
-// zen/host/wait_set.hpp); the host names the offices it trusts, and the wait reads only theirs, so
+// of its own. A source says what it waits on as its role's claim (`WaitSet`,
+// zen/host/wait_set.hpp); the host names the roles it trusts, and the wait reads only theirs, so
 // no participant the host did not trust puts a handle in it. The wait holds what fits, tells each
-// office whether it is held, and wakes each office whose source is ready with a `Waited`. Nothing
+// role whether it is held, and wakes each role whose source is ready with a `Waited`. Nothing
 // here turns the bus: the host turns it (`pump_pending`, MSG-09), and the one dispatch thread stays
 // the only thread that touches it. Another thread may end a wait (a console's reader does, through
 // `LineInput::wait_set`) and does nothing else.
@@ -48,13 +48,13 @@ public:
     Reactor(const Reactor&) = delete;
     Reactor& operator=(const Reactor&) = delete;
 
-    /// WAIT ON THIS OFFICE'S CLAIM from the next turn on: whoever holds `office` and claims a
-    /// `WaitSet` as it. Offices are held in the order they were trusted when not all fit.
-    void trust(std::string office);
-    /// Stop waiting on `office`; a source the wait held is told it is held no longer.
-    void distrust(std::string_view office);
-    /// Whether `office` is trusted.
-    bool trusts(std::string_view office) const;
+    /// WAIT ON THIS ROLE'S CLAIM from the next turn on: whoever holds `role` and claims a
+    /// `WaitSet` as it. Roles are held in the order they were trusted when not all fit.
+    void trust(std::string role);
+    /// Stop waiting on `role`; a source the wait held is told it is held no longer.
+    void distrust(std::string_view role);
+    /// Whether `role` is trusted.
+    bool trusts(std::string_view role) const;
 
     /// Wait on this console's next line too, until it says Closed (`Woke::line`). Watching starts
     /// its reading, as a first `read` does. Null stops watching. It must outlive the watch.
@@ -63,12 +63,12 @@ public:
     /// What one wait found.
     struct Woke {
         bool line = false;        ///< the watched console has a line, a refusal or its end to take
-        std::size_t offices = 0;  ///< how many offices were told their source is ready
+        std::size_t roles = 0;  ///< how many roles were told their source is ready
         bool deadline = false;    ///< the wait lasted until its deadline
     };
 
-    /// AFTER A TURN: read every trusted office's claim, tell each whether the wait holds it, wait
-    /// at most `ms` (0 or less only looks, at once) on everything held, then wake each office whose
+    /// AFTER A TURN: read every trusted role's claim, tell each whether the wait holds it, wait
+    /// at most `ms` (0 or less only looks, at once) on everything held, then wake each role whose
     /// source is ready. Called after every turn, busy or not, since a source the wait holds polls
     /// no more and is read only here.
     ///
@@ -78,9 +78,9 @@ public:
     /// sources do.
     Woke after_turn(std::int64_t ms);
 
-    /// One trusted office as the wait stands with it, for a host to show and a test to read.
+    /// One trusted role as the wait stands with it, for a host to show and a test to read.
     struct Source {
-        std::string office;
+        std::string role;
         bool claimed = false;       ///< its current holder has claimed a `WaitSet`
         bool held = false;          ///< the wait holds that claim
         std::uint64_t revision = 0; ///< the claim's revision

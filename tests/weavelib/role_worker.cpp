@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Joshua DeMoss
 
-// The office worker, the office-authorship dynamic-parity fixture (MSG-07): a loadable weave
+// The role worker, the role-authorship dynamic-parity fixture (MSG-07): a loadable weave
 // exercising both halves of role authorship from the FAR side of the C ABI seam, through the
 // C++ surface a native weave uses (`mail.as_role(...)`, `mail.authored_from_role(...)`).
-// Obedient and unprivileged, it does whatever OfficeCommand asks, offices it does not hold
+// Obedient and unprivileged, it does whatever RoleCommand asks, roles it does not hold
 // included, and reports what happened, so the suite measures the host's verdicts. It is loaded
 // under role "worker.a", and every act is a REQUEST the host verifies at the authorship moment.
 
-#include "office_protocol.hpp"
+#include "role_protocol.hpp"
 
 #include <zen/kernel/export.hpp>
 #include <zen/weave.hpp>
@@ -20,44 +20,44 @@ namespace {
 
 using namespace loom;
 
-struct OfficeWorkerState {
+struct RoleWorkerState {
     std::int64_t acts = 0;
-    ZEN_SHAPE(OfficeWorkerState, 1, ZEN_FIELD(acts));
+    ZEN_SHAPE(RoleWorkerState, 1, ZEN_FIELD(acts));
 };
 
-class OfficeWorker
-    : public WeaveBase<OfficeWorker, OfficeWorkerState,
-                       Accept<office::OfficeCommand, office::WorkerNews>,
-                       Emit<office::WorkerNews, office::OfficeReport>> {
+class RoleWorker
+    : public WeaveBase<RoleWorker, RoleWorkerState,
+                       Accept<role_speech::RoleCommand, role_speech::WorkerNews>,
+                       Emit<role_speech::WorkerNews, role_speech::RoleReport>> {
 public:
-    void on(const office::OfficeCommand& cmd, Mail& mail) {
+    void on(const role_speech::RoleCommand& cmd, Mail& mail) {
         ++state_.acts;
         const WeaveId target{static_cast<std::uint64_t>(cmd.target)};
-        office::OfficeReport report;
+        role_speech::RoleReport report;
         report.what = cmd.mode;
         if (cmd.mode == "direct") {
             report.authored =
-                mail.as_role("worker.a").send(target, office::WorkerNews{"direct"}).valid();
+                mail.as_role("worker.a").send(target, role_speech::WorkerNews{"direct"}).valid();
         } else if (cmd.mode == "to-role") {
             report.authored = mail.as_role("worker.a")
-                                  .send_to_role("dispatcher", office::WorkerNews{"to-role"})
+                                  .send_to_role("dispatcher", role_speech::WorkerNews{"to-role"})
                                   .valid();
         } else if (cmd.mode == "publish") {
-            const OfficePublication p =
-                mail.as_role("worker.a").publish(office::WorkerNews{"open"});
+            const RolePublication p =
+                mail.as_role("worker.a").publish(role_speech::WorkerNews{"open"});
             report.authored = p.authored;
             report.recipients = static_cast<std::int64_t>(p.recipients);
         } else if (cmd.mode == "personal") {
-            (void)mail.publish(office::WorkerNews{"open"});
+            (void)mail.publish(role_speech::WorkerNews{"open"});
             report.authored = false;
         } else if (cmd.mode == "forge-direct") {
-            // An office this weave does NOT hold. The host must refuse; the
+            // A role this weave does NOT hold. The host must refuse; the
             // report carries the refusal home.
             report.authored =
-                mail.as_role("dispatcher").send(target, office::WorkerNews{"forged"}).valid();
+                mail.as_role("dispatcher").send(target, role_speech::WorkerNews{"forged"}).valid();
         } else if (cmd.mode == "forge-publish") {
-            const OfficePublication p =
-                mail.as_role("dispatcher").publish(office::WorkerNews{"forged"});
+            const RolePublication p =
+                mail.as_role("dispatcher").publish(role_speech::WorkerNews{"forged"});
             report.authored = p.authored;
             report.recipients = static_cast<std::int64_t>(p.recipients);
         }
@@ -66,11 +66,11 @@ public:
         mail.send_to_role("commander", report);
     }
 
-    /// Inbound office speech: report the delivery facts this side of the seam
+    /// Inbound role speech: report the delivery facts this side of the seam
     /// reconstructed — the parity question itself.
-    void on(const office::WorkerNews&, Mail& mail) {
+    void on(const role_speech::WorkerNews&, Mail& mail) {
         ++state_.acts;
-        office::OfficeReport report;
+        role_speech::RoleReport report;
         report.what = "heard";
         report.authored = mail.authored_from_role("worker.a");
         report.seen_role = std::string(mail.authored_role());
@@ -80,4 +80,4 @@ public:
 
 } // namespace
 
-ZEN_EXPORT_WEAVE(OfficeWorker)
+ZEN_EXPORT_WEAVE(RoleWorker)

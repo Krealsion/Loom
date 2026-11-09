@@ -44,7 +44,7 @@ using namespace sbfx;
 namespace {
 
 constexpr const char* kServiceRole = "some.service";
-constexpr const char* kWeaverRole = "loom.weaver";
+constexpr const char* kWeaverRole = loom::kPolicyRole;
 
 // ---- the world these cases happen in ----------------------------------------
 //
@@ -116,7 +116,7 @@ TerminalVocabulary session_vocabulary() {
     return v;
 }
 
-TerminalVocabulary operator_vocabulary() {
+TerminalVocabulary weaver_vocabulary() {
     TerminalVocabulary v;
     v.knows(schema_of<ApproveAuthority>())
         .knows(schema_of<RefuseAuthority>())
@@ -137,7 +137,7 @@ Grant default_session_grant() {
     return g;
 }
 
-Grant operator_seat_grant() {
+Grant weaver_seat_grant() {
     Grant g;
     g.allow_to_role("zen.ApproveAuthority", 2, kWeaverRole);
     g.allow_to_role("zen.RefuseAuthority", 2, kWeaverRole);
@@ -157,7 +157,7 @@ struct Seen {
 };
 
 /// The whole cast, wired the way the standalone terminal wires it: a governed session, a
-/// SEPARATE operator seat, a service in an office, and a real Weaver holding one capability.
+/// SEPARATE weaver seat, a service in a role, and a real Weaver holding one capability.
 ///
 /// The `tap` is the HOST's — this fixture owns the Switchboard, so it is entitled to one. It
 /// exists to prove facts NEITHER participant is told, and nothing it collects is ever allowed to
@@ -174,8 +174,8 @@ public:
             bus, std::make_unique<TerminalSession>("session", session_vocabulary(), order),
             std::move(session_grant));
         seat = host_mount_terminal(
-            bus, std::make_unique<TerminalSession>("operator", operator_vocabulary(), order),
-            operator_seat_grant());
+            bus, std::make_unique<TerminalSession>("weaver", weaver_vocabulary(), order),
+            weaver_seat_grant());
 
         auto owned = std::make_unique<ProbeWeave>(
             std::vector<std::shared_ptr<const Schema>>{work_schema(), query_schema()});
@@ -257,7 +257,7 @@ public:
     std::vector<Seen> tap;
 };
 
-/// The received id of the last authority prompt the operator was shown.
+/// The received id of the last authority prompt the weaver was shown.
 std::uint64_t last_prompt(const Cast& c) {
     std::uint64_t id = 0;
     for (const TranscriptEntry& e : c.of_kind(c.op(), TranscriptKind::Received)) {
@@ -269,14 +269,14 @@ std::uint64_t last_prompt(const Cast& c) {
     return id;
 }
 
-/// The operator's decision on the received prompt `r`, naming it by a reference to that prompt's
+/// The weaver's decision on the received prompt `r`, naming it by a reference to that prompt's
 /// own `prompt` field — as the REPL's `approve r<N>` composes it.
 TerminalResult decide(Cast& c, const char* shape, std::uint64_t r) {
     return c.op().ask(Address::to_role(kWeaverRole), shape, 2,
                       {Arg{std::string("prompt"), Ref{"r" + std::to_string(r), "prompt"}}});
 }
 
-/// Walk the whole authority story to the point where the operator has said yes.
+/// Walk the whole authority story to the point where the weaver has said yes.
 /// Returns the session's local ask number for the authority request.
 std::uint64_t request_and_approve(Cast& c) {
     const TerminalResult asked =
@@ -347,8 +347,8 @@ TEST_CASE("a shape outside this participant's vocabulary is refused HERE, not by
 
 TEST_CASE("a vocabulary is not the world's registry") {
     Cast c;
-    // `Notice` is registered on this bus (it is one of the session's doors) but the OPERATOR was
-    // never given it, so the operator cannot compose one. A terminal knows what its host handed
+    // `Notice` is registered on this bus (it is one of the session's doors) but the WEAVER was
+    // never given it, so the weaver cannot compose one. A terminal knows what its host handed
     // it — never what some other weave happens to have declared.
     CHECK_FALSE(c.op().describe("Notice", 1).has_value());
     CHECK(c.op().send(Address::to_role(kServiceRole), "Notice", 1, {bare(std::string("x"))})
@@ -414,7 +414,7 @@ TEST_CASE("a message a terminal authors comes from the TERMINAL, never from the 
     REQUIRE(c.service->handled_names.size() == 1);
     CHECK(c.service->handled_names.front() == "Query");
     // THE ASSERTION THE WHOLE ARCHITECTURE TURNS ON. A host-root send would arrive stamped with
-    // the invalid id; a send through the seat beside it would arrive stamped as the operator.
+    // the invalid id; a send through the seat beside it would arrive stamped as the weaver.
     CHECK(c.delivered_from("Query", c.service_id) == c.session.id);
 }
 
@@ -461,7 +461,7 @@ TEST_CASE("a channel names an identity and confers no authority whatever") {
 
 TEST_CASE("the three addressing modes, and the fourth that is not a mode") {
     Cast c;
-    SUBCASE("role: resolved to whoever holds the office at delivery") {
+    SUBCASE("role: resolved to whoever holds the role at delivery") {
         REQUIRE(submitted(c.acting().send(Address::to_role(kServiceRole), "Query", 1,
                                 {bare(std::string("hi"))})));
         c.bus.drain_until_idle();
@@ -517,7 +517,7 @@ TEST_CASE("the address grammar is three sigils, and a bareword is not a fourth")
         CHECK(a.target.value == 12u);
         CHECK(a.well_formed());
     }
-    SUBCASE("`@office` is whoever holds it AT DELIVERY") {
+    SUBCASE("`@role` is whoever holds it AT DELIVERY") {
         REQUIRE(parse_address("@some.service", a));
         CHECK(a.mode == Addressing::Role);
         CHECK(a.role == "some.service");
@@ -682,7 +682,7 @@ TEST_CASE("an unsolicited message is recorded as one, with its trusted provenanc
     CHECK(got.front().shape == "Notice");
     CHECK_FALSE(got.front().answers_ask);
     CHECK(got.front().answers == 0);
-    CHECK(got.front().authored_role.empty()); // spoken personally, and empty is never an office
+    CHECK(got.front().authored_role.empty()); // spoken personally, and empty is never a role
 
     const std::optional<ReceivedMessage> m = c.acting().received(got.front().message);
     REQUIRE(m);
@@ -886,7 +886,7 @@ TEST_CASE("a person puts one session in reach of one service, and nothing is rep
     REQUIRE(submitted(asked));
     c.bus.drain_until_idle();
 
-    // The prompt reaches the OPERATOR SEAT, as an ordinary unsolicited message — the operator
+    // The prompt reaches the WEAVER SEAT, as an ordinary unsolicited message — the weaver
     // asked nothing, so it is not an answer.
     const std::vector<TranscriptEntry> prompts = c.of_kind(c.op(), TranscriptKind::Received);
     REQUIRE(prompts.size() == 1);
@@ -935,10 +935,10 @@ TEST_CASE("a person puts one session in reach of one service, and nothing is rep
     CHECK(c.delivered_from("Work", c.service_id) == c.session.id);
 }
 
-TEST_CASE("the operator's conveniences are ordinary messages from the operator's own door") {
+TEST_CASE("the weaver's conveniences are ordinary messages from the weaver's own door") {
     Cast c;
     (void)request_and_approve(c);
-    // Every decision the operator made was a message it AUTHORED, recorded in its own transcript
+    // Every decision the weaver made was a message it AUTHORED, recorded in its own transcript
     // with its own correlation — never a call into a Weaver, and never a host act.
     const std::vector<TranscriptEntry> authored = c.of_kind(c.op(), TranscriptKind::Submitted);
     REQUIRE(authored.size() == 1);
@@ -957,7 +957,7 @@ TEST_CASE("an approve composed from the prompt shown answers that prompt and no 
     const std::uint64_t first_ask = request_and_approve(c);
     const std::uint64_t shown = last_prompt(c);
 
-    // The session asks again after its grant: a request the operator has not looked at.
+    // The session asks again after its grant: a request the weaver has not looked at.
     const TerminalResult second =
         c.acting().request_authority("Work", 2, kServiceRole, "and this too");
     REQUIRE(submitted(second));
@@ -966,7 +966,7 @@ TEST_CASE("an approve composed from the prompt shown answers that prompt and no 
     const std::int64_t shown_name = c.op().received(shown)->value.get("prompt")->as_int();
     CHECK(c.op().received(last_prompt(c))->value.get("prompt")->as_int() == shown_name + 1);
 
-    // The same approve again, composed from the prompt the operator was shown.
+    // The same approve again, composed from the prompt the weaver was shown.
     REQUIRE(submitted(decide(c, "zen.ApproveAuthority", shown)));
     c.bus.drain_until_idle();
     const std::vector<TranscriptEntry> answers = c.of_kind(c.op(), TranscriptKind::AnswerReceived);
@@ -1007,13 +1007,13 @@ TEST_CASE("a session cannot approve its own request, even holding the shape and 
     REQUIRE_FALSE(answers.empty());
     CHECK(answers.back().shape == "zen.Refused");
     CHECK(c.acting().received(answers.back().message)->value.get("reason")->as_text().find(
-              "operator seat") != std::string::npos);
+              "weaver seat") != std::string::npos);
 
-    // Authority did not change, and the operator's request is still waiting for a person.
+    // Authority did not change, and the weaver's request is still waiting for a person.
     REQUIRE(submitted(c.acting().send(Address::to_role(kServiceRole), "Work", 1, {bare(std::int64_t{1})})));
     c.bus.drain_until_idle();
     CHECK(c.service->handled_names.empty());
-    // The operator authored nothing at all.
+    // The weaver authored nothing at all.
     CHECK(c.of_kind(c.op(), TranscriptKind::Submitted).empty());
 }
 
@@ -1041,11 +1041,11 @@ TEST_CASE("a third participant that can reach the Weaver is still not the user")
     REQUIRE(submitted(c.acting().request_authority("Work", 1, kServiceRole, "let me in")));
     c.bus.drain_until_idle();
 
-    // An ordinary terminal participant, with exactly the operator's grant and none of its
+    // An ordinary terminal participant, with exactly the weaver's grant and none of its
     // standing. The terminal core privileges nobody; the Weaver decides.
-    Grant intruder_grant = operator_seat_grant();
+    Grant intruder_grant = weaver_seat_grant();
     const MountedTerminal intruder = host_mount_terminal(
-        c.bus, std::make_unique<TerminalSession>("intruder", operator_vocabulary(), c.order),
+        c.bus, std::make_unique<TerminalSession>("intruder", weaver_vocabulary(), c.order),
         std::move(intruder_grant));
     REQUIRE(submitted(intruder.session->ask(Address::to_role(kWeaverRole), "zen.ApproveAuthority", 2,
                                             {named("prompt", 1)})));
@@ -1156,7 +1156,7 @@ TEST_CASE("a merged chronology is the order this presentation observed, and labe
         std::any_of(merged.begin(), merged.end(),
                     [](const DeskEntry& d) { return d.lens == "session"; }) &&
         std::any_of(merged.begin(), merged.end(),
-                    [](const DeskEntry& d) { return d.lens == "operator"; });
+                    [](const DeskEntry& d) { return d.lens == "weaver"; });
     CHECK(both_lenses);
     // A merged VIEW is not a merged identity: every entry still names the weave that knows it.
     for (const DeskEntry& d : merged) {
@@ -1284,10 +1284,10 @@ TEST_CASE("the renderer escapes what can steer a terminal, and keeps everything 
     CHECK(safe_terminal_text("\x7f") == "\\x7f");
     // A literal backslash is doubled, so an escape is never confusable with authored text.
     CHECK(safe_terminal_text("\\x1b") == "\\\\x1b");
-    // ...and UTF-8 survives, which is where this differs from the operator sanitizer: a terminal
+    // ...and UTF-8 survives, which is where this differs from the weaver sanitizer: a terminal
     // that escaped every non-ASCII byte would corrupt every ordinary message carrying a name.
     CHECK(safe_terminal_text("naïve — 世界") == "naïve — 世界");
-    CHECK(safe_operator_text("naïve", 64) != "naïve"); // the Weaver's, deliberately stricter
+    CHECK(safe_weaver_text("naïve", 64) != "naïve"); // the Weaver's, deliberately stricter
 }
 
 TEST_CASE("the core keeps exactly the bytes that arrived, and escapes nothing") {

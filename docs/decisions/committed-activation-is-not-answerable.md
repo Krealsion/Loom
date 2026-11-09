@@ -1,7 +1,7 @@
 # Committed activation is not answerable
 
 **Context.** Built in the ordinary path's image, the committed activation's
-delivery context fabricates a requester. The stamped sender is the *operator
+delivery context fabricates a requester. The stamped sender is the *initiator
 that admitted*, not a weave that asked anything; a candidate could then
 `answer()` its own first breath and queue a real, provenance-carrying answer to
 a question nobody asked, or `defer_answer()` and park a slot of the Loom-wide

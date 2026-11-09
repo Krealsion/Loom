@@ -34,7 +34,7 @@ class Lamp : public loom::WeaveBase<Lamp, LampState,
     void on(const Dim& d, loom::Mail& mail) {
         state_.level -= d.by;
         mail.claim(Brightness{state_.level});             // personal
-        mail.as_role("room.light").claim(Brightness{...}); // as the office
+        mail.as_role("room.light").claim(Brightness{...}); // as the role
     }
 };
 ```
@@ -50,13 +50,13 @@ differently disagree at the door
 doors, where `Emit<...>` gates no send.
 
 `SenseClaimResult{accepted, why, revision}` is the verdict. `why` is one of
-`Undeclared`, `OfficeNotHeld`, `GateRefused`.
+`Undeclared`, `RoleNotHeld`, `GateRefused`.
 
 ## Observing
 
 ```cpp
 loom::SenseReading r = mail.latest<Brightness>(lamp_id);          // personal
-loom::SenseReading r = mail.latest_from_office<Brightness>("room.light");
+loom::SenseReading r = mail.latest_from_role<Brightness>("room.light");
 if (r) { Brightness b = loom::from_value<Brightness>(*r.value); }
 ```
 
@@ -71,7 +71,7 @@ place:
 NoClaim         nothing has been claimed under this key
 NotAuthorized   the reader's grant does not permit observing this shape
 Undeclared      (claim side) the shape is not in Claims<...>
-OfficeNotHeld   (claim side) the claimant does not hold that office
+RoleNotHeld   (claim side) the claimant does not hold that role
 GateRefused     (claim side) the value did not pass the gate
 ```
 
@@ -108,8 +108,8 @@ author                         the exact weave that claimed
 author_life                    + author_incarnation, as of the claim
 author_life_is_current         is that still the life at that address?
 author_incarnation_is_current  is that still the CODE at that address?
-office                         the office it was authored as; empty = personal
-office_holder_is_current       meaningful only when office is non-empty
+role                         the role it was authored as; empty = personal
+role_holder_is_current       meaningful only when role is non-empty
 revision                       monotonic per key; orders replacement of THIS claim
 schema_name + version
 ```
@@ -131,11 +131,11 @@ of the other.
 A Sense value is therefore never naked globally-trusted data: a reader can always
 answer *who claimed this?*
 
-## Personal is not office
+## Personal is not role
 
 Holding a role attaches nothing. The same holder's `mail.claim(x)` and
 `mail.as_role(R).claim(x)` land under **different keys** — separate maps, so a
-personal claim is not reachable through an office key and cannot be promoted into
+personal claim is not reachable through a role key and cannot be promoted into
 one. This is [MSG-07](../laws/messaging-laws.md#msg-07--role-authorship-is-explicit)'s
 law in this category, in the same grammar, because it is the same law.
 
@@ -143,15 +143,15 @@ law in this category, in the same grammar, because it is the same law.
 
 After a replacement moves the role, a role-bound reading still returns the
 **predecessor's** claim, stamped `author = predecessor`,
-`office_holder_is_current = false`. It is never relabelled, and the successor is
+`role_holder_is_current = false`. It is never relabelled, and the successor is
 considered to have claimed nothing until it deliberately claims.
 
-Returning nothing is deliberately rejected: it would collapse "this office has
-never claimed" and "this office's claim is the previous holder's" into one empty
+Returning nothing is deliberately rejected: it would collapse "this role has
+never claimed" and "this role's claim is the previous holder's" into one empty
 answer. The strict reading is one visible line:
 
 ```cpp
-if (r && r.by.office_holder_is_current) { ... }
+if (r && r.by.role_holder_is_current) { ... }
 ```
 
 ## Authority
@@ -165,7 +165,7 @@ Grant{}.allow_observe_any()              // an inspector, a renderer, a console
 
 A **send rule is never consulted for a read**. They answer different questions
 ("may you emit this shape *there*" vs "may you pull it"), and reporting one as
-the other sends an operator to edit the wrong thing. Because the floor is empty,
+the other sends a weaver to edit the wrong thing. Because the floor is empty,
 no weave gains reach from Senses existing — a Sense repository is not a universal
 exfiltration rail. Authorization happens *before* the lookup, so an
 unauthorized reader cannot learn whether a claim exists.
@@ -192,8 +192,8 @@ Two different answers, and conflating them is the mistake:
 
 | | can author a claim attributed to another weave? |
 |---|---|
-| an ordinary participant (`Mail::claim` / `as_role(R).claim`) | **no.** It claims as itself, or as an office it holds at that moment; there is no spelling for anything else |
-| trusted root / host (`Switchboard::claim_as` / `office_claim_as`) | **yes, explicitly.** It names the claimant |
+| an ordinary participant (`Mail::claim` / `as_role(R).claim`) | **no.** It claims as itself, or as a role it holds at that moment; there is no spelling for anything else |
+| trusted root / host (`Switchboard::claim_as` / `role_claim_as`) | **yes, explicitly.** It names the claimant |
 
 `Switchboard::claim_as(claimant, value)` is the host/root door, exactly as
 `Switchboard::send` is the ungated send — the substrate's owner can attribute a
@@ -212,20 +212,20 @@ that a host-authored claim is representable.
 | Key | Replaced by | Erased when |
 |---|---|---|
 | personal `(WeaveId, shape)` | a newer claim from that weave | the weave is unregistered |
-| office `(role, shape)` | a newer claim as that office | the role becomes unheld |
+| role `(role, shape)` | a newer claim as that role | the role becomes unheld |
 
 Bounded by `registered weaves × declared shapes` + `held roles × shapes` — never
 by claims ever made, never one entry per historical incarnation. A reload, a
 revival or a thousand re-claims replace the value under one key.
 
 An admission overwrites the role holder **in place** and never passes through
-unheld, which is exactly why a predecessor's office claim survives a replacement
+unheld, which is exactly why a predecessor's role claim survives a replacement
 rather than being deleted.
 
 **Joint publication.** Several claimants can change their latest claims
 together, in one protected exchange, and each is then shown what was published
 under its key — publication and application recorded as separate facts, and the
-operation's record kept until its operator releases it. Its own page:
+operation's record kept until its initiator releases it. Its own page:
 [joint publication](joint-publication.md) ([SENSE-06, SENSE-07](../laws/sense-laws.md)).
 
 ## Native/dynamic parity
@@ -239,8 +239,8 @@ in both directions, as it does for every door that needs a verified identity.
 ## Tests
 
 Suite `sense` (ordering, authorship and its two generation facts, role movement,
-personal and office keys, the bounded repository, authorization, discovery, the
-reading-owns-its-value case, the no-bus-traffic case); suite `kernel` (office claim across a real committed
+personal and role keys, the bounded repository, authorization, discovery, the
+reading-owns-its-value case, the no-bus-traffic case); suite `kernel` (role claim across a real committed
 admission, the sealed candidate refused, dynamic parity); suite `handoff`
 (Senses meeting an authored handoff); suite `joint` (joint publication, native
 and loaded).

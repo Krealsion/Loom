@@ -172,7 +172,7 @@ bool read_boot_plan(const std::string& path, BootPlan* out, std::string* error) 
             for (const LinkEntry& other : out->links) {
                 if (other.name == link.name) {
                     *error = "boot plan '" + path + "': two links are named '" + link.name +
-                             "', and a name is one office";
+                             "', and a name is one role";
                     return false;
                 }
             }

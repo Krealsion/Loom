@@ -5,7 +5,7 @@
 //
 //   { "name": "runs", "path": "<prefix>/lib/loom/loom-runs.<so|dll>", "role": "loom.runs" }
 //
-// The operator decides what it may run (the catalog, loom-tools.json) and what it may say and pass
+// The weaver decides what it may run (the catalog, loom-tools.json) and what it may say and pass
 // on to its workers (`authority allow runs ...`); docs/guides/sessions.md walks through both.
 
 #include "run_manager.hpp"

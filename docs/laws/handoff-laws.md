@@ -101,7 +101,7 @@ MEANS
   a lifetime, not a migration;
 - queued old-protocol traffic gets four honest outcomes, not one: before the
   boundary it means what it meant; after the boundary with the incumbent still in
-  office it is delivered and the domain declines it; queued around commit and
+  role it is delivered and the domain declines it; queued around commit and
   after the role moves it reaches a successor that does not accept the shape and
   refuses `NotAccepted`, visibly and by name;
 - **stated plainly:** Loom gives the developer a boundary and a refusal. It does

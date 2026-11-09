@@ -528,7 +528,7 @@ zen_comments_expect("a seven-line block" cxx "${six}// seven\nint x;\n" 1)
 zen_comments_expect("six lines, the SPDX pair and a pointer" cxx
     "// SPDX-License-Identifier: AGPL-3.0-only\n// Copyright (c) 2026 A\n${six}// MSG-07, MSG-04; docs/laws/messaging-laws.md\nint x;\n" 0)
 zen_comments_expect("a law named in prose is a counted line" cxx
-    "${six}// MSG-07 says a sender speaks as an office deliberately\nint x;\n" 1)
+    "${six}// MSG-07 says a sender speaks as a role deliberately\nint x;\n" 1)
 zen_comments_expect("a seven-line /* */ comment" cxx
     "/*\n * one\n * two\n *\n * four\n * five\n */\nint x;\n" 1)
 zen_comments_expect("a six-line /* */ comment" cxx "/* one\n * two\n * three\n * four\n * five\n */\nint x;\n" 0)

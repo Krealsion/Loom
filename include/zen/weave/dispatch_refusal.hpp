@@ -45,10 +45,10 @@ private:
 };
 
 /// A bound participant of a joint operation this weave operates was replaced or removed
-/// (docs/reference/joint-publication.md#the-operators-notices). Sent once per operation, and only
-/// to an operator that accepts it, when that ends the operation or ends any answer to one the bus
+/// (docs/reference/joint-publication.md#the-initiators-notices). Sent once per operation, and only
+/// to an initiator that accepts it, when that ends the operation or ends any answer to one the bus
 /// already aborted. Not sent when a bound claim merely moves: that owner is alive and answers
-/// in its own words. The shape alone is ordinary speech: the operator re-reads `joint_status`,
+/// in its own words. The shape alone is ordinary speech: the initiator re-reads `joint_status`,
 /// the bus's record, kept until it releases it (SENSE-07). Absence proves nothing.
 struct JointEnded {
     std::string op;     ///< canonical unsigned decimal, as `DispatchRefused` spells its attempt
@@ -69,17 +69,17 @@ struct JointEnded {
 };
 
 /// The application of a joint publication this weave operates settled
-/// (docs/reference/joint-publication.md#the-operators-notices). Sent once per settlement, and
-/// only to an operator that accepts it: every claimant applied (`applied`), or one failed (and
+/// (docs/reference/joint-publication.md#the-initiators-notices). Sent once per settlement, and
+/// only to an initiator that accepts it: every claimant applied (`applied`), or one failed (and
 /// is held), declined (and is not), or was removed before it was shown (`reason`). A repair that
 /// settles again is said again. `claimant` and `role` name the participant a non-application is
-/// about. The shape alone is ordinary speech: the operator re-reads
+/// about. The shape alone is ordinary speech: the initiator re-reads
 /// `joint_status(op).application`, the bus's record, kept until it releases it (SENSE-07).
 struct JointApplied {
     std::string op;       ///< canonical unsigned decimal
     bool applied = false; ///< every bound claimant applied its published value
     std::string claimant; ///< decimal WeaveId of the claimant a non-application is about; empty when applied
-    std::string role;     ///< the office that claimant was bound through, if any
+    std::string role;     ///< the role that claimant was bound through, if any
     std::string reason;   ///< `name_of(JointApplication)`: Applied / Declined / Failed / Lost
     using ZenSelf = JointApplied;
     static constexpr const char* zen_name = "zen.JointApplied";

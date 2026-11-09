@@ -82,7 +82,7 @@ struct ActivationObserved {
 
 /// The private retirement word a coordinator says to an incumbent it has just
 /// sealed. Part of the fixture, not of Loom: retirement is a conversation the
-/// operator owns, and the substrate's only part in it is that a sealed weave can
+/// initiator owns, and the substrate's only part in it is that a sealed weave can
 /// still hear its coordinator.
 struct RetireNow {
     std::int64_t transaction = 0;

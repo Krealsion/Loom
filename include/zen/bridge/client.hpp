@@ -6,11 +6,11 @@
 
 // THE CONNECTING SIDE OF THE CROSSING, WITH NO CONSOLE IN IT.
 //
-// `RemoteConsole` is a `Console`: it carries the operator's assumption ladder, a reply buffer with
+// `RemoteConsole` is a `Console`: it carries the weaver's assumption ladder, a reply buffer with
 // labels and a tap window, and it links the console engine to do so -- which is exactly why it
 // cannot be exported. A host that LINKS to another host needs none of that. It needs to connect,
 // say who it claims to be, learn whether it was admitted and as whom, send bytes to a target or
-// an office under a correlation, and be handed every frame the far host ships -- typed enough to
+// a role under a correlation, and be handed every frame the far host ships -- typed enough to
 // act on, and never decoded here, because the shapes belong to the participant that asked.
 //
 // So this is a socket, a handshake and a frame reader, and nothing else: no ladder, no buffer,

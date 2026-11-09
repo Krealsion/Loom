@@ -120,7 +120,7 @@ bool apply_rule(const std::string& raw, LiveAuthority* into, std::string* error)
     if (arrow == std::string::npos) {
         *error = "'" + text +
                  "' has no destination: a send rule is '<Shape> vN -> any target', "
-                 "'<Shape> vN -> role <office>', or 'any shape -> any target'";
+                 "'<Shape> vN -> role <role>', or 'any shape -> any target'";
         return false;
     }
     const std::string lhs = trim(text.substr(0, arrow));
@@ -132,7 +132,7 @@ bool apply_rule(const std::string& raw, LiveAuthority* into, std::string* error)
         // nobody. Roles exist for exactly this.
         *error = "'" + text +
                  "' names a WeaveId, which is minted fresh every run; a remembered rule must "
-                 "name a role ('-> role <office>') or any target";
+                 "name a role ('-> role <role>') or any target";
         return false;
     }
 
@@ -152,15 +152,15 @@ bool apply_rule(const std::string& raw, LiveAuthority* into, std::string* error)
         return true;
     }
     if (rhs.rfind("role ", 0) == 0) {
-        const std::string office = trim(rhs.substr(5));
-        if (office.empty()) {
-            *error = "'" + text + "' names no office after 'role'";
+        const std::string role = trim(rhs.substr(5));
+        if (role.empty()) {
+            *error = "'" + text + "' names no role after 'role'";
             return false;
         }
-        const std::size_t sp = office.find_first_of(" \t");
-        const std::string after = sp == std::string::npos ? std::string{} : trim(office.substr(sp));
+        const std::size_t sp = role.find_first_of(" \t");
+        const std::string after = sp == std::string::npos ? std::string{} : trim(role.substr(sp));
         if (after == "door" || after.rfind("door ", 0) == 0 || after.rfind("door\t", 0) == 0) {
-            // A door is judged by the office it names, at the act, from authority installed live
+            // A door is judged by the role it names, at the act, from authority installed live
             // within a Weaver's ceiling; nothing reads one from this file, so none is kept here.
             *error = "'" + text +
                      "' names a door, and an authority file holds no doors: a door rule is "
@@ -175,11 +175,11 @@ bool apply_rule(const std::string& raw, LiveAuthority* into, std::string* error)
                      "shapes you mean, or grant 'any shape -> any target' deliberately";
             return false;
         }
-        into->allow_to_role(name, version, office);
+        into->allow_to_role(name, version, role);
         return true;
     }
     *error = "'" + text + "' has an unreadable destination '" + rhs +
-             "': expected 'any target' or 'role <office>'";
+             "': expected 'any target' or 'role <role>'";
     return false;
 }
 

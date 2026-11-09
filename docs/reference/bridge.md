@@ -9,7 +9,7 @@ protocol the two sides speak. Laws:
 [MSG-09](../laws/messaging-laws.md#msg-09--a-dispatch-turn-can-be-bounded-without-bending-fifo),
 [MSG-12](../laws/messaging-laws.md),
 [LIFE-07](../laws/lifecycle-laws.md#life-07--consumed-transport-bytes-are-history-not-live-channel-storage).
-Capacities: [bounds](bounds.md#bridge-remote-operator). The supplied host's
+Capacities: [bounds](bounds.md#bridge-remote-weaver). The supplied host's
 use of the connecting side: [running-loom](../guides/running-loom.md#10-link-to-another-host).
 
 **Read the admission section before you bind a listener anywhere.**
@@ -35,7 +35,7 @@ whose `handle()` ships each delivery down its socket — exactly as
 `IsolationHost` registers an `OutOfProcessWeave` per mounted child. Same
 proxy-participant pattern, pointed at a peer.
 
-**Two consumers, one crossing.** The *operator's* console
+**Two consumers, one crossing.** The *weaver's* console
 (`zen-console-remote`, `zen-bridge-probe`) is one principal with the whole bus;
 a *guest* — another Loom host's participant, an agent of Zengine's Workshop — is admitted
 deliberately and granted narrowly. The crossing serves both through one
@@ -45,7 +45,7 @@ policy seam, and the difference between them is entirely the policy's answer.
 server, the console-free client, the link envelope) is **exported** by
 `find_package(loom)`: a Loom host that links to another host reaches it that
 way, and Loom's own supplied host does. The
-operator's console over it (`RemoteConsole`, `zen-bridge-console`) stays
+weaver's console over it (`RemoteConsole`, `zen-bridge-console`) stays
 unexported with the console engine it needs. Nothing of the console's
 dependency closure crosses the package boundary.
 
@@ -72,8 +72,8 @@ version — and where it came from, and answers one of three things:
 command, or a per-connection popup. Nothing downstream of the verdict changes
 for it.
 
-`operator_admission()` is the whole-bus operator stated as a policy: every connection is
-the operator — `allow_any()`, accept-any, observing the whole bus — and its
+`weaver_admission()` is the whole-bus weaver stated as a policy: every connection is
+the weaver — `allow_any()`, accept-any, observing the whole bus — and its
 established name is whatever it claimed. **Under that policy reachability of
 the socket is authority**, and a listener served with it must not be exposed
 to an untrusted network. It is what the in-tree consoles use.
@@ -114,7 +114,7 @@ sender            the bus's stamp of who spoke
 correlation       the number the session put on its ask, echoed by an answer
 answers_ask       Loom's own word that this is THE answer to an ask this session sent (ANS-05)
 dispatch_refused  this is a zen.DispatchRefused notice about one of this session's own sends
-authored_role     the office the sender deliberately spoke as, or empty
+authored_role     the role the sender deliberately spoke as, or empty
 ```
 
 A peer that only got bytes could not tell an attested answer from any admitted
@@ -181,7 +181,7 @@ Workshop guest door, and every link between hosts, stay `Native`. Suite `bridge`
 ## The tap
 
 A session admitted with `observe` receives a copy of every bus event, as the
-operator always did. A session admitted without it receives **only** what is
+weaver always did. A session admitted without it receives **only** what is
 delivered to its proxy. A guest is not given a tap by any policy Loom ships;
 richer observation of a host is that host's to grant through its own owners.
 
@@ -197,7 +197,7 @@ that asked.
 
 `zen/bridge/link.hpp` is how an ordinary weave asks across a link a host holds
 for it: `loom.link.Ask{role | target, payload bytes, settle}` to the link's
-office, under the asker's own correlation. The link answers each ask **once,
+role, under the asker's own correlation. The link answers each ask **once,
 through Loom's answer door** — a deferred answer Loom binds to the asker's
 incarnation and correlation — so the asker's `mail.answers_ask()` is its own
 bus's word. The answer is either the far owner's (only a delivery the far bus
@@ -211,7 +211,7 @@ reply can reach, so equal correlations from separate askers, replies in any
 order, duplicates and late words from an ended session each land where they
 belong or nowhere. With `settle` the answer is held until the far host's
 `Settled`. Every far frame becomes a `loom.link.Crossed` record the link says
-to itself — far session and established name, far stamp and office, attempt,
+to itself — far session and established name, far stamp and role, attempt,
 kind, bytes — which is how the host's history holds the crossing, and what the
 link acts on (only its own record acts). The supplied host mounts one such link
 per `links` row of its boot plan
@@ -239,7 +239,7 @@ subscription it carried is told `Ended` `lost`. At most `LinkWeave::kMaxWatches`
 **The link enforces whose subscription it is**, because the far relay cannot: every local asker is
 the link's one session there. A `Release` or `Acknowledge` crosses only for the local participant
 that holds that subscription on the current session under the relay lifetime it names; anybody
-else's — in either encoding, to the relay's office or its id — is told `Outcome` `refused` (attempt
+else's — in either encoding, to the relay's role or its id — is told `Outcome` `refused` (attempt
 0) and changes nothing on either side. **A subscriber that is gone** (removed, dead, or succeeded by
 a new life or incarnation, even mid-subscribe) is noticed on the host's own turn, not at the next
 word: the link asks the far relay to release, tells nobody, and counts the subscription as
@@ -310,7 +310,7 @@ register a schema or introduce a shape.
 **Meaning is not Bridge's, on purpose.** A structurally valid message that is
 nonsense for the domain is delivered, and the receiving weave refuses it.
 
-An operator's bytes are decoded host-side, so they spend the host's shared
+A weaver's bytes are decoded host-side, so they spend the host's shared
 `kMaxDecodedCells` allowance — a compact frame cannot command unbounded host
 materialization ([bounds](bounds.md#the-decode-materialization-bound)).
 
@@ -324,7 +324,7 @@ machine, and it is what it is: a shared secret, as private as the file it lives
 in.
 
 > **Do not bind a listener on an interface an untrusted party can reach.**
-> Under the operator policy, reachability is operator authority; under any
+> Under the weaver policy, reachability is weaver authority; under any
 > policy, a credential crosses in the clear.
 
 Two facts about the shipped listeners: `bridge_listen_tcp` binds
@@ -365,7 +365,7 @@ registers no proxy and its sends act on nothing; the established name is the
 policy's word; a guest's send is stamped from the session and answered with
 Loom's attestation; what the grant does not cover is refused at the bus and the
 guest is told; a deferred connection acts on nothing until decided; a version
-mismatch is refused in words; a guest gets no tap and an operator still does; a
+mismatch is refused in words; a guest gets no tap and a weaver still does; a
 disconnected session's proxy leaves and a late answer settles nothing; and the
 link, end to end across two buses — two askers under one correlation answered
 in reverse order, answers and refusals each reaching their own asker, a far

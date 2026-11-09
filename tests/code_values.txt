@@ -107,7 +107,7 @@ kMaxPackageBytes                src/runs/catalog.hpp                      kMaxPa
 # ---- the bridge and the transport channels
 kMaxHelloFieldBytes             include/zen/bridge/protocol.hpp           kMaxHelloFieldBytes
 kMaxSettlingPerConnection       include/zen/bridge/server.hpp             kMaxSettlingPerConnection
-kMaxOperatorConnections         include/zen/bridge/server.hpp             kMaxOperatorConnections
+kMaxWeaverConnections         include/zen/bridge/server.hpp             kMaxWeaverConnections
 kMaxPendingDelivered            include/zen/bridge/remote_console.hpp     kMaxPendingDelivered
 kMaxAbsentSchemas               include/zen/bridge/remote_console.hpp     kMaxAbsentSchemas
 kEmitSend                       include/zen/wire.hpp                      kEmitSend

@@ -4,7 +4,7 @@
 #ifndef ZEN_CONSOLE_CONSOLE_HPP
 #define ZEN_CONSOLE_CONSOLE_HPP
 
-// The operator's console: a bus participant that discovers what is registered, composes and
+// The weaver's console: a bus participant that discovers what is registered, composes and
 // gate-sends messages, and keeps the replies and bus events it sees in bounded windows. It
 // returns data, never text or widgets, so a terminal, a remote client or a GUI can drive it.
 // It is the most-granted participant (broad send, any registered shape accepted, the tap,
@@ -36,12 +36,12 @@ namespace loom {
 // keeps a fixed window and discards its oldest entry, counted in `Console::evicted()`. A reply's
 // label (m1, m2, ...) is a stable identity: an evicted one refuses rather than naming a newer
 // reply. A held conversation is owed, so its bound refuses a new one instead of evicting.
-// The window type is `loom::BoundedHistory`; docs/reference/bounds.md#console-operator-history
+// The window type is `loom::BoundedHistory`; docs/reference/bounds.md#console-weaver-history
 
 /// Bus events retained on the tap. Deliberately the same width as `Switchboard::kJournalCapacity`:
-/// one tap entry corresponds to roughly one journal entry, so an operator who can still SEE an
+/// one tap entry corresponds to roughly one journal entry, so a weaver who can still SEE an
 /// event on the tap can still ASK the journal what became of it. A wider tap would show events
-/// whose outcome the bus has already forgotten; a narrower one would waste journal the operator
+/// whose outcome the bus has already forgotten; a narrower one would waste journal the weaver
 /// can no longer name.
 inline constexpr std::size_t kConsoleTapCapacity = 1024;
 
@@ -49,7 +49,7 @@ inline constexpr std::size_t kConsoleTapCapacity = 1024;
 /// answered ones whose answer has not been taken. Not a history window: a new tracked
 /// conversation is refused at capacity (the send still goes, untracked), and nothing held is
 /// evicted. A slot is spent at the ask and returned at `take_settled` or `forget_ask`.
-/// docs/reference/bounds.md#console-operator-history
+/// docs/reference/bounds.md#console-weaver-history
 inline constexpr std::size_t kConsoleAskCapacity = 32;
 
 /// Received reply Values retained in the m1/m2/... buffer. Sixteen times smaller than the tap
@@ -138,7 +138,7 @@ struct Composed {
     std::uint64_t ask = 0;
 };
 
-/// A copied bus event for the operator's window on the live bus (the tap).
+/// A copied bus event for the weaver's window on the live bus (the tap).
 struct TapEvent {
     /// "Delivered", "Refused", "Died", "Revived" or "HandlerFailed" (the handler was entered
     /// and did not complete). The remote client adds "BridgeRefused", which is not a bus event
@@ -173,7 +173,7 @@ struct Dirty {
     bool any() const noexcept { return weaves || buffer || tap; }
 };
 
-/// How much of each bounded window has been discarded, so an operator can tell a complete
+/// How much of each bounded window has been discarded, so a weaver can tell a complete
 /// history from one whose oldest evidence was evicted. The weave list has no row: it is a
 /// snapshot, not a history. `buffer` is also the reply labels' base: the retained entries are
 /// m(buffer + 1) ... m(buffer + buffer_size()), and a label outside that range refuses rather
@@ -210,7 +210,7 @@ public:
     /// + buffer_size()), and a label outside it refuses rather than answering with another reply.
     virtual std::optional<BufferEntry> buffer_at(std::size_t label_number) const = 0;
 
-    // The tap (operator's window on the live bus) + the message-driven dirty signal.
+    // The tap (weaver's window on the live bus) + the message-driven dirty signal.
     /// The retained tap window, oldest retained first (at most kConsoleTapCapacity entries).
     virtual std::vector<TapEvent> tap() const = 0;
     virtual Dirty take_dirty() = 0;
@@ -221,7 +221,7 @@ public:
 
     // Drive the transport so sends are delivered and replies and tap events arrive. The
     // console's contract, not the Switchboard's: in process it is
-    // `Switchboard::drain_until_idle()`, unbounded (MSG-09), which suits an operator issuing one
+    // `Switchboard::drain_until_idle()`, unbounded (MSG-09), which suits a weaver issuing one
     // command and reading its outcome; remotely it flushes and polls the socket once.
     virtual void pump() = 0;
 };
@@ -252,9 +252,9 @@ std::optional<loom::Cell> resolve_ref_from(const Console& console, const Ref& re
 /// registers the console as an in-process Weave (broad grant + accept-any) and subscribes the tap.
 class ConsoleEngine : public Console, public LadderHost {
 public:
-    /// `vocabulary`: the shapes this operator window expects to be told, normally none. The
+    /// `vocabulary`: the shapes this weaver window expects to be told, normally none. The
     /// console accepts any shape the registry can resolve, and the registry learns a shape from
-    /// some weave's accept-set, so a notification only the operator receives is declared here.
+    /// some weave's accept-set, so a notification only the weaver receives is declared here.
     /// It is not a grant: a listed door is gated as the wildcard one is.
     explicit ConsoleEngine(loom::Switchboard& bus,
                            std::vector<std::shared_ptr<const loom::Schema>> vocabulary = {});
@@ -348,7 +348,7 @@ public:
     std::size_t buffer_size() const override;
     std::optional<BufferEntry> buffer_at(std::size_t label_number) const override;
 
-    // ---- The tap (operator's window on the live bus) ----
+    // ---- The tap (weaver's window on the live bus) ----
     std::vector<TapEvent> tap() const override { return tap_.snapshot(); }
 
     /// What each bounded window has discarded (and the buffer's stable-label base).

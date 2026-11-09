@@ -64,7 +64,7 @@ struct Widget {
                                     ///< in a schematic: the design-time placeholder rows)
     int selected_index = -1;        ///< List selection: an index INTO items, never a y (-1 = none)
 
-    // Abstract interaction intent: what the operator may do here, never which key or gesture
+    // Abstract interaction intent: what the weaver may do here, never which key or gesture
     // does it; each renderer maps its medium onto these. A node that can be acted on can be
     // focused, so focus eligibility needs no field of its own.
     bool activatable = false;       ///< the node can be acted on (Activate on its selection)
@@ -148,7 +148,7 @@ Widget field(std::string prompt, std::string value, std::string hint, bool focus
 Widget slot(std::string slot_name, std::string accepts, std::vector<Widget> placeholder);
 
 // ---- Input: renderer-agnostic semantic actions (symmetric with the output tree) ----
-// What the operator MEANS, not which key or gesture. The TUI maps raw keys onto these; a
+// What the weaver MEANS, not which key or gesture. The TUI maps raw keys onto these; a
 // pointer-driven frontend maps clicks onto the same set — so every frontend inherits the input
 // abstraction instead of inventing one. Each medium's raw-event -> Action map lives in that
 // frontend ALONE (the TUI's in the TUI), which is what keeps this enumeration free of any

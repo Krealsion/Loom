@@ -30,7 +30,7 @@
 // reads the journal. This cannot, and does not.
 //
 // A model, not output. Entries carry structured facts (kind, shape identity, the bus-stamped
-// sender, the authored office, the correlation, a stable id for the received value), so a
+// sender, the authored role, the correlation, a stable id for the received value), so a
 // terminal renderer and a graphical pane present the same record without parsing each other's
 // strings. Nothing here is coloured, wrapped or escaped; escaping is the business of whichever
 // renderer has a terminal to protect. docs/reference/terminal.md#the-transcript
@@ -95,7 +95,7 @@ const char* name_of(TranscriptKind kind) noexcept;
 /// surface has, and no fourth.
 enum class Addressing : std::uint8_t {
     Weave,   ///< one exact WeaveId
-    Role,    ///< whichever weave holds an office AT DELIVERY
+    Role,    ///< whichever weave holds a role AT DELIVERY
     Publish, ///< every accepter of the shape
 };
 
@@ -110,7 +110,7 @@ struct TranscriptDispatchRefusal {
 };
 
 /// One observation, with its provenance kept apart from its payload. The trusted fields come
-/// from Loom and no sender can write them: `sender` is the bus stamp, `authored_role` an office
+/// from Loom and no sender can write them: `sender` is the bus stamp, `authored_role` a role
 /// Loom verified at authorship, `answers_ask` provenance no ordinary enqueue produces. A payload
 /// field that happens to be called "requester" is never copied into one of them.
 struct TranscriptEntry {
@@ -140,7 +140,7 @@ struct TranscriptEntry {
 
     /// Received: the BUS-STAMPED sender. Trusted, and not a payload field.
     WeaveId sender{};
-    /// Received: the office the sender DELIBERATELY spoke as, verified by Loom at
+    /// Received: the role the sender DELIBERATELY spoke as, verified by Loom at
     /// authorship — or empty, which means exactly "spoken personally".
     std::string authored_role;
     /// Received: Loom's own provenance. True only for an authorized answer.
@@ -176,7 +176,7 @@ struct ReceivedMessage {
 
     std::uint64_t id = 0; ///< assigned by Transcript::retain; stable for life
     WeaveId sender{};     ///< the bus stamp — trusted, never a payload field
-    std::string authored_role; ///< the office Loom verified at authorship, or empty
+    std::string authored_role; ///< the role Loom verified at authorship, or empty
     bool answers_ask = false;
     std::uint64_t correlation = 0;
     loom::Value value;
@@ -265,7 +265,7 @@ private:
 /// NOT use this — it would show a person backslash-escapes for no reason.
 ///
 /// IT KEEPS UTF-8, deliberately, and this is where it differs from the Weaver's
-/// `safe_operator_text`. That one escapes every non-ASCII byte because it guards
+/// `safe_weaver_text`. That one escapes every non-ASCII byte because it guards
 /// one small security-critical surface where being unreadable is cheaper than
 /// being wrong. A terminal that did the same would corrupt every ordinary message
 /// carrying a name, so this escapes exactly the bytes that can steer a terminal —

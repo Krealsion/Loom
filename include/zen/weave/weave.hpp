@@ -100,65 +100,65 @@ public:
             role, loom::Message(to_value(msg), self_, loom::WeaveId{}, correlation));
     }
 
-    // ---- deliberate office authorship (MSG-07) ------------------------------
-    // Holding an office is never speaking for it: `mail.send(...)` from a holder is personal
-    // speech. Speaking as the office is a deliberate act per statement:
+    // ---- deliberate role authorship (MSG-07) ------------------------------
+    // Holding a role is never speaking for it: `mail.send(...)` from a holder is personal
+    // speech. Speaking as the role is a deliberate act per statement:
     //
     //     mail.as_role("matchmaker").send(player, MatchCreated{server});
     //     mail.as_role("worker.a").send_to_role("dispatcher", JobDone{...});
     //
-    // Loom verifies the office then, and the recipient reads it with `authored_from_role()`.
+    // Loom verifies the role then, and the recipient reads it with `authored_from_role()`.
 
     /// This weave speaking as `role`, for the statements made through the view. It carries a
     /// name and no authority: every statement is verified at the bus. Not copyable or movable,
     /// with rvalue-qualified verbs, so it is used in one expression:
     /// `mail.as_role("worker.a").publish(WorkerOpen{...});`
-    class Office {
+    class Role {
     public:
-        Office(const Office&) = delete;
-        Office& operator=(const Office&) = delete;
-        Office(Office&&) = delete;
-        Office& operator=(Office&&) = delete;
+        Role(const Role&) = delete;
+        Role& operator=(const Role&) = delete;
+        Role(Role&&) = delete;
+        Role& operator=(Role&&) = delete;
 
-        /// Office-authored direct send. An invalid Ticket means authorship was refused (this weave
-        /// does not hold the office; `RoleAuthorshipDenied` on the tap) and nothing was queued.
+        /// Role-authored direct send. An invalid Ticket means authorship was refused (this weave
+        /// does not hold the role; `RoleAuthorshipDenied` on the tap) and nothing was queued.
         template <class T>
         loom::Ticket send(loom::WeaveId target, const T& msg,
                           std::uint64_t correlation = 0) && {
-            return mail_.bus_.office_send(
+            return mail_.bus_.role_send(
                 role_, target, loom::Message(to_value(msg), mail_.self_, loom::WeaveId{},
                                              correlation));
         }
 
-        /// Office-authored send to whoever holds `to_role`: authorship is verified now, the
+        /// Role-authored send to whoever holds `to_role`: authorship is verified now, the
         /// destination resolves at delivery.
         template <class T>
         loom::Ticket send_to_role(std::string_view to_role, const T& msg,
                                   std::uint64_t correlation = 0) && {
-            return mail_.bus_.office_send_to_role(
+            return mail_.bus_.role_send_to_role(
                 role_, to_role, loom::Message(to_value(msg), mail_.self_, loom::WeaveId{},
                                               correlation));
         }
 
-        /// Office-authored publication. `authored` says whether the office spoke; `recipients`
+        /// Role-authored publication. `authored` says whether the role spoke; `recipients`
         /// counts the fanout only when it did.
         template <class T>
-        loom::OfficePublication publish(const T& msg, std::uint64_t correlation = 0) && {
-            return mail_.bus_.office_publish(
+        loom::RolePublication publish(const T& msg, std::uint64_t correlation = 0) && {
+            return mail_.bus_.role_publish(
                 role_, loom::Message(to_value(msg), mail_.self_, loom::WeaveId{}, correlation));
         }
 
-        /// Claim `observation` as this office (SENSE-04). The claim-set must declare the shape
-        /// and this weave must hold the office now. A refusal stores nothing, and is never made a
+        /// Claim `observation` as this role (SENSE-04). The claim-set must declare the shape
+        /// and this weave must hold the role now. A refusal stores nothing, and is never made a
         /// personal claim instead.
         template <class T>
         loom::SenseClaimResult claim(const T& observation) && {
-            return mail_.bus_.office_claim(role_, to_value(observation));
+            return mail_.bus_.role_claim(role_, to_value(observation));
         }
 
     private:
         friend class Mail;
-        Office(Mail& mail, std::string_view role) : mail_(mail), role_(role) {}
+        Role(Mail& mail, std::string_view role) : mail_(mail), role_(role) {}
 
         Mail& mail_;
         std::string_view role_;
@@ -166,13 +166,13 @@ public:
 
     /// Speak as `role` for the statements chained onto the result. This call checks and grants
     /// nothing; each statement is verified at the bus.
-    Office as_role(std::string_view role) { return Office(*this, role); }
+    Role as_role(std::string_view role) { return Role(*this, role); }
 
     // ---- Senses (SENSE-01..05; docs/reference/senses.md) --------------------
 
     /// Claim `observation` personally: "this is what I most recently claim is so". `T` must be
     /// in this weave's `Claims<...>`. Visible from this call on, so a reader dispatched later
-    /// sees it. A role holder's personal claim is not an office claim: use
+    /// sees it. A role holder's personal claim is not a role claim: use
     /// `as_role(R).claim(...)`.
     template <class T>
     loom::SenseClaimResult claim(const T& observation) {
@@ -187,23 +187,23 @@ public:
         return bus_.observe(author, schema_of<T>());
     }
 
-    /// The latest claim made as the office `role`. After the role moves this is still the
-    /// predecessor's, with `by.office_holder_is_current = false`; the successor has claimed
-    /// nothing until it does. The strict reading is `if (r && r.by.office_holder_is_current)`.
+    /// The latest claim made as the role `role`. After the role moves this is still the
+    /// predecessor's, with `by.role_holder_is_current = false`; the successor has claimed
+    /// nothing until it does. The strict reading is `if (r && r.by.role_holder_is_current)`.
     template <class T>
-    loom::SenseReading latest_from_office(std::string_view role) {
-        return bus_.observe_office(role, schema_of<T>());
+    loom::SenseReading latest_from_role(std::string_view role) {
+        return bus_.observe_role(role, schema_of<T>());
     }
 
     /// Was this delivery deliberately authored as `role`, verified when it was authored? False
     /// for the same holder's personal speech, and for an empty `role`. A fact about the
-    /// statement, not about now. Trust the office through this, the exact weave through
+    /// statement, not about now. Trust the role through this, the exact weave through
     /// `sender()`.
     bool authored_from_role(std::string_view role) const {
         return in_.provenance.authored_from_role(role);
     }
 
-    /// The office this delivery was deliberately authored as; empty for personal speech.
+    /// The role this delivery was deliberately authored as; empty for personal speech.
     std::string_view authored_role() const { return in_.provenance.authored_role(); }
 
     // ---- authenticated lifecycle conversation (ANS-01, LIFE-04) -------------
@@ -270,10 +270,10 @@ public:
     }
 
     // ---- Joint publication -----------------------------------------------------
-    // A claimant offers the next value of a claim it declared, for the operation an operator
-    // named; an operator holding a host-minted `JointAuthority` binds, commits, cancels, reads
+    // A claimant offers the next value of a claim it declared, for the operation an initiator
+    // named; an initiator holding a host-minted `JointAuthority` binds, commits, cancels, reads
     // and releases. The bus authenticates each verb against this Mail's live delivery. A loaded
-    // weave can offer; its operator verbs are refused `NoLiveDelivery`.
+    // weave can offer; its initiator verbs are refused `NoLiveDelivery`.
     // docs/reference/joint-publication.md
 
     /// Claimant: offer `next` as my key's value for `op`; nothing is published yet.
@@ -282,12 +282,12 @@ public:
         return bus_.offer_claim(op, to_value(next));
     }
 
-    /// Operator: bind the exact claimants and revisions of `keys`.
+    /// Initiator: bind the exact claimants and revisions of `keys`.
     loom::JointBegin begin_joint(const loom::JointAuthority& authority,
                                  std::vector<loom::ClaimKey> keys) {
         return bus_.begin_joint(authority, std::move(keys));
     }
-    /// Operator: publish. `ok` is the commitment, and nothing else is.
+    /// Initiator: publish. `ok` is the commitment, and nothing else is.
     loom::JointResult commit_joint(const loom::JointAuthority& authority, std::uint64_t op) {
         return bus_.commit_joint(authority, op);
     }
@@ -297,7 +297,7 @@ public:
     loom::JointStatus joint_status(const loom::JointAuthority& authority, std::uint64_t op) {
         return bus_.joint_status(authority, op);
     }
-    /// Operator: retire a terminal record this weave has consumed; the operation then reads
+    /// Initiator: retire a terminal record this weave has consumed; the operation then reads
     /// Missing and its slot is free.
     loom::JointResult release_joint(const loom::JointAuthority& authority, std::uint64_t op) {
         return bus_.release_joint(authority, op);
@@ -309,7 +309,7 @@ private:
     loom::WeaveId self_;
 };
 
-/// Name one latest-claim key as an operator binds it: by the exact weave, or by the office whose
+/// Name one latest-claim key as an initiator binds it: by the exact weave, or by the role whose
 /// holder the bus resolves at begin.
 template <class T>
 loom::ClaimKey claim_key(loom::WeaveId claimant) {

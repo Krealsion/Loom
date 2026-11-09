@@ -106,7 +106,7 @@ public:
     std::vector<std::shared_ptr<const loom::Schema>> accepted_schemas() const override {
         // Usually empty: AcceptMode::AnyRegistered widens the door set at delivery, but only to
         // shapes the registry can resolve, and a notification shape that only ever travels to
-        // the operator has nobody else to declare it. Declaring it here is how a host says "this
+        // the weaver has nobody else to declare it. Declaring it here is how a host says "this
         // window expects to be told this"; a listed door is gated exactly as the wildcard is.
         return vocabulary_;
     }
@@ -157,7 +157,7 @@ ConsoleEngine::ConsoleEngine(loom::Switchboard& bus,
     weave_ = weave.get();
     // The most-granted participant (broad send), but a grant, not host root authority. Replies
     // arrive through AcceptMode::AnyRegistered; the tap and discovery are direct host-side bus
-    // queries, which suit a single operator.
+    // queries, which suit a single weaver.
     console_id_ = bus_.register_weave(std::move(weave), loom::Grant{}.allow_any(),
                                       loom::AcceptMode::AnyRegistered);
     tap_obs_ = bus_.add_observer([this](const loom::BusEvent& e) { record_tap(e); });
@@ -200,7 +200,7 @@ std::vector<WeaveInfo> ConsoleEngine::weaves() const {
     std::vector<WeaveInfo> out;
     for (loom::WeaveId id : bus_.list_weaves()) {
         if (id == console_id_) {
-            continue; // the console is the operator's hands, not a send target
+            continue; // the console is the weaver's hands, not a send target
         }
         WeaveInfo info;
         info.id = id;
@@ -230,7 +230,7 @@ void ConsoleEngine::record_arrival(const loom::Message& in) {
     if (!mine) {
         return;
     }
-    // The label this arrival is also readable under, so an operator reading `buffer` and a
+    // The label this arrival is also readable under, so a weaver reading `buffer` and a
     // command reading its own answer are naming the same thing. The push has already
     // happened, so the newest retained label is base + size.
     BufferEntry e{"m" + std::to_string(reply_history().evicted() + reply_history().size()),
@@ -380,7 +380,7 @@ Evicted ConsoleEngine::evicted() const {
 
 std::optional<BufferEntry> ConsoleEngine::buffer_at(std::size_t label_number) const {
     // `label_number` is the N of `mN`: a stable identity over every reply this console has
-    // received, not a position in the retained window, so an operator's `$m7.count` never
+    // received, not a position in the retained window, so a weaver's `$m7.count` never
     // becomes a different reply once eviction begins. Outside the retained range this refuses,
     // as it does for a label that never arrived.
     const BoundedHistory<ConsoleArrival, kConsoleBufferCapacity>& buf = reply_history();
@@ -433,7 +433,7 @@ std::optional<loom::Cell> resolve_ref_from(const Console& console, const Ref& re
     }
     std::optional<BufferEntry> entry = console.buffer_at(n);
     if (!entry) {
-        // Two different absences, and the operator needs them apart: a label that never arrived is
+        // Two different absences, and the weaver needs them apart: a label that never arrived is
         // a typo, a label that was EVICTED is the bounded window telling the truth about its own
         // horizon. A reference never silently resolves to whatever now occupies that slot.
         if (n != 0 && n <= console.evicted().buffer) {
@@ -477,7 +477,7 @@ Composed ConsoleEngine::compose(loom::WeaveId target, std::string_view name,
         c = run_compose_ladder(*this, target, name, version, args);
     }
     // The ladder sends through assemble_and_send above, which is where the conversation was
-    // opened; carry its handle out so an operator one-liner is attributable too.
+    // opened; carry its handle out so a weaver one-liner is attributable too.
     c.ask = (c.status == Composed::Status::Ready) ? last_ask_ : 0;
     return c;
 }

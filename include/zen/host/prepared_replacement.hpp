@@ -36,7 +36,7 @@ public:
     /// The dynamic start: resolve the incumbent from the role, load the candidate sealed through
     /// the Kernel, and begin, or leave the world as it was.
     struct Start {
-        WeaveId operator_id{};
+        WeaveId initiator_id{};
         WeaveId coordinator{};
         std::string role;
         std::string candidate_name;
@@ -47,7 +47,7 @@ public:
     /// The existing-candidate start: the caller holds a sealed candidate already, native or
     /// loaded its own way. The facade begins around it and cleans nothing up.
     struct StartExisting {
-        WeaveId operator_id{};
+        WeaveId initiator_id{};
         WeaveId coordinator{};
         std::string role;
         WeaveId candidate{};
@@ -89,7 +89,7 @@ public:
 
     PreparedReplacement(PreparedReplacement&& other) noexcept
         : bus_(other.bus_), kernel_(other.kernel_), id_(other.id_),
-          operator_id_(other.operator_id_), candidate_(other.candidate_),
+          initiator_id_(other.initiator_id_), candidate_(other.candidate_),
           incumbent_(other.incumbent_), role_(std::move(other.role_)),
           candidate_name_(std::move(other.candidate_name_)) {
         other.unbind();
@@ -99,7 +99,7 @@ public:
             bus_ = other.bus_;
             kernel_ = other.kernel_;
             id_ = other.id_;
-            operator_id_ = other.operator_id_;
+            initiator_id_ = other.initiator_id_;
             candidate_ = other.candidate_;
             incumbent_ = other.incumbent_;
             role_ = std::move(other.role_);
@@ -139,7 +139,7 @@ public:
             return {false, StartStage::CandidateLoad, TxnReason::None, false, loaded.error};
         }
         const TxnResult begun = bus_->begin_prepared_replacement(
-            s.operator_id, s.coordinator, incumbent, loaded.id, s.role, s.budget);
+            s.initiator_id, s.coordinator, incumbent, loaded.id, s.role, s.budget);
         if (!begun.ok) {
             StartResult r{false, StartStage::BeginTransaction, begun.why, false, {}};
             // The one cleanup the facade owns, for a candidate it loaded; the begin refusal
@@ -150,7 +150,7 @@ public:
             }
             return r;
         }
-        bind(begun.id, s.operator_id, loaded.id, incumbent, std::move(s.role),
+        bind(begun.id, s.initiator_id, loaded.id, incumbent, std::move(s.role),
              std::move(s.candidate_name));
         return {true, StartStage::None, TxnReason::None, false, {}};
     }
@@ -167,11 +167,11 @@ public:
             return {false, StartStage::NoRoleHolder, TxnReason::None, false, {}};
         }
         const TxnResult begun = bus_->begin_prepared_replacement(
-            s.operator_id, s.coordinator, incumbent, s.candidate, s.role, s.budget);
+            s.initiator_id, s.coordinator, incumbent, s.candidate, s.role, s.budget);
         if (!begun.ok) {
             return {false, StartStage::BeginTransaction, begun.why, false, {}};
         }
-        bind(begun.id, s.operator_id, s.candidate, incumbent, std::move(s.role),
+        bind(begun.id, s.initiator_id, s.candidate, incumbent, std::move(s.role),
              std::string{});
         return {true, StartStage::None, TxnReason::None, false, {}};
     }
@@ -213,19 +213,19 @@ public:
             Message(to_value(Activated{sequence})), sequence);
     }
 
-    /// Abort, as the operator this handle started with. Unloads, pumps, consumes and retries
+    /// Abort, as the initiator this handle started with. Unloads, pumps, consumes and retries
     /// nothing; the substrate discards the sealed candidate.
-    TxnResult abort() { return bus_->abort_prepared_replacement(id_, operator_id_); }
+    TxnResult abort() { return bus_->abort_prepared_replacement(id_, initiator_id_); }
 
     /// The transaction's state, asked of the Switchboard each time (`transaction_state(id())`).
     /// Once the outcome has been collected, the substrate answers as for an unknown id.
     TxnState state() const { return bus_->transaction_state(id_); }
 
-    /// Collect this transaction's terminal outcome: once, by the exact operator life that began
+    /// Collect this transaction's terminal outcome: once, by the exact initiator life that began
     /// it, and never a sibling transaction's. `TxnReason` arrives as the substrate recorded it.
     std::optional<TxnOutcome> take_outcome() {
         TxnOutcome out{};
-        if (bus_->take_outcome(operator_id_, id_, out)) {
+        if (bus_->take_outcome(initiator_id_, id_, out)) {
             return out;
         }
         return std::nullopt;
@@ -248,7 +248,7 @@ private:
     void bind(TxnId id, WeaveId op, WeaveId candidate, WeaveId incumbent, std::string role,
               std::string candidate_name) {
         id_ = id;
-        operator_id_ = op;
+        initiator_id_ = op;
         candidate_ = candidate;
         incumbent_ = incumbent;
         role_ = std::move(role);
@@ -256,7 +256,7 @@ private:
     }
     void unbind() noexcept {
         id_ = TxnId{};
-        operator_id_ = WeaveId{};
+        initiator_id_ = WeaveId{};
         candidate_ = WeaveId{};
         incumbent_ = WeaveId{};
         role_.clear();
@@ -266,7 +266,7 @@ private:
     Switchboard* bus_;
     Kernel* kernel_ = nullptr;
     TxnId id_{};
-    WeaveId operator_id_{};
+    WeaveId initiator_id_{};
     WeaveId candidate_{};
     WeaveId incumbent_{};
     std::string role_;

@@ -650,7 +650,7 @@ TEST_CASE("a self-describing weave cannot also be wildcard-accepting") {
 }
 
 TEST_CASE("a wildcard weave that does NOT describe itself is unaffected") {
-    // What the console and the bridge's operator proxy actually are: a raw
+    // What the console and the bridge's connection proxy actually are: a raw
     // loom::Weave carrying no substrate doors at all.
     Switchboard bus;
     CHECK_NOTHROW(
@@ -679,7 +679,7 @@ TEST_CASE("the answer describes the holder that answered, and goes stale on repl
     CHECK(before.count("StartTimer v1") == 1);
     CHECK(before.count("Outer v1") == 0);
 
-    // The office changes hands. The old answer is not corrected, invalidated or
+    // The role changes hands. The old answer is not corrected, invalidated or
     // resent -- it remains exactly what it always was: a snapshot.
     bus.unregister_weave(id);
     auto second = std::make_unique<Nested>();

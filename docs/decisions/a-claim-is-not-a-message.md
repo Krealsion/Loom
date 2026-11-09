@@ -50,10 +50,10 @@ appears anywhere in the type, so `other.sense.health = 9000;` has no spelling.
 The cost is a copy per read; the thing bought is that coupling a reader to a
 producer's memory is not a discipline anyone has to maintain.
 
-### Two key spaces, not one keyed by "who currently holds the office"
+### Two key spaces, not one keyed by "who currently holds the role"
 
-Personal claims are keyed by `WeaveId`; office claims by role name — separate
-maps. This makes "holding the office is not claiming as the office"
+Personal claims are keyed by `WeaveId`; role claims by role name — separate
+maps. This makes "holding the role is not claiming as the role"
 **structural** rather than a check somebody could forget, and it is
 [MSG-07](../laws/messaging-laws.md#msg-07--role-authorship-is-explicit)'s law in
 a new category, reusing the same `as_role(...)` grammar because it is the same
@@ -62,8 +62,8 @@ law.
 ### Stale claims are stamped, never withheld
 
 After a role moves, a role-bound reading returns the predecessor's claim with
-`office_holder_is_current = false`. The rejected alternative — return nothing —
-collapses *"this office has never claimed"* and *"this office's claim is the
+`role_holder_is_current = false`. The rejected alternative — return nothing —
+collapses *"this role has never claimed"* and *"this role's claim is the
 previous holder's"* into one empty answer. Those are different facts, and the
 implementation discipline forbids an ambiguous empty result where refusal, stale
 and missing are meaningfully different. A reader wanting the strict view writes
@@ -74,7 +74,7 @@ one visible line, and it being visible is the point.
 Reading requires an observe rule the host grants explicitly. Reusing a send rule
 was the convenient option and was rejected by name: a send rule answers *"may you
 emit this shape **there**"*, a read answers *"may you pull it"*, and reporting one
-as the other sends an operator to edit the wrong thing.
+as the other sends a weaver to edit the wrong thing.
 
 Because the floor is empty, **no weave gains any reach from Senses
 existing**. That is what keeps a latest-claim repository from becoming a

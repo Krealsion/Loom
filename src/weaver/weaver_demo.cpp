@@ -5,7 +5,7 @@
 // messages, what one live session may say. The user decides, the Weaver delegates (one
 // GrantAuthority), the session acts (a tiny baseline) and the Switchboard enforces. This file
 // is the host: the mounting, which is the whole security posture, and a REPL skin over
-// `loom::ConsoleEngine` that knows nothing about authority: the operator approves by composing
+// `loom::ConsoleEngine` that knows nothing about authority: the weaver approves by composing
 // `zen.ApproveAuthority` naming the prompt shown (`$mN.prompt`). It prints the walk to try.
 
 #include <zen/console/console.hpp>
@@ -59,7 +59,7 @@ struct Nothing {
     ZEN_SHAPE(Nothing, 1, ZEN_FIELD(n));
 };
 
-/// An ordinary service in an ordinary office. It reports who it heard from,
+/// An ordinary service in an ordinary role. It reports who it heard from,
 /// which is the fact the whole architecture is arranged to protect.
 class Service final : public loom::WeaveBase<Service, Nothing, loom::Accept<Work>> {
 public:
@@ -247,17 +247,17 @@ void cmd_tap(const loom::ConsoleEngine& engine, std::size_t last) {
 int main() {
     loom::Switchboard bus;
 
-    // THE OPERATOR'S WINDOW. It declares the shapes that only ever travel TO an
-    // operator: `AcceptMode::AnyRegistered` resolves a shape through the
+    // THE WEAVER'S WINDOW. It declares the shapes that only ever travel TO a
+    // weaver: `AcceptMode::AnyRegistered` resolves a shape through the
     // registry, and a notification nobody else accepts is in no registry. This
     // is the console saying what it is for — not a grant, and not a bypass.
     loom::ConsoleEngine engine(bus, {loom::schema_of<loom::AuthorityPrompt>(),
                                      loom::schema_of<loom::AuthorityDescription>(),
                                      loom::schema_of<loom::Ack>(),
                                      loom::schema_of<loom::Refused>()});
-    const loom::WeaveId operator_seat = engine.console_id();
+    const loom::WeaveId weaver_seat = engine.console_id();
 
-    // THE SERVICE — holds an office, speaks to nobody.
+    // THE SERVICE — holds a role, speaks to nobody.
     auto service = std::make_unique<Service>();
     Service* service_raw = service.get();
     const loom::WeaveId service_id =
@@ -292,20 +292,20 @@ int main() {
     // ceiling. It may say "no" to anyone who reaches it; it may say "yes" to
     // exactly two weaves.
     loom::Grant weaver_grant;
-    weaver_grant.allow("zen.AuthorityPrompt", 3, operator_seat);
+    weaver_grant.allow("zen.AuthorityPrompt", 3, weaver_seat);
     weaver_grant.allow("zen.AuthorityGranted", 1, session_id);
-    weaver_grant.allow("zen.AuthorityDescription", 1, operator_seat);
+    weaver_grant.allow("zen.AuthorityDescription", 1, weaver_seat);
     weaver_grant.allow("zen.AuthorityDescription", 1, session_id);
-    weaver_grant.allow("zen.Ack", 1, operator_seat);
+    weaver_grant.allow("zen.Ack", 1, weaver_seat);
     weaver_grant.allow_to_any("zen.Refused", 1);
 
-    auto weaver = std::make_unique<loom::Weaver>(std::move(cap), operator_seat);
+    auto weaver = std::make_unique<loom::Weaver>(std::move(cap), weaver_seat);
     loom::Weaver* weaver_raw = weaver.get();
     const loom::WeaveId weaver_id =
         bus.register_weave(std::move(weaver), std::move(weaver_grant), kWeaverRole);
     weaver_raw->zen_set_self(weaver_id);
 
-    std::cout << "zen weaver demo — you are the operator (weave " << operator_seat.value << ").\n"
+    std::cout << "zen weaver demo — you are the weaver (weave " << weaver_seat.value << ").\n"
               << "  weaver  " << weaver_id.value << "   holds one GrantAuthority over the session\n"
               << "  session " << session_id.value << "   may ask the weaver; may NOT speak Work\n"
               << "  service " << service_id.value << "   holds role " << kServiceRole << "\n\n"
@@ -363,7 +363,7 @@ int main() {
             std::cout << "  unknown command: " << cmd << '\n';
         }
         // Anything a command caused is on the tap; show only what is new, so a
-        // refusal is never something the operator has to go looking for.
+        // refusal is never something the weaver has to go looking for.
         engine.pump();
         if (engine.tap().size() > tap_before) {
             std::cout << "  --- bus ---\n";

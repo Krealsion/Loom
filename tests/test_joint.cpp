@@ -177,13 +177,13 @@ struct OpState {
     ZEN_SHAPE(OpState, 1, ZEN_FIELD(op));
 };
 
-/// The operator: holds the host-minted authority and the two keys it coordinates -- and
+/// The initiator: holds the host-minted authority and the two keys it coordinates -- and
 /// accepts the bus's word that an operation of its ended, re-reading the record for it;
 /// the bus's word that an application of one SETTLED, re-read the same way; and the
 /// dispatch refusal of its own sends, so a
 /// held participant is met by exact attempt.
-class Operator
-    : public WeaveBase<Operator, OpState, Accept<Cmd, JointEnded, JointApplied, DispatchRefused>,
+class Initiator
+    : public WeaveBase<Initiator, OpState, Accept<Cmd, JointEnded, JointApplied, DispatchRefused>,
                        Emit<Cmd>> {
 public:
     void on(const JointEnded& said, Mail& mail) {
@@ -202,7 +202,7 @@ public:
     }
     void on(const Cmd& c, Mail& mail) {
         if (c.verb == "nudge") {
-            // An ordinary send of this operator's to the weave whose id is `op`.
+            // An ordinary send of this initiator's to the weave whose id is `op`.
             last_send = mail.send(WeaveId{static_cast<std::uint64_t>(c.op)}, Cmd{"note"});
         } else if (c.verb == "begin") {
             begun = mail.begin_joint(authority, keys);
@@ -271,8 +271,8 @@ void tell(Switchboard& bus, WeaveId who, Cmd cmd) {
     (void)bus.send(who, Message(to_value(cmd)));
 }
 
-/// The whole rig: a document owner in one office, a view owner in another, an operator
-/// whose ceiling is exactly those two offices, and a reader authorized for both claims.
+/// The whole rig: a document owner in one role, a view owner in another, an initiator
+/// whose ceiling is exactly those two roles, and a reader authorized for both claims.
 struct Rig {
     Switchboard bus;
     WeaveId doc{};
@@ -280,15 +280,15 @@ struct Rig {
     WeaveId view{};
     View* v = nullptr;
     WeaveId op{};
-    Operator* o = nullptr;
+    Initiator* o = nullptr;
     WeaveId reader{};
     Pair* r = nullptr;
 
     Rig() {
         std::tie(doc, d) = put<Doc>(bus, Grant{}, "joint.doc");
         std::tie(view, v) = put<View>(bus, Grant{}, "joint.view");
-        std::tie(op, o) = put<Operator>(bus, Grant{}.allow_to_any(Cmd::zen_name, Cmd::zen_version),
-                                       "joint.operator");
+        std::tie(op, o) = put<Initiator>(bus, Grant{}.allow_to_any(Cmd::zen_name, Cmd::zen_version),
+                                       "joint.initiator");
         std::tie(reader, r) = put<Pair>(bus, reads_both(), "");
         r->doc = doc;
         r->view = view;
@@ -343,7 +343,7 @@ TEST_CASE("one commit changes both claims, and a reader sees both-old or both-ne
     CHECK(rig.view_shown() == "hidden");
     CHECK(rig.bus.joint_pending() == 1);
     CHECK(rig.bus.joint_retained_bytes() > 0);
-    // ONE POLL: a read, the commit, a read. The commit is one delivery to the operator.
+    // ONE POLL: a read, the commit, a read. The commit is one delivery to the initiator.
     rig.read();
     rig.commit(id);
     rig.read();
@@ -357,7 +357,7 @@ TEST_CASE("one commit changes both claims, and a reader sees both-old or both-ne
     CHECK(rig.bus.joint_status(id).state == JointState::Committed);
     CHECK(rig.bus.joint_pending() == 0);
     CHECK(rig.bus.joint_retained_bytes() == 0);
-    // THE AUTHORSHIP IS THE CLAIMANT'S, not the operator's: the published claim is still
+    // THE AUTHORSHIP IS THE CLAIMANT'S, not the initiator's: the published claim is still
     // the document owner's own, at its exact incarnation.
     const SenseReading s = rig.bus.observe(rig.doc, DocFact::zen_name, DocFact::zen_version);
     CHECK(s.by.author == rig.doc);
@@ -462,17 +462,17 @@ TEST_CASE("a removed claimant aborts the operation and its offers are released")
 
 TEST_CASE("every unauthorized or mistaken act is refused by name and changes nothing") {
     Rig rig;
-    SUBCASE("a second weave presenting the operator's authority is not the operator") {
+    SUBCASE("a second weave presenting the initiator's authority is not the initiator") {
         // THE COPY IS REFUSED AT THE AUTHORITY, before any operation is looked at. A second
-        // operator's OWN valid authority named with this operator's operation id does reach the
-        // record: that is the foreign-operator case at the end.
-        auto [other_id, other] = put<Operator>(rig.bus, Grant{}, "joint.other");
+        // initiator's OWN valid authority named with this initiator's operation id does reach the
+        // record: that is the foreign-initiator case at the end.
+        auto [other_id, other] = put<Initiator>(rig.bus, Grant{}, "joint.other");
         other->authority = rig.o->authority; // copied, as a capability can be
         other->keys = rig.o->keys;
         tell(rig.bus, other_id, Cmd{"begin"});
         rig.bus.drain_until_idle();
         CHECK_FALSE(other->begun.ok);
-        CHECK(other->begun.why == JointRefusal::NotOperator);
+        CHECK(other->begun.why == JointRefusal::NotInitiator);
     }
     SUBCASE("another board's authority is foreign here") {
         Switchboard decoy;
@@ -549,7 +549,7 @@ TEST_CASE("every unauthorized or mistaken act is refused by name and changes not
         CHECK(rig.bus.joint_retained_bytes() == 0);
         CHECK(rig.doc_path() == "A");
     }
-    SUBCASE("the operator's verbs are refused outside a live delivery") {
+    SUBCASE("the initiator's verbs are refused outside a live delivery") {
         // A host holding a bus is root; the gated door needs a live delivery of the
         // caller, and here nobody is being delivered to.
         const JointBegin b = rig.bus.begin_joint_as(rig.op, rig.o->authority, rig.o->keys);
@@ -602,7 +602,7 @@ static void joint_claimant_offers(const char* image) {
             rig.bus.observe(loaded.id, DocFact::zen_name, DocFact::zen_version);
         CHECK(from_value<DocFact>(*d.value).path == "B");
         // THE APPLICATION SETTLES: once the view
-        // has been shown as well, the operation says Applied and the operator is told once.
+        // has been shown as well, the operation says Applied and the initiator is told once.
         CHECK(rig.bus.application_of(loaded.id) == JointApplication::Applied);
         CHECK(rig.bus.joint_status(id).application == JointApplication::Pending); // the view
         tell(rig.bus, rig.view, Cmd{"note"});
@@ -668,7 +668,7 @@ ZEN_BOXED_TWIN("a boxed claimant offers into a joint publication and is shown it
                joint_claimant_offers, ZEN_BOX_JOINT)
 
 TEST_CASE("one live operation per key, bounded slots and keys, a terminal record kept until its "
-              "operator releases it, and genuine exhaustion in words") {
+              "initiator releases it, and genuine exhaustion in words") {
     Rig rig;
     const std::uint64_t first = rig.prepare();
     tell(rig.bus, rig.op, Cmd{"begin"});
@@ -690,23 +690,23 @@ TEST_CASE("one live operation per key, bounded slots and keys, a terminal record
     CHECK(rig.o->begun.why == JointRefusal::Exhausted);
     rig.o->keys = {claim_key<DocFact>(rig.doc), claim_key<ViewFact>(rig.view)};
     // A TERMINAL RECORD IS KEPT, readable by its
-    // operator and by the host, until its operator releases it: its outcome is owed to the
-    // operator that began it, and no begin -- its own or anybody's -- takes it.
+    // initiator and by the host, until its initiator releases it: its outcome is owed to the
+    // initiator that began it, and no begin -- its own or anybody's -- takes it.
     tell(rig.bus, rig.op, Cmd{"status", static_cast<std::int64_t>(first)});
     rig.bus.drain_until_idle();
     CHECK(rig.o->status.state == JointState::Aborted);
     CHECK(rig.o->status.reason == JointRefusal::Cancelled);
     CHECK(rig.bus.joint_status(first).state == JointState::Aborted);
     CHECK(rig.bus.joint_records() == 1);
-    // A STRANGER PRESENTING THE OPERATOR'S AUTHORITY RELEASES NOTHING.
-    auto [other_id, other] = put<Operator>(rig.bus, Grant{}, "joint.other");
+    // A STRANGER PRESENTING THE INITIATOR'S AUTHORITY RELEASES NOTHING.
+    auto [other_id, other] = put<Initiator>(rig.bus, Grant{}, "joint.other");
     other->authority = rig.o->authority;
     tell(rig.bus, other_id, Cmd{"release", static_cast<std::int64_t>(first)});
     rig.bus.drain_until_idle();
     CHECK_FALSE(other->released.ok);
-    CHECK(other->released.why == JointRefusal::NotOperator);
+    CHECK(other->released.why == JointRefusal::NotInitiator);
     CHECK(rig.bus.joint_status(first).state == JointState::Aborted);
-    // THE OPERATOR'S RELEASE: Missing to it and to the host, the slot free, the id never
+    // THE INITIATOR'S RELEASE: Missing to it and to the host, the slot free, the id never
     // handed out again, and a second release naming nothing.
     tell(rig.bus, rig.op, Cmd{"release", static_cast<std::int64_t>(first)});
     rig.bus.drain_until_idle();
@@ -751,7 +751,7 @@ TEST_CASE("one live operation per key, bounded slots and keys, a terminal record
     CHECK(rig.bus.joint_status(fresh).state == JointState::Preparing);
     CHECK(rig.bus.joint_status(kept[0]).state == JointState::Missing);
     CHECK(rig.bus.joint_records() == Switchboard::kMaxJointOperations);
-    // ...and what an operator keeps, it keeps: released here, so nothing is left owed.
+    // ...and what an initiator keeps, it keeps: released here, so nothing is left owed.
     tell(rig.bus, rig.op, Cmd{"cancel", static_cast<std::int64_t>(fresh)});
     tell(rig.bus, rig.op, Cmd{"release", static_cast<std::int64_t>(fresh)});
     for (std::size_t i = 1; i < kept.size(); ++i) {
@@ -770,7 +770,7 @@ TEST_CASE("the commit's exchange runs no participant code") {
     rig.bus.drain_until_idle();
     REQUIRE(rig.o->committed.ok);
     // The owners were never entered: no delivery, no hook (the hook runs at THEIR next
-    // delivery or snapshot, not inside the operator's).
+    // delivery or snapshot, not inside the initiator's).
     CHECK(rig.d->state().deliveries == doc_before);
     CHECK(rig.v->state().deliveries == view_before);
     CHECK(rig.d->state().published_seen == 0);
@@ -780,7 +780,7 @@ TEST_CASE("the commit's exchange runs no participant code") {
     CHECK(rig.view_shown() == "B");
 }
 
-TEST_CASE("the operator is told when the bus ends its operation, and a stranger is not") {
+TEST_CASE("the initiator is told when the bus ends its operation, and a stranger is not") {
     SUBCASE("a bound participant removed: one notice, naming the operation and the reason") {
         Rig rig;
         const std::uint64_t id = rig.prepare();
@@ -797,19 +797,19 @@ TEST_CASE("the operator is told when the bus ends its operation, and a stranger 
         CHECK(rig.bus.joint_pending() == 0);
         CHECK(rig.bus.joint_retained_bytes() == 0);
     }
-    SUBCASE("a bound claim moved under an ordinary claim: no notice -- the owner answers; then its removal tells the operator once, with the record's reason") {
+    SUBCASE("a bound claim moved under an ordinary claim: no notice -- the owner answers; then its removal tells the initiator once, with the record's reason") {
         Rig rig;
         const std::uint64_t id = rig.prepare();
         tell(rig.bus, rig.doc, Cmd{"claim", 0, "A", 3}); // the document owner's own edit
         rig.bus.drain_until_idle();
         CHECK(rig.o->ended.empty());
         CHECK(rig.bus.joint_status(id).state == JointState::Aborted);
-        // The operator meets the abort at its next verb, as the record says.
+        // The initiator meets the abort at its next verb, as the record says.
         rig.commit(id);
         rig.bus.drain_until_idle();
         CHECK_FALSE(rig.o->committed.ok);
         CHECK(rig.o->committed.why == JointRefusal::WrongState);
-        // ...AND IF THAT OWNER IS THEN REMOVED, the operator is told -- the reply it might
+        // ...AND IF THAT OWNER IS THEN REMOVED, the initiator is told -- the reply it might
         // have been waiting on cannot come -- once, with the reason the record holds.
         (void)rig.bus.unregister_weave(rig.doc);
         rig.bus.drain_until_idle();
@@ -820,7 +820,7 @@ TEST_CASE("the operator is told when the bus ends its operation, and a stranger 
         rig.bus.drain_until_idle();
         CHECK(rig.o->ended.size() == 1); // once
     }
-    SUBCASE("an operator's own cancellation and a commitment are its own acts: no notice") {
+    SUBCASE("an initiator's own cancellation and a commitment are its own acts: no notice") {
         Rig rig;
         const std::uint64_t id = rig.prepare();
         tell(rig.bus, rig.op, Cmd{"cancel", static_cast<std::int64_t>(id)});
@@ -833,7 +833,7 @@ TEST_CASE("the operator is told when the bus ends its operation, and a stranger 
         REQUIRE(rig.o->committed.ok);
         CHECK(rig.o->ended.empty());
     }
-    SUBCASE("a forged notice makes the operator consult a record that says Preparing") {
+    SUBCASE("a forged notice makes the initiator consult a record that says Preparing") {
         Rig rig;
         const std::uint64_t id = rig.prepare();
         JointEnded forged;
@@ -1013,7 +1013,7 @@ static void joint_showing_fails(const char* image) {
         CHECK(d.by.author == loaded.id);
         CHECK(d.by.author_incarnation_is_current); // the incarnation that failed is this one
     }
-    // THE OPERATOR IS TOLD, ONCE, naming the participant and the office it was bound by;
+    // THE INITIATOR IS TOLD, ONCE, naming the participant and the role it was bound by;
     // it re-reads the record, which is the fact.
     rig.bus.drain_until_idle();
     REQUIRE(rig.o->applied.size() == 1);
@@ -1051,7 +1051,7 @@ static void joint_showing_fails(const char* image) {
     CHECK(probe_state(rig.bus, loaded.id, Switchboard::SnapshotAccess::Diagnostic).deliveries ==
           deliveries_before);
     CHECK(rig.o->applied.size() == 1); // said once
-    // UNRELATED WORK IS NOT HELD: the view claims and is read; the operator begins
+    // UNRELATED WORK IS NOT HELD: the view claims and is read; the initiator begins
     // another operation over other keys.
     tell(rig.bus, rig.view, Cmd{"claim", 0, "V", 0});
     rig.bus.drain_until_idle();
@@ -1075,7 +1075,7 @@ static void joint_showing_fails(const char* image) {
     }
     CHECK(rig.bus.application_of(loaded.id) == JointApplication::Applied);
     // ...and once the view has been shown as well, the operation is Applied and the
-    // operator is told again: a repair that re-settles is news.
+    // initiator is told again: a repair that re-settles is news.
     tell(rig.bus, rig.view, Cmd{"note"});
     rig.bus.drain_until_idle();
     CHECK(rig.bus.joint_status(id).application == JointApplication::Applied);
@@ -1182,7 +1182,7 @@ TEST_CASE("a native participant whose showing throws is recorded, then re-raised
         CHECK(rig.d->state().deliveries == deliveries); // the handler never ran
         CHECK(rig.bus.has_failed_application(rig.doc));
         CHECK(rig.bus.joint_status(id).application == JointApplication::Failed);
-        // NOT POISONED: the next turn delivers, and the operator's notice arrives in it.
+        // NOT POISONED: the next turn delivers, and the initiator's notice arrives in it.
         tell(rig.bus, rig.view, Cmd{"claim", 0, "V", 0});
         CHECK_NOTHROW(rig.bus.drain_until_idle());
         CHECK(rig.view_shown() == "V");
@@ -1493,27 +1493,27 @@ ZEN_BOXED_TWIN("the same doors through a box: a boxed participant's performed wr
                joint_doors_through_the_abi, ZEN_BOX_JOINT)
 
 // ---- outcome retention ------------------------
-// A committed operation's record is what its operator re-reads when told the application settled
+// A committed operation's record is what its initiator re-reads when told the application settled
 // (`zen.JointApplied`), and an aborted one's when told the operation ended (`zen.JointEnded`), so
-// no unrelated begin, under another operator over other keys, may take a record whose outcome is
+// no unrelated begin, under another initiator over other keys, may take a record whose outcome is
 // unconsumed: publication is not the end of an outcome's lifetime, and a queued notification is
 // not consumption.
 
 /// A second, UNRELATED coordination on the same bus: its own document and view owners in
-/// offices of their own, and its own operator with an authority over exactly those.
+/// roles of their own, and its own initiator with an authority over exactly those.
 struct Unrelated {
     WeaveId doc{};
     Doc* d = nullptr;
     WeaveId view{};
     View* v = nullptr;
     WeaveId op{};
-    Operator* o = nullptr;
+    Initiator* o = nullptr;
 
     explicit Unrelated(Switchboard& bus) {
         std::tie(doc, d) = put<Doc>(bus, Grant{}, "joint.doc2");
         std::tie(view, v) = put<View>(bus, Grant{}, "joint.view2");
-        std::tie(op, o) = put<Operator>(bus, Grant{}.allow_to_any(Cmd::zen_name, Cmd::zen_version),
-                                       "joint.operator2");
+        std::tie(op, o) = put<Initiator>(bus, Grant{}.allow_to_any(Cmd::zen_name, Cmd::zen_version),
+                                       "joint.initiator2");
         o->authority = bus.mint_joint_authority(op, {"joint.doc2", "joint.view2"});
         o->keys = {claim_key<DocFact>(doc), claim_key<ViewFact>(view)};
         tell(bus, doc, Cmd{"claim", 0, "A2", 1});
@@ -1534,7 +1534,7 @@ TEST_CASE("a committed publication's record outlives an unrelated coordination b
         rig.bus.drain_until_idle();
         REQUIRE(rig.o->committed.ok);
         REQUIRE(rig.bus.joint_status(id).application == JointApplication::Pending);
-        // ONE UNRELATED BEGIN, delivered: another operator, other keys, its own record.
+        // ONE UNRELATED BEGIN, delivered: another initiator, other keys, its own record.
         tell(rig.bus, other.op, Cmd{"begin"});
         rig.bus.drain_until_idle();
         REQUIRE_MESSAGE(other.o->begun.ok, name_of(other.o->begun.why));
@@ -1547,7 +1547,7 @@ TEST_CASE("a committed publication's record outlives an unrelated coordination b
         (void)rig.bus.snapshot_bytes(rig.view);
         CHECK(rig.d->state().path == "B");
         CHECK(rig.v->state().shown == "B");
-        // ...AND THE OPERATION SAYS SO, and its operator is told once and re-reads it.
+        // ...AND THE OPERATION SAYS SO, and its initiator is told once and re-reads it.
         CHECK(rig.bus.joint_status(id).state == JointState::Committed);
         CHECK(rig.bus.joint_status(id).application == JointApplication::Applied);
         rig.bus.drain_until_idle();
@@ -1560,7 +1560,7 @@ TEST_CASE("a committed publication's record outlives an unrelated coordination b
         CHECK(rig.bus.joint_status(other.o->op()).state == JointState::Preparing);
         CHECK(other.o->applied.empty());
         CHECK(rig.bus.joint_records() == 2);
-        // ...AND THE OUTCOME, CONSUMED, IS RELEASED BY ITS OPERATOR: Missing afterwards,
+        // ...AND THE OUTCOME, CONSUMED, IS RELEASED BY ITS INITIATOR: Missing afterwards,
         // the slot free, the unrelated operation still exactly where it was.
         tell(rig.bus, rig.op, Cmd{"release", static_cast<std::int64_t>(id)});
         rig.bus.drain_until_idle();
@@ -1578,7 +1578,7 @@ TEST_CASE("a committed publication's record outlives an unrelated coordination b
         REQUIRE(rig.o->committed.ok);
         // THE UNRELATED BEGIN IS QUEUED, NOT DELIVERED.
         tell(rig.bus, other.op, Cmd{"begin"});
-        // THE OWNERS ARE SHOWN NOW: the application settles and the notice to operator 1 is
+        // THE OWNERS ARE SHOWN NOW: the application settles and the notice to initiator 1 is
         // queued BEHIND the unrelated begin.
         (void)rig.bus.snapshot_bytes(rig.doc);
         (void)rig.bus.snapshot_bytes(rig.view);
@@ -1588,7 +1588,7 @@ TEST_CASE("a committed publication's record outlives an unrelated coordination b
         REQUIRE_MESSAGE(other.o->begun.ok, name_of(other.o->begun.why));
         REQUIRE(rig.o->applied.size() == 1);
         CHECK(rig.o->applied[0].applied_op() == id);
-        // WHAT THE OPERATOR RE-READ INSIDE THAT DELIVERY IS THE FACT, and it is there.
+        // WHAT THE INITIATOR RE-READ INSIDE THAT DELIVERY IS THE FACT, and it is there.
         CHECK(rig.o->applied_status[0].state == JointState::Committed);
         CHECK(rig.o->applied_status[0].application == JointApplication::Applied);
         CHECK(rig.bus.joint_status(id).state == JointState::Committed);
@@ -1596,13 +1596,13 @@ TEST_CASE("a committed publication's record outlives an unrelated coordination b
     }
 }
 
-TEST_CASE("an operation the bus ended keeps its record until its operator has consumed the notice, "
+TEST_CASE("an operation the bus ended keeps its record until its initiator has consumed the notice, "
               "past an unrelated begin") {
     Rig rig;
     Unrelated other(rig.bus);
     const std::uint64_t id = rig.prepare();
     // THE UNRELATED BEGIN IS QUEUED; then a bound participant is removed, which ends the
-    // operation and queues `zen.JointEnded` to its operator BEHIND that begin.
+    // operation and queues `zen.JointEnded` to its initiator BEHIND that begin.
     tell(rig.bus, other.op, Cmd{"begin"});
     (void)rig.bus.unregister_weave(rig.doc);
     rig.d = nullptr;
@@ -1617,7 +1617,7 @@ TEST_CASE("an operation the bus ended keeps its record until its operator has co
     CHECK(rig.bus.joint_status(id).state == JointState::Aborted);
     CHECK(rig.bus.joint_status(other.o->op()).state == JointState::Preparing);
     CHECK(rig.bus.joint_records() == 2);
-    // CONSUMED, THEN RELEASED: what the operator learned is its to keep or retire.
+    // CONSUMED, THEN RELEASED: what the initiator learned is its to keep or retire.
     tell(rig.bus, rig.op, Cmd{"release", static_cast<std::int64_t>(id)});
     rig.bus.drain_until_idle();
     CHECK(rig.o->released.ok);
@@ -1625,7 +1625,7 @@ TEST_CASE("an operation the bus ended keeps its record until its operator has co
     CHECK(rig.bus.joint_records() == 1);
 }
 
-TEST_CASE("an operator replaced, removed or dead leaves nobody to consume its records -- they are "
+TEST_CASE("an initiator replaced, removed or dead leaves nobody to consume its records -- they are "
               "released, and the claimants keep every fact of their own") {
     SUBCASE("removed while its committed operation awaits application") {
         Rig rig;
@@ -1637,7 +1637,7 @@ TEST_CASE("an operator replaced, removed or dead leaves nobody to consume its re
         std::unique_ptr<Weave> gone = rig.bus.unregister_weave(rig.op);
         REQUIRE(gone != nullptr);
         rig.o = nullptr;
-        // RELEASED WITH ITS OPERATOR: Missing to the host, the slot free.
+        // RELEASED WITH ITS INITIATOR: Missing to the host, the slot free.
         CHECK(rig.bus.joint_status(id).state == JointState::Missing);
         CHECK(rig.bus.joint_records() == 0);
         // THE CLAIMANTS ARE STILL SHOWN, from their own claim records, and apply; nothing
@@ -1660,11 +1660,11 @@ TEST_CASE("an operator replaced, removed or dead leaves nobody to consume its re
         rig.commit(id);
         rig.bus.drain_until_idle();
         REQUIRE(rig.o->committed.ok);
-        // The document owner fails its showing: held; the operator's notice is queued.
+        // The document owner fails its showing: held; the initiator's notice is queued.
         CHECK_THROWS_AS((void)rig.bus.snapshot_bytes(rig.doc), std::runtime_error);
         REQUIRE(rig.bus.has_failed_application(rig.doc));
         REQUIRE(rig.bus.joint_status(id).application == JointApplication::Failed);
-        // THE OPERATOR IS SWAPPED before that notice is delivered: same id, new incarnation.
+        // THE INITIATOR IS SWAPPED before that notice is delivered: same id, new incarnation.
         const JointAuthority retained = rig.o->authority; // the predecessor's, in the same member
         const std::string bytes = rig.bus.snapshot_bytes(rig.op);
         REQUIRE(rig.bus.swap_state(rig.op, bytes).revived);
@@ -1696,8 +1696,8 @@ TEST_CASE("an operator replaced, removed or dead leaves nobody to consume its re
             tell(rig.bus, rig.op, Cmd{"release", static_cast<std::int64_t>(id)});
             rig.bus.drain_until_idle();
             CHECK(rig.o->status.state == JointState::Missing);
-            CHECK(rig.o->status.reason == JointRefusal::NotOperator);
-            CHECK(rig.o->released.why == JointRefusal::NotOperator);
+            CHECK(rig.o->status.reason == JointRefusal::NotInitiator);
+            CHECK(rig.o->released.why == JointRefusal::NotInitiator);
             CHECK(rig.bus.joint_status(id).state == JointState::Missing);
             rig.o->authority = current;
         }
@@ -1718,7 +1718,7 @@ TEST_CASE("an operator replaced, removed or dead leaves nobody to consume its re
         CHECK(rig.d->state().path == "B");
         CHECK(rig.bus.application_of(rig.doc) == JointApplication::Applied);
         CHECK(rig.o->applied.size() == 1); // nothing more was owed: the record was released
-        // ...and the successor operator begins a fresh operation as ever.
+        // ...and the successor initiator begins a fresh operation as ever.
         const std::uint64_t fresh = rig.prepare("C");
         CHECK(rig.bus.joint_status(fresh).state == JointState::Preparing);
     }
@@ -1766,7 +1766,7 @@ TEST_CASE("a native owner that DECLINES a published value is recorded Declined a
         }
         CHECK(rig.d->state().published_seen == 1);
         // THE OPERATION SAYS DECLINED, NAMING THE OWNER -- the worst part decides, so it
-        // settles now, before the view has even been shown -- and the operator is told once.
+        // settles now, before the view has even been shown -- and the initiator is told once.
         {
             const JointStatus s = rig.bus.joint_status(id);
             CHECK(s.state == JointState::Committed);
@@ -1801,7 +1801,7 @@ TEST_CASE("a native owner that DECLINES a published value is recorded Declined a
         tell(rig.bus, rig.doc, Cmd{"note"});
         rig.bus.drain_until_idle();
         CHECK(rig.d->state().published_seen == 1);
-        // ...AND THE OPERATOR RELEASES THE RECORD IT HAS CONSUMED.
+        // ...AND THE INITIATOR RELEASES THE RECORD IT HAS CONSUMED.
         tell(rig.bus, rig.op, Cmd{"release", static_cast<std::int64_t>(id)});
         rig.bus.drain_until_idle();
         CHECK(rig.o->released.ok);
@@ -1968,18 +1968,18 @@ TEST_CASE("a refused replacement runs nothing of the incumbent's -- a candidate 
 }
 
 // ---- authority is exact, and reaches only its holder's own records ----------------------
-// A foreign operator's refused verb is judged by what it changed, not only by what it returned,
-// and a capability must not outlive the operator's life or incarnation (the reference page's
+// A foreign initiator's refused verb is judged by what it changed, not only by what it returned,
+// and a capability must not outlive the initiator's life or incarnation (the reference page's
 // authority section, and `JointAuthority`). The copied capability refused at the authority and
-// the operator's lifetime retiring its records are neighbouring cases above, not these.
+// the initiator's lifetime retiring its records are neighbouring cases above, not these.
 
-TEST_CASE("a foreign operator's valid authority reaches none of another operator's operation -- "
-              "refused NotOperator before the record is touched, and the owner still commits") {
+TEST_CASE("a foreign initiator's valid authority reaches none of another initiator's operation -- "
+              "refused NotInitiator before the record is touched, and the owner still commits") {
     Rig rig;
     const std::uint64_t id = rig.prepare();
     const std::size_t retained = rig.bus.joint_retained_bytes();
     REQUIRE(retained > 0);
-    // X: a second operator with its OWN host-minted authority over an unrelated ceiling. It holds
+    // X: a second initiator with its OWN host-minted authority over an unrelated ceiling. It holds
     // neither A's capability (the copied case above) nor authority over A's participants; what it
     // presents is valid, issued here, and its own: the request is wrong only in the operation it
     // names.
@@ -1987,11 +1987,11 @@ TEST_CASE("a foreign operator's valid authority reaches none of another operator
     tell(rig.bus, stranger_id, Cmd{"claim", 0, "S", 1});
     rig.bus.drain_until_idle();
     REQUIRE(stranger->last_claim.accepted);
-    auto [x_id, x] = put<Operator>(rig.bus, Grant{}, "joint.x");
+    auto [x_id, x] = put<Initiator>(rig.bus, Grant{}, "joint.x");
     x->authority = rig.bus.mint_joint_authority(x_id, {"joint.stranger"});
     x->keys = {claim_key<DocFact>(stranger_id)};
     REQUIRE(x->authority.valid());
-    // EVERY OPERATOR VERB, NAMED WITH A'S OPERATION: refused by name, and A's record is
+    // EVERY INITIATOR VERB, NAMED WITH A'S OPERATION: refused by name, and A's record is
     // exactly what it was -- Preparing, no reason, its offers retained, nothing owed.
     tell(rig.bus, x_id, Cmd{"commit", static_cast<std::int64_t>(id)});
     tell(rig.bus, x_id, Cmd{"cancel", static_cast<std::int64_t>(id)});
@@ -1999,11 +1999,11 @@ TEST_CASE("a foreign operator's valid authority reaches none of another operator
     tell(rig.bus, x_id, Cmd{"release", static_cast<std::int64_t>(id)});
     rig.bus.drain_until_idle();
     CHECK_FALSE(x->committed.ok);
-    CHECK_MESSAGE(x->committed.why == JointRefusal::NotOperator, std::string(name_of(x->committed.why)));
-    CHECK(x->cancelled.why == JointRefusal::NotOperator);
+    CHECK_MESSAGE(x->committed.why == JointRefusal::NotInitiator, std::string(name_of(x->committed.why)));
+    CHECK(x->cancelled.why == JointRefusal::NotInitiator);
     CHECK(x->status.state == JointState::Missing);
-    CHECK(x->status.reason == JointRefusal::NotOperator);
-    CHECK(x->released.why == JointRefusal::NotOperator);
+    CHECK(x->status.reason == JointRefusal::NotInitiator);
+    CHECK(x->released.why == JointRefusal::NotInitiator);
     CHECK_MESSAGE(rig.bus.joint_status(id).state == JointState::Preparing,
                   std::string(name_of(rig.bus.joint_status(id).state)));
     CHECK(rig.bus.joint_status(id).reason == JointRefusal::None);
@@ -2012,7 +2012,7 @@ TEST_CASE("a foreign operator's valid authority reaches none of another operator
     CHECK(rig.doc_path() == "A");
     CHECK(rig.view_shown() == "hidden");
     CHECK(rig.o->ended.empty()); // nothing ended, so no notice of an ending was queued
-    // X IS A GENUINE OPERATOR over its own ceiling: its own begin works. That is what separates
+    // X IS A GENUINE INITIATOR over its own ceiling: its own begin works. That is what separates
     // this case from the copied capability, which never reaches a record at all.
     tell(rig.bus, x_id, Cmd{"begin"});
     rig.bus.drain_until_idle();
@@ -2028,39 +2028,39 @@ TEST_CASE("a foreign operator's valid authority reaches none of another operator
     // ...and A's committed record is no more X's to release than its live one was.
     tell(rig.bus, x_id, Cmd{"release", static_cast<std::int64_t>(id)});
     rig.bus.drain_until_idle();
-    CHECK(x->released.why == JointRefusal::NotOperator);
+    CHECK(x->released.why == JointRefusal::NotInitiator);
     CHECK(rig.bus.joint_status(id).state == JointState::Committed);
     CHECK(rig.bus.joint_records() == 2);
 }
 
-TEST_CASE("a JointAuthority names the operator's exact life and incarnation -- retiring its "
+TEST_CASE("a JointAuthority names the initiator's exact life and incarnation -- retiring its "
               "records and refusing its retained capability are two obligations, and the host "
               "authorizes a successor by minting again") {
-    SUBCASE("swapped: new code behind the operator's id") {
+    SUBCASE("swapped: new code behind the initiator's id") {
         Rig rig;
         const std::uint64_t id = rig.prepare();
         // THE PREDECESSOR'S CAPABILITY, retained in the same object's member across the
-        // swap -- what a native operator that is never re-authorized holds.
+        // swap -- what a native initiator that is never re-authorized holds.
         const JointAuthority retained = rig.o->authority;
-        CHECK(retained.operator_id() == rig.op);
-        CHECK(retained.operator_life() == 1);
-        CHECK(retained.operator_incarnation() == 1);
+        CHECK(retained.initiator_id() == rig.op);
+        CHECK(retained.initiator_life() == 1);
+        CHECK(retained.initiator_incarnation() == 1);
         const std::string bytes = rig.bus.snapshot_bytes(rig.op);
         REQUIRE(rig.bus.swap_state(rig.op, bytes).revived);
         // OBLIGATION ONE: the records the predecessor began are retired at the transition.
         CHECK(rig.bus.joint_status(id).state == JointState::Missing);
         CHECK(rig.bus.joint_records() == 0);
-        // OBLIGATION TWO: the retained capability names nobody now. Every operator verb
-        // presented with it is refused NotOperator, and a begin creates no record.
+        // OBLIGATION TWO: the retained capability names nobody now. Every initiator verb
+        // presented with it is refused NotInitiator, and a begin creates no record.
         tell(rig.bus, rig.op, Cmd{"begin"});
         tell(rig.bus, rig.op, Cmd{"status", static_cast<std::int64_t>(id)});
         tell(rig.bus, rig.op, Cmd{"release", static_cast<std::int64_t>(id)});
         rig.bus.drain_until_idle();
         CHECK_FALSE(rig.o->begun.ok);
-        CHECK_MESSAGE(rig.o->begun.why == JointRefusal::NotOperator, std::string(name_of(rig.o->begun.why)));
+        CHECK_MESSAGE(rig.o->begun.why == JointRefusal::NotInitiator, std::string(name_of(rig.o->begun.why)));
         CHECK(rig.o->status.state == JointState::Missing);
-        CHECK(rig.o->status.reason == JointRefusal::NotOperator);
-        CHECK(rig.o->released.why == JointRefusal::NotOperator);
+        CHECK(rig.o->status.reason == JointRefusal::NotInitiator);
+        CHECK(rig.o->released.why == JointRefusal::NotInitiator);
         CHECK(rig.bus.joint_records() == 0);
         CHECK(rig.bus.joint_pending() == 0);
         // THE HOST AUTHORIZES THE SUCCESSOR, explicitly, for the incarnation that exists;
@@ -2068,8 +2068,8 @@ TEST_CASE("a JointAuthority names the operator's exact life and incarnation -- r
         const JointAuthority current =
             rig.bus.mint_joint_authority(rig.op, {"joint.doc", "joint.view"});
         REQUIRE(current.valid());
-        CHECK(current.operator_life() == retained.operator_life());
-        CHECK(current.operator_incarnation() == retained.operator_incarnation() + 1);
+        CHECK(current.initiator_life() == retained.initiator_life());
+        CHECK(current.initiator_incarnation() == retained.initiator_incarnation() + 1);
         rig.o->authority = current;
         const std::uint64_t fresh = rig.prepare("C");
         REQUIRE(rig.bus.joint_status(fresh).state == JointState::Preparing);
@@ -2084,10 +2084,10 @@ TEST_CASE("a JointAuthority names the operator's exact life and incarnation -- r
         tell(rig.bus, rig.op, Cmd{"status", static_cast<std::int64_t>(fresh)});
         tell(rig.bus, rig.op, Cmd{"release", static_cast<std::int64_t>(fresh)});
         rig.bus.drain_until_idle();
-        CHECK(rig.o->committed.why == JointRefusal::NotOperator);
-        CHECK(rig.o->cancelled.why == JointRefusal::NotOperator);
-        CHECK(rig.o->status.reason == JointRefusal::NotOperator);
-        CHECK(rig.o->released.why == JointRefusal::NotOperator);
+        CHECK(rig.o->committed.why == JointRefusal::NotInitiator);
+        CHECK(rig.o->cancelled.why == JointRefusal::NotInitiator);
+        CHECK(rig.o->status.reason == JointRefusal::NotInitiator);
+        CHECK(rig.o->released.why == JointRefusal::NotInitiator);
         CHECK(rig.bus.joint_status(fresh).state == JointState::Preparing);
         CHECK(rig.bus.joint_status(fresh).reason == JointRefusal::None);
         CHECK(rig.bus.joint_retained_bytes() == offered);
@@ -2101,7 +2101,7 @@ TEST_CASE("a JointAuthority names the operator's exact life and incarnation -- r
         CHECK(rig.view_shown() == "C");
         CHECK(rig.bus.joint_status(fresh).state == JointState::Committed);
     }
-    SUBCASE("dead and revived: a new life behind the operator's id, and nothing minted for the dead") {
+    SUBCASE("dead and revived: a new life behind the initiator's id, and nothing minted for the dead") {
         Rig rig;
         const std::uint64_t id = rig.prepare();
         const JointAuthority retained = rig.o->authority;
@@ -2121,7 +2121,7 @@ TEST_CASE("a JointAuthority names the operator's exact life and incarnation -- r
         tell(rig.bus, rig.op, Cmd{"begin"});
         rig.bus.drain_until_idle();
         CHECK_FALSE(rig.o->begun.ok);
-        CHECK_MESSAGE(rig.o->begun.why == JointRefusal::NotOperator, std::string(name_of(rig.o->begun.why)));
+        CHECK_MESSAGE(rig.o->begun.why == JointRefusal::NotInitiator, std::string(name_of(rig.o->begun.why)));
         rig.o->authority = for_the_dead;
         tell(rig.bus, rig.op, Cmd{"begin"});
         rig.bus.drain_until_idle();
@@ -2131,8 +2131,8 @@ TEST_CASE("a JointAuthority names the operator's exact life and incarnation -- r
         // MINTED FOR THE LIFE THAT EXISTS, it coordinates.
         rig.o->authority = rig.bus.mint_joint_authority(rig.op, {"joint.doc", "joint.view"});
         REQUIRE(rig.o->authority.valid());
-        CHECK(rig.o->authority.operator_life() == retained.operator_life() + 1);
-        CHECK(rig.o->authority.operator_incarnation() == retained.operator_incarnation());
+        CHECK(rig.o->authority.initiator_life() == retained.initiator_life() + 1);
+        CHECK(rig.o->authority.initiator_incarnation() == retained.initiator_incarnation());
         const std::uint64_t fresh = rig.prepare("C");
         rig.commit(fresh);
         rig.bus.drain_until_idle();

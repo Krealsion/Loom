@@ -500,7 +500,7 @@ TEST_CASE("a native handler that throws through pump_pending() leaves no poisone
 }
 
 namespace {
-/// The whole authenticated-readiness staging, native and .so-free: an operator,
+/// The whole authenticated-readiness staging, native and .so-free: a weaver,
 /// a coordinator, an incumbent holding the production role, and a candidate
 /// sealed to the coordinator. Used to witness DELIVERY-SCOPED authority, which
 /// is otherwise reachable only from inside a handler.
@@ -988,7 +988,7 @@ namespace {
 /// Everything `unregister_weave` touches, on one weave, so "the refusal changed nothing" and "a
 /// later success changes all of it" are the same six facts read twice: the refusal's case alone
 /// would pass on an `unregister_weave` that had stopped working. `svc` holds a role, a personal
-/// and an office claim, a party's place in an unfinished deferred conversation, and the
+/// and a role claim, a party's place in an unfinished deferred conversation, and the
 /// incumbency of an active prepared replacement.
 struct RemovalSurface {
     LifeLedger ledger; // FIRST: destroyed last, i.e. after the board below
@@ -1004,7 +1004,7 @@ struct RemovalSurface {
     RemovalSurface() {
         // 1. two claims under two different key spaces.
         REQUIRE(bus.claim_as(svc.id, greet("personal")).accepted);
-        REQUIRE(bus.office_claim_as(svc.id, "service", greet("official")).accepted);
+        REQUIRE(bus.role_claim_as(svc.id, "service", greet("official")).accepted);
         REQUIRE(bus.retained_claim_count() == 2);
 
         // 2. an unfinished conversation svc is a party to: svc asks, the helper
@@ -1036,7 +1036,7 @@ struct RemovalSurface {
     void expect_untouched() {
         CHECK(bus.role_holder("service") == svc.id);                    // role binding
         CHECK(bus.observe(svc.id, "Greet", 1).refusal == SenseRefusal::None);  // personal claim
-        CHECK(bus.observe_office("service", "Greet", 1).refusal == SenseRefusal::None); // office
+        CHECK(bus.observe_role("service", "Greet", 1).refusal == SenseRefusal::None); // role
         CHECK(bus.retained_claim_count() == 2);
         CHECK(bus.weave(svc.id) != nullptr);                            // registry
         CHECK(bus.alive(svc.id));
@@ -1093,7 +1093,7 @@ TEST_CASE("an ordinary removal outside a callback still does all of it") {
 
     CHECK_FALSE(s.bus.role_holder("service").valid());            // role released
     CHECK(s.bus.observe(s.svc.id, "Greet", 1).refusal == SenseRefusal::NoClaim); // personal gone
-    CHECK(s.bus.observe_office("service", "Greet", 1).refusal == SenseRefusal::NoClaim); // office
+    CHECK(s.bus.observe_role("service", "Greet", 1).refusal == SenseRefusal::NoClaim); // role
     CHECK(s.bus.retained_claim_count() == 0);
     CHECK(s.bus.weave(s.svc.id) == nullptr);                      // gone from the registry
     CHECK(s.bus.active_transactions() == 0);                      // its transaction invalidated

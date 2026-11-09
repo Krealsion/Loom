@@ -20,7 +20,7 @@
 // conversation. `loom::relay` (relay.hpp) is the same rule for a middleman relaying somebody
 // else's answer.
 //
-// An ask to an office is answered by whoever holds it at delivery, unknown when asking:
+// An ask to a role is answered by whoever holds it at delivery, unknown when asking:
 // `open_to_role` says so, and its record constrains the correlation only.
 
 #include <zen/switchboard/message.hpp>
@@ -37,21 +37,21 @@ namespace loom {
 
 /// One conversation this asker is still waiting on: `id` is the small local number a person
 /// types, `correlation` the number the answer carries back, `respondent` who may settle it,
-/// `role` the office addressed when the respondent could not be known, and `shape`/`version`
-/// what was asked. Whether it went to an office is derived from `role`, not stored.
+/// `role` the role addressed when the respondent could not be known, and `shape`/`version`
+/// what was asked. Whether it went to a role is derived from `role`, not stored.
 struct PendingAsk {
     std::uint64_t id = 0;
     std::uint64_t correlation = 0;
     /// The weave whose answer settles this, compared with Loom's stamp; invalid when the ask went
-    /// to an office.
+    /// to a role.
     WeaveId respondent{};
-    /// The office this ask was addressed to; empty for a directed one.
+    /// The role this ask was addressed to; empty for a directed one.
     std::string role;
     std::string shape;
     std::uint32_t version = 0;
     std::uint64_t attempt = 0; ///< queued send identity, explicitly bound by its author
 
-    /// Was this ask addressed to an office rather than to one exact weave?
+    /// Was this ask addressed to a role rather than to one exact weave?
     bool to_role() const noexcept { return !role.empty(); }
 };
 

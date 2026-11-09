@@ -4,7 +4,7 @@
 // THE SUPPLIED HOST'S PROBE: an ordinary loadable weave that reports what the host did to it,
 // for the host's lifecycle and authority wiring, which only a real weave in a real host process
 // can witness (which reply answered which question, when an approval took effect, whether the
-// operator could still be heard). `Inspect` answers with four numbers: `activations` (attested
+// weaver could still be heard). `Inspect` answers with four numbers: `activations` (attested
 // `zen.Activated`), `startups` (its self-addressed first-breath send arrived), `refusals`
 // (attested `zen.DispatchRefused`) and `ticks` (`Spin` deliveries, each re-arming itself).
 
@@ -12,7 +12,7 @@
 // carrying the asker's correlation, so the answer is attributable and arrives DELAYED. Under
 // ZEN_PROBE_FORGE it also authors, unasked and with no extra approval (the admitted baseline
 // allows `zen.Result` to any target), a `zen.Result` at the console timed to land BEHIND the
-// genuine answer to the operator's load: the host must attribute answers, never take the newest.
+// genuine answer to the weaver's load: the host must attribute answers, never take the newest.
 
 #include <zen/kernel/export.hpp>
 #include <zen/weave.hpp>
@@ -48,7 +48,7 @@ struct Countdown {
     ZEN_SHAPE(Countdown, 1, ZEN_FIELD(turns));
 };
 
-/// One turn of a countdown, addressed to this weave's own office, carrying who asked and the
+/// One turn of a countdown, addressed to this weave's own role, carrying who asked and the
 /// conversation they named. The person approves `Tock v1 -> role probe` for it to run.
 struct Tock {
     std::int64_t remaining = 0;
@@ -80,7 +80,7 @@ public:
         }
 #ifdef ZEN_PROBE_FORGE
         // Stage: bounce a Result off our own role so the forgery below is authored one
-        // turn LATER than the genuine answer to whatever the operator asked.
+        // turn LATER than the genuine answer to whatever the weaver asked.
         (void)mail.send_to_role("probe", Result{"stage"});
 #else
         // The startup send. If the person has approved `Startup v1 -> role probe`, this arrives
@@ -135,7 +135,7 @@ public:
 
     void on(const Result&, Mail& mail) {
 #ifdef ZEN_PROBE_FORGE
-        // Weave 1 is the operator console in the supplied host's construction order. An
+        // Weave 1 is the weaver's console in the supplied host's construction order. An
         // attacker guesses exactly this, which is the point: guessing a target and a
         // shape must not be enough to be mistaken for somebody's answer.
         (void)mail.send(WeaveId{1}, Result{"1"});

@@ -16,8 +16,8 @@ Four facts about a message, and each exists:
 ```text
 sender identity          who the exact weave was            the bus stamp
 role-addressed delivery  where the message was routed       send_to_role
-role membership          which office the weave holds now   role_holder lookup
-role-authored provenance which office the weave
+role membership          which role the weave holds now   role_holder lookup
+role-authored provenance which role the weave
                          DELIBERATELY SPOKE AS              mail.as_role /
                                                             authored_from_role (MSG-07)
 ```
@@ -28,17 +28,17 @@ deliberately spoken as R). Holding is insufficient by law — the same
 holder's personal speech arrives unauthored — and **publications are
 first-class** (a forged `WorkerOpen` announcement is exactly what
 `as_role(R).publish` answers). Current semantics:
-[messaging](messaging.md#office-authorship-role-authored-provenance); law:
+[messaging](messaging.md#role-authorship-role-authored-provenance); law:
 [MSG-07](../laws/messaging-laws.md#msg-07--role-authorship-is-explicit);
 why explicit-not-inferred:
-[decision](../decisions/office-authorship-is-deliberate.md); the applications
+[decision](../decisions/role-authorship-is-deliberate.md); the applications
 that priced the seam:
 [evidence](../evidence/night-lab.md#role-authored-provenance--five-sightings-workarounds-priced).
 
-Deliberately outside it: office authorship across the **out-of-process pipe**
+Deliberately outside it: role authorship across the **out-of-process pipe**
 fails closed in both directions (the pipe carries no attestation; the first
-out-of-process office needs a verified control-protocol frame), and no public
-door produces a combined answer+office fact (the representation admits it; an
+out-of-process role needs a verified control-protocol frame), and no public
+door produces a combined answer+role fact (the representation admits it; an
 `answer_as_role` waits for a consumer).
 
 ## Live authority administration — what delegation deliberately does not do
@@ -60,16 +60,16 @@ CONTAINMENT IS ADMISSION-TIME.  os_cap / FsAccess / ResourceLimits are
     would need the isolation backend to prove it, and it does not.
 
 AN ADMINISTRATION ACT IS NOT ON THE TAP.  Delegation queues no message and emits
-    no BusEvent, so an operator watching traffic sees the CONSEQUENCES of an
+    no BusEvent, so a weaver watching traffic sees the CONSEQUENCES of an
     authority change (a send that now lands, or now refuses `CapabilityDenied`)
     and never the change itself. A `GrantChange` result is returned to the
-    caller and nowhere else. An operator surface that must show "who granted
+    caller and nowhere else. A weaver surface that must show "who granted
     what, when" needs its own answer; this is deliberately not an audit log,
     and it meets the same wall the delivery tap does — whole-bus observation is
     host authority, not a grant.
 
-    The Weaver does not close this, though it can look as if it does. An
-    operator sees the workflow it is ITSELF PART OF — its own prompts, its own
+    The Weaver does not close this, though it can look as if it does. A
+    weaver sees the workflow it is ITSELF PART OF — its own prompts, its own
     acks, its own refusals — because the Weaver deliberately sends it those
     messages. It does not see an authority change made by any other holder of a
     capability over the same subject, and there is no event it could subscribe
@@ -141,7 +141,7 @@ not available to an ordinary participant*, because power includes saying no
 truthfully. Closing this needs a real scoped observation law (what may be
 observed, by whom, authorized how) — the same shape `ObserveRule` gave Senses,
 and that law is a design of its own, not yet made. The relay in [observation](observation.md) is the
-narrower thing that does exist: an office's own publications, under a policy.
+narrower thing that does exist: a role's own publications, under a policy.
 F and I are separate entries above and below.
 
 ## Service discovery is not a participant's power
@@ -169,7 +169,7 @@ and needs a `Switchboard&`; a [terminal session](terminal.md) does not have it,
 and neither does anything else. Enumerating live weaves is a fact about the
 running world rather than about the participant, and handing it to every
 terminal would give an ordinary weave a power nothing granted it. `send_to_role`
-addresses an office without resolving it, which is why addressing an office
+addresses a role without resolving it, which is why addressing a role
 never needs the list.
 
 **Absent, and not wanted:** global schema enumeration. Nothing in Loom can
@@ -179,16 +179,16 @@ from accept-sets. A `ListSchemas` would have no owner and no natural authority
 scope, and it answers the wrong question: the product question is *what can I
 say to THIS thing*, which is answered directly.
 
-## The operator seat is a WeaveId, not a person
+## The weaver seat is a WeaveId, not a person
 
 **Status: KNOWN SEAM**, in its human half. A Weaver treats one exact WeaveId's
 decisions as the user's. That check is real and enforced against the bus stamp
 — reachability is emphatically not identity — but it authenticates a *weave*,
 not a human.
 
-The seat needs no special powers: the [terminal](terminal.md)'s operator seat is
+The seat needs no special powers: the [terminal](terminal.md)'s weaver seat is
 an ordinary participant holding four rules — approve / refuse / revoke /
-describe, each to one office — with no wildcard, no registry read and no tap,
+describe, each to one role — with no wildcard, no registry read and no tap,
 and it drives the whole Weaver workflow.
 
 The **human** half is the seam. A host designates a WeaveId; there is no account,
@@ -217,12 +217,12 @@ this attestation and refuses a manifest requesting its notice door.
 **Status: UNSUPPORTED BY DECISION, refused by name.**
 
 ABI v8 carries a joint publication's *claimant* surface — offer outbound, the
-showing inbound — and nothing of the *operator's*. A loaded weave's
+showing inbound — and nothing of the *initiator's*. A loaded weave's
 `begin_joint`, `commit_joint`, `cancel_joint`, `joint_status` and
 `release_joint` inherit `loom::Bus`'s refusing defaults and answer
 `NoLiveDelivery`. The authority is a native capability the host mints; carrying
 it across the seam means the host keeping the minted authority in a table keyed
-by the adapter and checking the operator's exact incarnation at every verb,
+by the adapter and checking the initiator's exact incarnation at every verb,
 with its own witnesses. That is a design of its own, not yet made
 ([joint publication](joint-publication.md#what-crosses-the-abi)).
 
@@ -292,12 +292,12 @@ and it is worse ergonomics than it needs to be.
 
 **And metadata alone is not an approval interface.** "This weave would like to
 say `Noted v1` to role `logbook`, allow it?" needs a destination-bearing ask and
-an operator surface that puts the question; the emit-set supplies the shape's
+a weaver surface that puts the question; the emit-set supplies the shape's
 name and definition and nothing more.
 
 Closing the rest is a destination-bearing ask (`zen.CapabilityAsk v2`, or a
 sibling section) — another manifest and ABI bump, rebuilding every artifact in
-every consumer — plus the surface that asks. **Trigger:** an operator surface
+every consumer — plus the surface that asks. **Trigger:** a weaver surface
 that wants to offer a one-click approval of what an artifact asked for.
 
 ## Event-loop composition
@@ -408,8 +408,8 @@ proxy — acts on nothing — until that answer comes
 what the peer *presented*: a credential in the Hello is bytes, compared to
 something the host holds (a guests file, say). There is no TLS, no challenge and
 no peer-credential check in the mechanism, so a credential crosses in the clear,
-and `operator_admission()` admits everything that reaches the socket as the
-operator. **Do not bind a bridge listener where an untrusted party can reach
+and `weaver_admission()` admits everything that reaches the socket as the
+weaver. **Do not bind a bridge listener where an untrusted party can reach
 it.**
 
 Two smaller facts at the same boundary. `bridge_listen_tcp` binds
@@ -419,7 +419,7 @@ authentication one (`BridgeServer` accepts any socket an embedder hands it,
 and any forward re-exposes the port). `bridge_listen_unix` sets no explicit
 socket-file permissions, so the ambient `umask` decides who can open the node —
 which under this seam is an access-control decision rather than a hygiene one,
-since whoever reaches it holds operator authority. Nothing here adds permission
+since whoever reaches it holds weaver authority. Nothing here adds permission
 handling or authentication; the point is that the umask is part of the
 boundary. Full model: [bridge](bridge.md).
 
@@ -435,7 +435,7 @@ the Kernel's manifest dependency registry, and an isolation host's all shrink
 again when the weave, artifact or mount that needed a shape goes away.
 
 `RemoteConsole::registry_` does not, and the reason is structural rather than an
-oversight: it is a **learned mirror in the operator's process**, filled from
+oversight: it is a **learned mirror in the weaver's process**, filled from
 `Schema` frames the host sends in reply to `Describe`. Nothing in that process
 has a lifetime that means "this shape is still needed" — the console's other
 windows (`kConsoleTapCapacity`, `kConsoleBufferCapacity`, `kMaxPendingDelivered`,
@@ -458,7 +458,7 @@ BOUNDED BY  the session's own lifetime — a fresh console starts empty —
 Deliberately not solved here: the natural fixes are a bounded memo with
 re-`Describe` on a miss (the shape `kMaxAbsentSchemas` already has) or a
 snapshot-refresh opcode, and both are console/wire decisions rather than
-Registry lifetime ones. **Trigger:** an operator console held open across a host
+Registry lifetime ones. **Trigger:** a weaver's console held open across a host
 that turns over schema identities, or any claim that the *client* is bounded.
 Until then, do not read LIFE-08 as covering it.
 
@@ -472,7 +472,7 @@ deferrals anywhere exhaust the 65th everywhere
 
 **Status: WATCHING — two sightings, deliberately unsolved.**
 
-`commit(sequence)` takes a number the operator supplies, and no host sequence
+`commit(sequence)` takes a number the initiator supplies, and no host sequence
 owner exists to consume. Two applications built on Loom have each invented one
 solely to satisfy the call — an incrementing counter in one, a literal `1` in the
 other: two sightings whose only meaning is *"the API needs a number"*.

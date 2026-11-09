@@ -5,7 +5,7 @@
 
 #include "box_twin.hpp"
 #include "switchboard_fixtures.hpp"
-#include "weavelib/office_protocol.hpp"
+#include "weavelib/role_protocol.hpp"
 #include "weavelib/prepared_replacement_protocol.hpp"
 
 #include <zen/gate.hpp>
@@ -707,7 +707,7 @@ TEST_CASE("schema admission: a refused load leaves nothing behind, a valid load 
     CHECK(refused_over(blocked, "Greet"));
     CHECK(events == 0);                                   // no bus event for a refusal
     CHECK(bus.list_weaves().size() == weaves_before);     // no candidate participant
-    CHECK_FALSE(bus.role_holder("latecomer").valid());    // no office
+    CHECK_FALSE(bus.role_holder("latecomer").valid());    // no role
     CHECK(bus.resolve_schema("Greet", 1)->content_id() == greet_msg()->content_id());
 
     // A later valid load into the same role follows...
@@ -2435,7 +2435,7 @@ TEST_CASE("one prepared replacement, remembered from Preparing to Committed") {
 
     bus.drain_until_idle();
 
-    // One terminal result, for the exact operator, consumed once.
+    // One terminal result, for the exact initiator, consumed once.
     TxnOutcome out{};
     REQUIRE(bus.take_outcome(c.op.id, out));
     CHECK(out.state == TxnState::Committed);
@@ -2569,8 +2569,8 @@ TEST_CASE("a participant that changes aborts its own transaction and only its ow
     // The failure ladder, one rung per subcase, each proving the same seven things
     // about the incumbent and one thing about the transaction.
     int who = 0;
-    SUBCASE("the operator dies") { who = 0; }
-    SUBCASE("the operator's code is replaced") { who = 1; }
+    SUBCASE("the initiator dies") { who = 0; }
+    SUBCASE("the initiator's code is replaced") { who = 1; }
     SUBCASE("the coordinator dies") { who = 2; }
     SUBCASE("the coordinator's code is replaced") { who = 3; }
     SUBCASE("the candidate dies") { who = 4; }
@@ -2601,8 +2601,8 @@ TEST_CASE("a participant that changes aborts its own transaction and only its ow
     };
     TxnReason expected = TxnReason::None;
     switch (who) {
-    case 0: churn(c.op.id, true, false);          expected = TxnReason::OperatorChanged; break;
-    case 1: churn(c.op.id, false, false);         expected = TxnReason::OperatorChanged; break;
+    case 0: churn(c.op.id, true, false);          expected = TxnReason::InitiatorChanged; break;
+    case 1: churn(c.op.id, false, false);         expected = TxnReason::InitiatorChanged; break;
     case 2: churn(c.coordinator.id, true, false); expected = TxnReason::CoordinatorChanged; break;
     case 3: churn(c.coordinator.id, false, false);expected = TxnReason::CoordinatorChanged; break;
     case 4: churn(c.candidate, true, false);      expected = TxnReason::CandidateChanged; break;
@@ -2621,7 +2621,7 @@ TEST_CASE("a participant that changes aborts its own transaction and only its ow
 
     TxnOutcome out{};
     if (who <= 1) {
-        // A successor operator inherits nothing — not even the news.
+        // A successor initiator inherits nothing — not even the news.
         CHECK_FALSE(bus.take_outcome(c.op.id, out));
     } else {
         REQUIRE(bus.take_outcome(c.op.id, out));
@@ -2871,7 +2871,7 @@ TEST_CASE("a duplicate terminalization cannot consume two slots of the bounded t
     std::vector<TxnId> ids;
     const std::size_t store = Switchboard::kMaxTerminalOutcomes;
 
-    // Each operator gets exactly one terminal result, so survivors are countable.
+    // Each initiator gets exactly one terminal result, so survivors are countable.
     for (std::size_t i = 0; i < store; ++i) {
         const std::string role = "fill" + std::to_string(i);
         casts.push_back(cast_with_role(bus, role.c_str()));
@@ -2918,7 +2918,7 @@ TEST_CASE("one sealed candidate belongs to at most one active transaction") {
                                                            "role-a", 8);
     REQUIRE(first.ok);
 
-    // A different incumbent, a different operator — and the SAME candidate. Every
+    // A different incumbent, a different initiator — and the SAME candidate. Every
     // other precondition holds: it is sealed by its coordinator, holds no role, and
     // is alive. Only exclusivity stands in the way.
     const TxnResult second = bus.begin_prepared_replacement(b.op.id, a.coordinator.id,
@@ -3462,7 +3462,7 @@ TEST_CASE("the budget keeps running through a deferred preparation, and exhausti
     REQUIRE(c.candidate_raw->pending.valid());
 
     // A conversation in progress does not stop the accounting. No wall clock is
-    // involved: these are steps the operator chose to spend.
+    // involved: these are steps the initiator chose to spend.
     REQUIRE(bus.tick_preparation(t.id).ok);
     CHECK(bus.transaction_state(t.id) == TxnState::Preparing);
     REQUIRE(bus.tick_preparation(t.id).ok);
@@ -3493,7 +3493,7 @@ TEST_CASE("a lifecycle change during preparation aborts before any answer can la
     SUBCASE("the candidate's code is replaced") { how = 1; }
     SUBCASE("the coordinator dies") { how = 2; }
     SUBCASE("the coordinator's code is replaced") { how = 3; }
-    SUBCASE("the operator dies") { how = 4; }
+    SUBCASE("the initiator dies") { how = 4; }
 
     Switchboard bus;
     Cast c = cast_with_role(bus, kRole);
@@ -3519,7 +3519,7 @@ TEST_CASE("a lifecycle change during preparation aborts before any answer can la
         expected = TxnReason::CoordinatorChanged;
     } else {
         bus.kill(c.op.id);
-        expected = TxnReason::OperatorChanged;
+        expected = TxnReason::InitiatorChanged;
     }
 
     CHECK(bus.transaction_state(t.id) == TxnState::Aborted);
@@ -3527,7 +3527,7 @@ TEST_CASE("a lifecycle change during preparation aborts before any answer can la
     if (how != 4) {
         exactly_one_outcome(bus, c.op.id, t.id, TxnState::Aborted, expected);
     } else {
-        // THE OPERATOR SUCCESSOR INHERITS NOTHING. The result is kept for the
+        // THE INITIATOR SUCCESSOR INHERITS NOTHING. The result is kept for the
         // exact life and incarnation that began the transaction, and that life is
         // over — so bringing the same id back produces a participant with no
         // standing to collect, exactly as it has no standing to converse.
@@ -3637,7 +3637,7 @@ std::int64_t state_field(Switchboard& bus, WeaveId id, const char* field) {
 }
 
 /// The whole dynamic cast: real artifacts for both services, native probes for the
-/// three roles the substrate does not care about (operator, coordinator, observer).
+/// three roles the substrate does not care about (initiator, coordinator, observer).
 struct DynCast {
     Registered op;
     Registered coordinator;
@@ -3993,8 +3993,8 @@ TEST_CASE("every pre-commit failure leaves v1 serving and the candidate outside"
     SUBCASE("the candidate's code is replaced") { how = 1; }
     SUBCASE("the coordinator dies") { how = 2; }
     SUBCASE("the incumbent dies") { how = 3; }
-    SUBCASE("the operator dies") { how = 4; }
-    SUBCASE("the operator is explicitly abandoned") { how = 5; }
+    SUBCASE("the initiator dies") { how = 4; }
+    SUBCASE("the initiator is explicitly abandoned") { how = 5; }
     SUBCASE("preparation runs out of budget") { how = 6; }
     SUBCASE("the incumbent's code is replaced") { how = 7; }
 
@@ -4010,7 +4010,7 @@ TEST_CASE("every pre-commit failure leaves v1 serving and the candidate outside"
     const std::size_t offered = d.log->readiness.size();
 
     TxnReason expected = TxnReason::CandidateChanged;
-    bool operator_can_collect = true;
+    bool initiator_can_collect = true;
     if (how == 0) {
         bus.kill(d.candidate);
     } else if (how == 1) {
@@ -4023,8 +4023,8 @@ TEST_CASE("every pre-commit failure leaves v1 serving and the candidate outside"
         expected = TxnReason::IncumbentChanged;
     } else if (how == 4) {
         bus.kill(d.op.id);
-        expected = TxnReason::OperatorChanged;
-        operator_can_collect = false; // a result is kept for a life that has ended
+        expected = TxnReason::InitiatorChanged;
+        initiator_can_collect = false; // a result is kept for a life that has ended
     } else if (how == 5) {
         REQUIRE(bus.abort_prepared_replacement(t.id, d.op.id).ok);
         expected = TxnReason::ExplicitAbort;
@@ -4042,7 +4042,7 @@ TEST_CASE("every pre-commit failure leaves v1 serving and the candidate outside"
 
     CHECK(bus.transaction_state(t.id) == TxnState::Aborted);
     CHECK(bus.active_transactions() == 0); // capacity reclaimed
-    if (operator_can_collect) {
+    if (initiator_can_collect) {
         exactly_one_outcome(bus, d.op.id, t.id, TxnState::Aborted, expected);
     }
 
@@ -4110,7 +4110,7 @@ TEST_CASE("after a successful commit, retirement failing changes nothing about t
     REQUIRE(d.ask(bus) == "v2");
     exactly_one_outcome(bus, d.op.id, t.id, TxnState::Committed, TxnReason::None);
 
-    // RETIREMENT IS A CONVERSATION THE OPERATOR OWNS, and the substrate's only
+    // RETIREMENT IS A CONVERSATION THE INITIATOR OWNS, and the substrate's only
     // part in it is that a sealed weave can still hear its coordinator. Here it
     // works, and then it stops working — the retired incumbent dies before the
     // word reaches it.
@@ -4241,10 +4241,10 @@ TEST_CASE("a lifecycle-driven abort releases the candidate's artifact, and nobod
     SUBCASE("the candidate dies") { route = 1; }
     SUBCASE("the candidate's code is replaced") { route = 2; }
     SUBCASE("the coordinator dies") { route = 3; }
-    SUBCASE("the operator dies") { route = 4; }
+    SUBCASE("the initiator dies") { route = 4; }
     SUBCASE("the incumbent's code is replaced") { route = 5; }
     SUBCASE("preparation runs out of budget") { route = 6; }
-    SUBCASE("the operator aborts explicitly") { route = 7; }
+    SUBCASE("the initiator aborts explicitly") { route = 7; }
 
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
@@ -4724,7 +4724,7 @@ TEST_CASE("every artifact status is reachable, and aliveness outranks the seal")
     REQUIRE(bus.swap_state(d.candidate, bus.snapshot_bytes(d.candidate)).revived);
     CHECK(kernel.status("v2") == ArtifactStatus::Sealed);
 
-    // The spellings exist for operators, and each is its own word.
+    // The spellings exist for weavers, and each is its own word.
     CHECK(std::string(name_of(ArtifactStatus::NotLoaded)) == "NotLoaded");
     CHECK(std::string(name_of(ArtifactStatus::Live)) == "Live");
     CHECK(std::string(name_of(ArtifactStatus::Sealed)) == "Sealed");
@@ -5093,7 +5093,7 @@ TEST_CASE("a candidate that cannot receive its own activation is not admissible,
     SUBCASE("its gate refuses this exact activation") {
         accept.push_back(schema_of<loom::Activated>());
         // The same (name, version), a different shape, so the door MATCHES and the gate is
-        // what refuses. An honest operator cannot produce this; it is here because "the door
+        // what refuses. An honest initiator cannot produce this; it is here because "the door
         // accepted it" and "the gate admitted it" are two questions, both asked before commit.
         const auto impostor = SchemaBuilder(std::string(loom::Activated::zen_name),
                                             loom::Activated::zen_version)
@@ -5284,7 +5284,7 @@ TEST_CASE("aborting a pending admission stops it, once — the queued action can
                 .ok);
     REQUIRE(bus.transaction_state(begun.id) == TxnState::AdmissionPending);
 
-    // The operator changes its mind while the admission is in flight.
+    // The initiator changes its mind while the admission is in flight.
     REQUIRE(bus.abort_prepared_replacement(begun.id, c.op.id).ok);
     exactly_one_outcome(bus, c.op.id, begun.id, TxnState::Aborted, TxnReason::ExplicitAbort);
     CHECK(bus.active_transactions() == 0); // capacity reclaimed at once
@@ -5497,7 +5497,7 @@ TEST_CASE("a stale queued admission cannot land on a namesake artifact loaded in
     REQUIRE(r.scheduled);
 
     // The artifact is unloaded and the SAME NAME is loaded again from the same
-    // file, sealed to the same coordinator. Everything an operator would recognise
+    // file, sealed to the same coordinator. Everything a weaver would recognise
     // is identical; the only thing that is not is the identity the envelope wrote
     // down when it was scheduled.
     REQUIRE(kernel.unload("v2"));
@@ -5514,7 +5514,7 @@ TEST_CASE("a stale queued admission cannot land on a namesake artifact loaded in
 
 // ---- first breath is not a question (LIFE-05) -------------------------------
 // The committed activation is Loom's own act, not the coordinator's speech: its stamped sender
-// is the operator that admitted the candidate, not a weave that asked anything, so a reply
+// is the initiator that admitted the candidate, not a weave that asked anything, so a reply
 // authority naming it would let a candidate answer a request nobody made. It is delivered as
 // from a root, where `answer_as` and `defer_answer_as` refuse: there is no requester.
 
@@ -5869,7 +5869,7 @@ TEST_CASE("a whole v1->v2 replacement drives only the handle, and the substrate 
     PreparedReplacement upgrade(bus, kernel);
     CHECK_FALSE(upgrade.started());
     const PreparedReplacement::StartResult started = upgrade.start({
-        .operator_id = d.op.id,
+        .initiator_id = d.op.id,
         .coordinator = d.coordinator.id,
         .role = kService,
         .candidate_name = "v2",
@@ -5956,7 +5956,7 @@ TEST_CASE("the deferred candidate is identical from the coordinator's side") {
 
     PreparedReplacement upgrade(bus, kernel);
     REQUIRE(upgrade.start({
-        .operator_id = d.op.id,
+        .initiator_id = d.op.id,
         .coordinator = d.coordinator.id,
         .role = kService,
         .candidate_name = "v2",
@@ -6011,7 +6011,7 @@ TEST_CASE("the candidate's refusal arrives whole — reason, cleanup, and a serv
 
     PreparedReplacement upgrade(bus, kernel);
     REQUIRE(upgrade.start({
-        .operator_id = d.op.id,
+        .initiator_id = d.op.id,
         .coordinator = d.coordinator.id,
         .role = kService,
         .candidate_name = "v2",
@@ -6056,7 +6056,7 @@ TEST_CASE("the start-failure ladder — every rung leaves the world exactly as i
         Registered op = register_probe(bus, {pong_schema()});
         PreparedReplacement upgrade(bus, kernel);
         const auto r = upgrade.start({
-            .operator_id = op.id,
+            .initiator_id = op.id,
             .coordinator = coordinator.id,
             .role = "nobody.holds.this",
             .candidate_name = "v2",
@@ -6074,7 +6074,7 @@ TEST_CASE("the start-failure ladder — every rung leaves the world exactly as i
         DynCast d = load_pair(bus, kernel, Grant{}.allow_any(), /*with_candidate=*/false);
         PreparedReplacement upgrade(bus, kernel);
         const auto r = upgrade.start({
-            .operator_id = d.op.id,
+            .initiator_id = d.op.id,
             .coordinator = d.coordinator.id,
             .role = kService,
             .candidate_name = "v2",
@@ -6097,7 +6097,7 @@ TEST_CASE("the start-failure ladder — every rung leaves the world exactly as i
         const WeaveId other = native_candidate(bus, d.coordinator.id, &other_raw);
         PreparedReplacement occupier(bus);
         REQUIRE(occupier.start_existing({
-            .operator_id = d.op.id,
+            .initiator_id = d.op.id,
             .coordinator = d.coordinator.id,
             .role = kService,
             .candidate = other,
@@ -6107,7 +6107,7 @@ TEST_CASE("the start-failure ladder — every rung leaves the world exactly as i
         LifetimeDelta cleanup;
         PreparedReplacement upgrade(bus, kernel);
         const auto r = upgrade.start({
-            .operator_id = d.op.id,
+            .initiator_id = d.op.id,
             .coordinator = d.coordinator.id,
             .role = kService,
             .candidate_name = "v2",
@@ -6140,7 +6140,7 @@ TEST_CASE("the start-failure ladder — every rung leaves the world exactly as i
         const WeaveId candidate = native_candidate(bus, other_coordinator.id);
         PreparedReplacement upgrade(bus);
         const auto r = upgrade.start_existing({
-            .operator_id = d.op.id,
+            .initiator_id = d.op.id,
             .coordinator = d.coordinator.id,
             .role = kService,
             .candidate = candidate,
@@ -6177,9 +6177,9 @@ TEST_CASE("a delivery offered to the wrong handle refuses, consumes nothing, and
 
     PreparedReplacement a(bus);
     PreparedReplacement b(bus);
-    REQUIRE(a.start_existing({.operator_id = op.id, .coordinator = coordinator.id,
+    REQUIRE(a.start_existing({.initiator_id = op.id, .coordinator = coordinator.id,
                               .role = "role-a", .candidate = cand_a, .budget = 8}).ok);
-    REQUIRE(b.start_existing({.operator_id = op.id, .coordinator = coordinator.id,
+    REQUIRE(b.start_existing({.initiator_id = op.id, .coordinator = coordinator.id,
                               .role = "role-b", .candidate = cand_b, .budget = 8}).ok);
 
     // Candidate A answers; inside that ONE delivery the coordinator offers it to
@@ -6214,7 +6214,7 @@ TEST_CASE("a delivery offered to the wrong handle refuses, consumes nothing, and
     CHECK(b.offer_current_answer(PreparationAnswer::Ready).why == TxnReason::InvalidReadiness);
 }
 
-TEST_CASE("two handles, one operator — each collects exactly its own outcome") {
+TEST_CASE("two handles, one initiator — each collects exactly its own outcome") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     Registered coordinator = register_probe(bus, {pong_schema()});
@@ -6230,12 +6230,12 @@ TEST_CASE("two handles, one operator — each collects exactly its own outcome")
 
     PreparedReplacement a(bus);
     PreparedReplacement b(bus);
-    REQUIRE(a.start_existing({.operator_id = op.id, .coordinator = coordinator.id,
+    REQUIRE(a.start_existing({.initiator_id = op.id, .coordinator = coordinator.id,
                               .role = "role-a", .candidate = cand_a, .budget = 8}).ok);
-    REQUIRE(b.start_existing({.operator_id = op.id, .coordinator = coordinator.id,
+    REQUIRE(b.start_existing({.initiator_id = op.id, .coordinator = coordinator.id,
                               .role = "role-b", .candidate = cand_b, .budget = 8}).ok);
 
-    // B ends first. A — same operator — must see NOTHING: not B's outcome, and
+    // B ends first. A — same initiator — must see NOTHING: not B's outcome, and
     // no outcome of its own, because A has not ended.
     REQUIRE(b.abort().ok);
     CHECK_FALSE(a.take_outcome().has_value());
@@ -6262,7 +6262,7 @@ TEST_CASE("dropping a live handle changes nothing — a scope is not a lifecycle
     {
         PreparedReplacement upgrade(bus, kernel);
         REQUIRE(upgrade.start({
-            .operator_id = d.op.id,
+            .initiator_id = d.op.id,
             .coordinator = d.coordinator.id,
             .role = kService,
             .candidate_name = "v2",
@@ -6304,7 +6304,7 @@ TEST_CASE("the handle's state is the Switchboard's, under every mutation the fac
     DynCast d = load_pair(bus, kernel, Grant{}.allow_any(), /*with_candidate=*/false);
     PreparedReplacement upgrade(bus, kernel);
     REQUIRE(upgrade.start({
-        .operator_id = d.op.id,
+        .initiator_id = d.op.id,
         .coordinator = d.coordinator.id,
         .role = kService,
         .candidate_name = "v2",
@@ -6359,7 +6359,7 @@ TEST_CASE("the activation sequence is the caller's, passed through exactly — a
     // First replacement, with a distinctive sequence.
     PreparedReplacement first(bus, kernel);
     REQUIRE(first.start({
-        .operator_id = d.op.id,
+        .initiator_id = d.op.id,
         .coordinator = d.coordinator.id,
         .role = kService,
         .candidate_name = "v2",
@@ -6389,7 +6389,7 @@ TEST_CASE("the activation sequence is the caller's, passed through exactly — a
     // neither invents nor reuses.
     PreparedReplacement second(bus, kernel);
     REQUIRE(second.start({
-        .operator_id = d.op.id,
+        .initiator_id = d.op.id,
         .coordinator = d.coordinator.id,
         .role = kService,
         .candidate_name = "v2b",
@@ -6418,7 +6418,7 @@ TEST_CASE("the budget is the author's, one unit per tick, and nothing ticks it s
 
     SUBCASE("exactly one unit per tick") {
         PreparedReplacement r(bus);
-        REQUIRE(r.start_existing({.operator_id = op.id, .coordinator = coordinator.id,
+        REQUIRE(r.start_existing({.initiator_id = op.id, .coordinator = coordinator.id,
                                   .role = "worker", .candidate = candidate, .budget = 2}).ok);
         REQUIRE(r.tick().ok);                                  // 2 -> 1
         const TxnResult exhausted = r.tick();                  // 1 -> 0: aborts
@@ -6428,7 +6428,7 @@ TEST_CASE("the budget is the author's, one unit per tick, and nothing ticks it s
     }
     SUBCASE("a budget of one survives the whole ceremony: nothing else spends it") {
         PreparedReplacement r(bus);
-        REQUIRE(r.start_existing({.operator_id = op.id, .coordinator = coordinator.id,
+        REQUIRE(r.start_existing({.initiator_id = op.id, .coordinator = coordinator.id,
                                   .role = "worker", .candidate = candidate, .budget = 1}).ok);
         std::vector<TxnResult> offers;
         coordinator.weave->on_handle = [&](const Message& in, Bus&, ProbeWeave&) {
@@ -6469,17 +6469,17 @@ TEST_CASE("every refusal keeps the substrate's own words") {
     CHECK_FALSE(unstarted.take_outcome().has_value());
 
     PreparedReplacement r(bus);
-    REQUIRE(r.start_existing({.operator_id = op.id, .coordinator = coordinator.id,
+    REQUIRE(r.start_existing({.initiator_id = op.id, .coordinator = coordinator.id,
                               .role = "worker", .candidate = candidate, .budget = 8}).ok);
     // A second start on a bound handle refuses as the FACADE's own fact — the
     // one truth it owns is which transaction it is.
-    const auto again = r.start_existing({.operator_id = op.id, .coordinator = coordinator.id,
+    const auto again = r.start_existing({.initiator_id = op.id, .coordinator = coordinator.id,
                                          .role = "worker", .candidate = candidate, .budget = 8});
     CHECK_FALSE(again.ok);
     CHECK(again.stage == PreparedReplacement::StartStage::AlreadyStarted);
     // Dynamic start without a Kernel refuses as itself, too.
     PreparedReplacement kernel_less(bus);
-    const auto no_kernel = kernel_less.start({.operator_id = op.id,
+    const auto no_kernel = kernel_less.start({.initiator_id = op.id,
                                               .coordinator = coordinator.id,
                                               .role = "worker",
                                               .candidate_name = "x",
@@ -6532,31 +6532,31 @@ TEST_CASE("the kernel unloads everything it still holds at destruction") {
     CHECK(bus.list_weaves().empty());
 }
 
-// ---- office authorship across the dynamic seam (MSG-07) ---------------------
+// ---- role authorship across the dynamic seam (MSG-07) ---------------------
 // The same `mail.as_role(...)` a native weave writes and `mail.authored_from_role(...)` a
 // native recipient reads, spoken and heard across the .so seam, with the host verifying
-// membership at every authorship moment. The fixture attempts whatever it is told, offices it
+// membership at every authorship moment. The fixture attempts whatever it is told, roles it
 // does not hold included, so these cases measure the host's verdicts, not its manners.
 
 namespace {
 
-/// One durable record of a delivery the office suite's native probes heard.
-struct OfficeHeard {
+/// One durable record of a delivery the role suite's native probes heard.
+struct RoleHeard {
     std::string schema;
     std::string authored_role;
-    // OfficeReport fields, when the delivery was one.
+    // RoleReport fields, when the delivery was one.
     std::string what;
     bool authored = false;
     std::int64_t recipients = 0;
     std::string seen_role;
 };
 
-void record_office(std::shared_ptr<std::vector<OfficeHeard>> log, const Message& in) {
-    OfficeHeard h;
+void record_role(std::shared_ptr<std::vector<RoleHeard>> log, const Message& in) {
+    RoleHeard h;
     h.schema = in.payload.schema().name();
     h.authored_role = std::string(in.provenance.authored_role());
-    if (h.schema == office::OfficeReport::zen_name) {
-        const office::OfficeReport r = from_value<office::OfficeReport>(in.payload);
+    if (h.schema == role_speech::RoleReport::zen_name) {
+        const role_speech::RoleReport r = from_value<role_speech::RoleReport>(in.payload);
         h.what = r.what;
         h.authored = r.authored;
         h.recipients = r.recipients;
@@ -6566,11 +6566,11 @@ void record_office(std::shared_ptr<std::vector<OfficeHeard>> log, const Message&
 }
 
 /// The reports named `what`, in arrival order.
-std::vector<OfficeHeard> reports_named(const std::vector<OfficeHeard>& log,
+std::vector<RoleHeard> reports_named(const std::vector<RoleHeard>& log,
                                        const std::string& what) {
-    std::vector<OfficeHeard> out;
-    for (const OfficeHeard& h : log) {
-        if (h.schema == office::OfficeReport::zen_name && h.what == what) {
+    std::vector<RoleHeard> out;
+    for (const RoleHeard& h : log) {
+        if (h.schema == role_speech::RoleReport::zen_name && h.what == what) {
             out.push_back(h);
         }
     }
@@ -6578,41 +6578,41 @@ std::vector<OfficeHeard> reports_named(const std::vector<OfficeHeard>& log,
 }
 
 /// The WorkerNews deliveries, in arrival order.
-std::vector<OfficeHeard> news_of(const std::vector<OfficeHeard>& log) {
-    std::vector<OfficeHeard> out;
-    for (const OfficeHeard& h : log) {
-        if (h.schema == office::WorkerNews::zen_name) {
+std::vector<RoleHeard> news_of(const std::vector<RoleHeard>& log) {
+    std::vector<RoleHeard> out;
+    for (const RoleHeard& h : log) {
+        if (h.schema == role_speech::WorkerNews::zen_name) {
             out.push_back(h);
         }
     }
     return out;
 }
 
-struct OfficeStage {
+struct RoleStage {
     Switchboard bus;
     Kernel kernel{bus, sbfx::fixture_admission()};
-    std::shared_ptr<std::vector<OfficeHeard>> commander_log =
-        std::make_shared<std::vector<OfficeHeard>>();
-    std::shared_ptr<std::vector<OfficeHeard>> dispatcher_log =
-        std::make_shared<std::vector<OfficeHeard>>();
+    std::shared_ptr<std::vector<RoleHeard>> commander_log =
+        std::make_shared<std::vector<RoleHeard>>();
+    std::shared_ptr<std::vector<RoleHeard>> dispatcher_log =
+        std::make_shared<std::vector<RoleHeard>>();
     WeaveId commander{};
     WeaveId dispatcher{};
     WeaveId worker{};
 
-    explicit OfficeStage(const char* image) {
+    explicit RoleStage(const char* image) {
         auto cmd = std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{
-            schema_of<office::OfficeReport>(), schema_of<office::WorkerNews>()});
+            schema_of<role_speech::RoleReport>(), schema_of<role_speech::WorkerNews>()});
         auto cmd_log = commander_log;
         cmd->on_handle = [cmd_log](const Message& in, Bus&, ProbeWeave&) {
-            record_office(cmd_log, in);
+            record_role(cmd_log, in);
         };
         commander = bus.register_weave(std::move(cmd), Grant{}.allow_any(), "commander");
 
         auto dsp = std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{
-            schema_of<office::WorkerNews>()});
+            schema_of<role_speech::WorkerNews>()});
         auto dsp_log = dispatcher_log;
         dsp->on_handle = [dsp_log](const Message& in, Bus&, ProbeWeave&) {
-            record_office(dsp_log, in);
+            record_role(dsp_log, in);
         };
         dispatcher = bus.register_weave(std::move(dsp), Grant{}.allow_any(), "dispatcher");
 
@@ -6622,7 +6622,7 @@ struct OfficeStage {
     }
 
     void command(const char* mode, WeaveId target = WeaveId{}) {
-        office::OfficeCommand c;
+        role_speech::RoleCommand c;
         c.mode = mode;
         c.target = static_cast<std::int64_t>(target.value);
         bus.send_as(commander, worker, Message(to_value(c)));
@@ -6632,15 +6632,15 @@ struct OfficeStage {
 
 } // namespace
 
-static void office_speech_authored(const char* image) {
-    OfficeStage s(image);
+static void role_speech_authored(const char* image) {
+    RoleStage s(image);
 
     s.command("direct", s.commander);
     s.command("to-role");
     s.command("publish");
     s.command("personal");
 
-    // Outbound verdicts, reported from inside the .so: every office act was
+    // Outbound verdicts, reported from inside the .so: every role act was
     // authored; the publication counted its real recipients (commander,
     // dispatcher, and the worker itself accept WorkerNews); personal was not.
     REQUIRE(reports_named(*s.commander_log, "direct").size() == 1);
@@ -6654,20 +6654,20 @@ static void office_speech_authored(const char* image) {
     CHECK_FALSE(reports_named(*s.commander_log, "personal")[0].authored);
 
     // What the native listeners actually received, with the stamped fact:
-    // direct + office publication authored as worker.a; the personal
-    // publication — same shape, same sender — carries no office.
+    // direct + role publication authored as worker.a; the personal
+    // publication — same shape, same sender — carries no role.
     const auto commander_news = news_of(*s.commander_log);
-    REQUIRE(commander_news.size() == 3); // direct, office publish, personal publish
+    REQUIRE(commander_news.size() == 3); // direct, role publish, personal publish
     CHECK(commander_news[0].authored_role == "worker.a");
     CHECK(commander_news[1].authored_role == "worker.a");
     CHECK(commander_news[2].authored_role.empty());
     const auto dispatcher_news = news_of(*s.dispatcher_log);
-    REQUIRE(dispatcher_news.size() == 3); // role-addressed, office publish, personal publish
+    REQUIRE(dispatcher_news.size() == 3); // role-addressed, role publish, personal publish
     CHECK(dispatcher_news[0].authored_role == "worker.a");
     CHECK(dispatcher_news[1].authored_role == "worker.a");
     CHECK(dispatcher_news[2].authored_role.empty());
 
-    // The worker heard its own office publication as office speech, and its own
+    // The worker heard its own role publication as role speech, and its own
     // personal publication as personal — the inbound facts crossed the seam.
     const auto heard = reports_named(*s.commander_log, "heard");
     REQUIRE(heard.size() == 2);
@@ -6677,16 +6677,16 @@ static void office_speech_authored(const char* image) {
     CHECK(heard[1].seen_role.empty());
 }
 
-TEST_CASE("a loaded weave deliberately authors office speech through every door, and its personal "
+TEST_CASE("a loaded weave deliberately authors role speech through every door, and its personal "
           "speech stays personal") {
-    office_speech_authored(ZEN_SO_OFFICE_WORKER);
+    role_speech_authored(ZEN_SO_ROLE_WORKER);
 }
-ZEN_BOXED_TWIN("a boxed weave deliberately authors office speech through every door, and its "
+ZEN_BOXED_TWIN("a boxed weave deliberately authors role speech through every door, and its "
                "personal speech stays personal",
-               office_speech_authored, ZEN_BOX_OFFICE_WORKER)
+               role_speech_authored, ZEN_BOX_ROLE_WORKER)
 
-static void office_speech_refused(const char* image) {
-    OfficeStage s(image);
+static void role_speech_refused(const char* image) {
+    RoleStage s(image);
     std::size_t denied = 0;
     s.bus.add_observer([&denied](const BusEvent& ev) {
         if (ev.kind == EventKind::Refused &&
@@ -6711,44 +6711,44 @@ static void office_speech_refused(const char* image) {
     CHECK(denied == 2);
 }
 
-TEST_CASE("a loaded weave's request to speak for an office it does not hold is refused across the "
+TEST_CASE("a loaded weave's request to speak for a role it does not hold is refused across the "
           "seam — precisely, and nothing is queued") {
-    office_speech_refused(ZEN_SO_OFFICE_WORKER);
+    role_speech_refused(ZEN_SO_ROLE_WORKER);
 }
-ZEN_BOXED_TWIN("a boxed weave's request to speak for an office it does not hold is refused, "
+ZEN_BOXED_TWIN("a boxed weave's request to speak for a role it does not hold is refused, "
                "precisely, and nothing is queued",
-               office_speech_refused, ZEN_BOX_OFFICE_WORKER)
+               role_speech_refused, ZEN_BOX_ROLE_WORKER)
 
-static void office_provenance_inbound(const char* image) {
-    OfficeStage s(image);
+static void role_provenance_inbound(const char* image) {
+    RoleStage s(image);
 
-    // Office speech from ANOTHER office: the dispatcher's own.
+    // Role speech from ANOTHER role: the dispatcher's own.
     REQUIRE(s.bus
-                .office_send_as(s.dispatcher, "dispatcher", s.worker,
-                                Message(to_value(office::WorkerNews{"flash"})))
+                .role_send_as(s.dispatcher, "dispatcher", s.worker,
+                                Message(to_value(role_speech::WorkerNews{"flash"})))
                 .valid());
     // Personal speech from the same dispatcher.
-    s.bus.send_as(s.dispatcher, s.worker, Message(to_value(office::WorkerNews{"psst"})));
+    s.bus.send_as(s.dispatcher, s.worker, Message(to_value(role_speech::WorkerNews{"psst"})));
     s.bus.drain_until_idle();
 
     const auto heard = reports_named(*s.commander_log, "heard");
     REQUIRE(heard.size() == 2);
     // The worker's Mail saw: authored as "dispatcher" — which is NOT worker.a,
-    // so authored_from_role("worker.a") is false while the exact office is
-    // visible; then personal speech with no office at all.
+    // so authored_from_role("worker.a") is false while the exact role is
+    // visible; then personal speech with no role at all.
     CHECK_FALSE(heard[0].authored);
     CHECK(heard[0].seen_role == "dispatcher");
     CHECK_FALSE(heard[1].authored);
     CHECK(heard[1].seen_role.empty());
 }
 
-TEST_CASE("inbound office provenance crosses the seam — authored_from_role answers identically "
+TEST_CASE("inbound role provenance crosses the seam — authored_from_role answers identically "
           "on both sides") {
-    office_provenance_inbound(ZEN_SO_OFFICE_WORKER);
+    role_provenance_inbound(ZEN_SO_ROLE_WORKER);
 }
-ZEN_BOXED_TWIN("inbound office provenance reaches a boxed weave: authored_from_role answers "
+ZEN_BOXED_TWIN("inbound role provenance reaches a boxed weave: authored_from_role answers "
                "identically on both sides",
-               office_provenance_inbound, ZEN_BOX_OFFICE_WORKER)
+               role_provenance_inbound, ZEN_BOX_ROLE_WORKER)
 
 TEST_CASE("the previous-ABI artifact refuses at load by version — no instance becomes live, no "
           "capability goes silently missing") {
@@ -6765,7 +6765,7 @@ TEST_CASE("the previous-ABI artifact refuses at load by version — no instance 
 
 // ---- Senses across a real replacement (SENSE-03) ----------------------------
 // A committed admission overwrites the role holder IN PLACE, so the role never passes through
-// unheld: the case where a predecessor's office claim must survive, stamped stale, and never
+// unheld: the case where a predecessor's role claim must survive, stamped stale, and never
 // be relabelled as the successor's.
 
 namespace {
@@ -6775,11 +6775,11 @@ struct SenseStatus {
     ZEN_SHAPE(SenseStatus, 1, ZEN_FIELD(text));
 };
 
-/// A probe that can be told to claim as an office from inside a delivery, which
+/// A probe that can be told to claim as a role from inside a delivery, which
 /// is the only place a weave can claim at all.
-struct OfficeClaimer : ProbeWeave {
-    explicit OfficeClaimer(std::string office)
-        : ProbeWeave({ping_schema(), schema_of<loom::Activated>()}), office_(std::move(office)) {}
+struct RoleClaimer : ProbeWeave {
+    explicit RoleClaimer(std::string role)
+        : ProbeWeave({ping_schema(), schema_of<loom::Activated>()}), role_(std::move(role)) {}
 
     std::vector<std::shared_ptr<const Schema>> claimed_schemas() const override {
         return {schema_of<SenseStatus>()};
@@ -6787,7 +6787,7 @@ struct OfficeClaimer : ProbeWeave {
     void handle(const Message& in, Bus& bus) override {
         ProbeWeave::handle(in, bus);
         if (!say.empty()) {
-            last = bus.office_claim(office_, to_value(SenseStatus{say}));
+            last = bus.role_claim(role_, to_value(SenseStatus{say}));
             say.clear();
         }
     }
@@ -6795,34 +6795,34 @@ struct OfficeClaimer : ProbeWeave {
     SenseClaimResult last{};
 
 private:
-    std::string office_;
+    std::string role_;
 };
 
 } // namespace
 
-TEST_CASE("a committed admission moves the role in place — the predecessor's office claim "
+TEST_CASE("a committed admission moves the role in place — the predecessor's role claim "
           "survives, stamped stale, and is never attributed to the successor") {
     Switchboard bus;
     Registered coordinator = register_probe(bus, {pong_schema()});
 
-    auto inc = std::make_unique<OfficeClaimer>("worker");
-    OfficeClaimer* incumbent = inc.get();
+    auto inc = std::make_unique<RoleClaimer>("worker");
+    RoleClaimer* incumbent = inc.get();
     const WeaveId inc_id = bus.register_weave(std::move(inc), Grant{}.allow_any(), "worker");
 
-    auto cand = std::make_unique<OfficeClaimer>("worker");
-    OfficeClaimer* successor = cand.get();
+    auto cand = std::make_unique<RoleClaimer>("worker");
+    RoleClaimer* successor = cand.get();
     const WeaveId cand_id = bus.register_weave(std::move(cand), Grant{}.allow_any());
     REQUIRE(bus.seal_weave(cand_id, coordinator.id));
 
-    // The incumbent deliberately claims AS the office.
+    // The incumbent deliberately claims AS the role.
     incumbent->say = "incumbent on duty";
     bus.send(inc_id, Message(ping(1)));
     bus.drain_until_idle();
     REQUIRE(incumbent->last.accepted);
-    SenseReading before = bus.observe_office("worker", "SenseStatus", 1);
+    SenseReading before = bus.observe_role("worker", "SenseStatus", 1);
     REQUIRE(before);
     CHECK(before.by.author == inc_id);
-    CHECK(before.by.office_holder_is_current);
+    CHECK(before.by.role_holder_is_current);
 
     // COMMIT THE REPLACEMENT. The role moves from the incumbent to the successor
     // inside one dispatch, never passing through unheld.
@@ -6834,51 +6834,51 @@ TEST_CASE("a committed admission moves the role in place — the predecessor's o
 
     // THE MANDATORY WITNESS. The claim is still readable and still the
     // incumbent's — Loom does not relabel it, and does not delete it either.
-    SenseReading after = bus.observe_office("worker", "SenseStatus", 1);
+    SenseReading after = bus.observe_role("worker", "SenseStatus", 1);
     REQUIRE(after);
     CHECK(from_value<SenseStatus>(*after.value).text == "incumbent on duty");
     CHECK(after.by.author == inc_id);           // the predecessor claimed it
     CHECK(after.by.author != cand_id);          // NOT the successor
-    CHECK(after.by.office == "worker");         // as the office
-    CHECK_FALSE(after.by.office_holder_is_current); // whose holder has changed
-    CHECK(after.by.office_claim_is_stale());
+    CHECK(after.by.role == "worker");         // as the role
+    CHECK_FALSE(after.by.role_holder_is_current); // whose holder has changed
+    CHECK(after.by.role_claim_is_stale());
     // ...and the successor is not considered to have claimed anything at all.
     CHECK_FALSE(bus.observe(cand_id, "SenseStatus", 1));
 
-    // Once the successor deliberately claims as the office — legally, after its
+    // Once the successor deliberately claims as the role — legally, after its
     // activation — the role-bound view follows it and is current again.
     successor->say = "successor on duty";
     bus.send(cand_id, Message(ping(2)));
     bus.drain_until_idle();
     REQUIRE(successor->last.accepted);
-    SenseReading now = bus.observe_office("worker", "SenseStatus", 1);
+    SenseReading now = bus.observe_role("worker", "SenseStatus", 1);
     REQUIRE(now);
     CHECK(from_value<SenseStatus>(*now.value).text == "successor on duty");
     CHECK(now.by.author == cand_id);
-    CHECK(now.by.office_holder_is_current);
-    CHECK(now.by.revision == 2); // a replacement of the same office key, not a reset
+    CHECK(now.by.role_holder_is_current);
+    CHECK(now.by.revision == 2); // a replacement of the same role key, not a reset
 }
 
-TEST_CASE("a SEALED candidate cannot claim as the office it does not yet hold — an office Sense "
+TEST_CASE("a SEALED candidate cannot claim as the role it does not yet hold — a role Sense "
           "cannot appear before legal activation") {
     Switchboard bus;
     Registered coordinator = register_probe(bus, {pong_schema()});
-    const WeaveId inc_id = bus.register_weave(std::make_unique<OfficeClaimer>("worker"),
+    const WeaveId inc_id = bus.register_weave(std::make_unique<RoleClaimer>("worker"),
                                               Grant{}.allow_any(), "worker");
-    auto cand = std::make_unique<OfficeClaimer>("worker");
-    OfficeClaimer* candidate = cand.get();
+    auto cand = std::make_unique<RoleClaimer>("worker");
+    RoleClaimer* candidate = cand.get();
     const WeaveId cand_id = bus.register_weave(std::move(cand), Grant{}.allow_any());
     REQUIRE(bus.seal_weave(cand_id, coordinator.id));
 
-    // The sealed candidate tries to claim the office DURING preparation.
+    // The sealed candidate tries to claim the role DURING preparation.
     candidate->say = "I am the worker";
     bus.send_as(coordinator.id, cand_id, Message(ping(1))); // its coordinator may reach it
     bus.drain_until_idle();
 
     CHECK_FALSE(candidate->last.accepted);
-    CHECK(candidate->last.why == SenseRefusal::OfficeNotHeld);
-    // The office's claim is still the incumbent's business; nothing appeared.
-    CHECK_FALSE(bus.observe_office("worker", "SenseStatus", 1));
+    CHECK(candidate->last.why == SenseRefusal::RoleNotHeld);
+    // The role's claim is still the incumbent's business; nothing appeared.
+    CHECK_FALSE(bus.observe_role("worker", "SenseStatus", 1));
     CHECK_FALSE(bus.observe(cand_id, "SenseStatus", 1));
     CHECK(bus.role_holder("worker") == inc_id);
 }
@@ -6895,11 +6895,11 @@ struct SenseWindow {
     std::int64_t count = 0;
     bool claimed = false;
     std::int64_t revision = 0;
-    bool office_denied = false;
+    bool role_denied = false;
     std::int64_t read_hp = -1;
     std::uint64_t read_author = 0;
     bool read_personal = false;
-    std::string read_office;      // the office identity the reading carried, VERBATIM
+    std::string read_role;      // the role identity the reading carried, VERBATIM
     bool read_life_current = false;
     bool read_inc_current = false;
 };
@@ -6909,11 +6909,11 @@ SenseWindow sense_window(Switchboard& bus, WeaveId id) {
                                      .field("count", Kind::Int)
                                      .field("claimed", Kind::Int)
                                      .field("revision", Kind::Int)
-                                     .field("office_denied", Kind::Int)
+                                     .field("role_denied", Kind::Int)
                                      .field("read_hp", Kind::Int)
                                      .field("read_author", Kind::Int)
                                      .field("read_personal", Kind::Int)
-                                     .field("read_office", Kind::Text, /*required=*/false)
+                                     .field("read_role", Kind::Text, /*required=*/false)
                                      .field("read_life_current", Kind::Int, /*required=*/false)
                                      .field("read_inc_current", Kind::Int, /*required=*/false)
                                      .build();
@@ -6925,12 +6925,12 @@ SenseWindow sense_window(Switchboard& bus, WeaveId id) {
     w.count = v.get("count")->as_int();
     w.claimed = v.get("claimed")->as_int() != 0;
     w.revision = v.get("revision")->as_int();
-    w.office_denied = v.get("office_denied")->as_int() != 0;
+    w.role_denied = v.get("role_denied")->as_int() != 0;
     w.read_hp = v.get("read_hp")->as_int();
     w.read_author = static_cast<std::uint64_t>(v.get("read_author")->as_int());
     w.read_personal = v.get("read_personal")->as_int() != 0;
-    if (const Cell* c = v.get("read_office")) {
-        w.read_office = std::string(c->as_text());
+    if (const Cell* c = v.get("read_role")) {
+        w.read_role = std::string(c->as_text());
     }
     if (const Cell* c = v.get("read_life_current")) {
         w.read_life_current = c->as_int() != 0;
@@ -6965,7 +6965,7 @@ static void sense_claims_and_reads(const char* image) {
     const SenseWindow w = sense_window(bus, dyn.id);
     CHECK(w.claimed);            // the claim took, across the seam
     CHECK(w.revision == 1);      // ...at revision 1 under its key
-    CHECK(w.office_denied);      // the forged office claim refused PRECISELY
+    CHECK(w.role_denied);      // the forged role claim refused PRECISELY
     CHECK(w.read_hp == 42);      // the synchronous read-back saw its own claim
     CHECK(w.read_author == dyn.id.value); // with the host's authorship, not its own word
     CHECK(w.read_personal);      // and it was a personal claim, correctly unstamped
@@ -6975,7 +6975,7 @@ static void sense_claims_and_reads(const char* image) {
     REQUIRE(host_view);
     CHECK(host_view.value->get("hp")->as_int() == 42);
     CHECK(host_view.by.author == dyn.id);
-    CHECK(host_view.by.office.empty());
+    CHECK(host_view.by.role.empty());
     CHECK(host_view.by.revision == 1);
     CHECK(bus.retained_claim_count() == 1);
 
@@ -6990,18 +6990,18 @@ static void sense_claims_and_reads(const char* image) {
     CHECK(bus.retained_claim_count() == 0);
 }
 
-TEST_CASE("a LOADED weave claims, is refused a forged office claim, and reads its own claim back "
+TEST_CASE("a LOADED weave claims, is refused a forged role claim, and reads its own claim back "
           "synchronously — the same four verbs, the same meanings") {
     sense_claims_and_reads(ZEN_SO_SENSES);
 }
-ZEN_BOXED_TWIN("a boxed weave claims, is refused a forged office claim, and reads its own claim "
+ZEN_BOXED_TWIN("a boxed weave claims, is refused a forged role claim, and reads its own claim "
                "back: the same four verbs, the same meanings",
                sense_claims_and_reads, ZEN_BOX_SENSES)
 
-// ---- the observed office identity IS the authored one (SENSE-03) ------------
-// The office name crosses the seam whole, through the same caller-owned ZenByteSink the value
+// ---- the observed role identity IS the authored one (SENSE-03) ------------
+// The role name crosses the seam whole, through the same caller-owned ZenByteSink the value
 // uses: a truncated name is not a smaller answer but a wrong one, a plausible prefix nothing
-// flags, and two different offices could arrive looking identical. These cases fail under any
+// flags, and two different roles could arrive looking identical. These cases fail under any
 // truncation, whatever its bound.
 
 namespace {
@@ -7013,11 +7013,11 @@ std::shared_ptr<const Schema> sensehealth_v1() {
     return s;
 }
 
-/// A native office-holder that claims the shape the dynamic fixture reads, so
+/// A native role-holder that claims the shape the dynamic fixture reads, so
 /// the two tiers are looking at one repository and one claim.
-struct HealthOfficer : ProbeWeave {
-    explicit HealthOfficer(std::string office)
-        : ProbeWeave({ping_schema()}), office_(std::move(office)) {}
+struct HealthRoleHolder : ProbeWeave {
+    explicit HealthRoleHolder(std::string role)
+        : ProbeWeave({ping_schema()}), role_(std::move(role)) {}
 
     std::vector<std::shared_ptr<const Schema>> claimed_schemas() const override {
         return {sensehealth_v1()};
@@ -7026,12 +7026,12 @@ struct HealthOfficer : ProbeWeave {
         ProbeWeave::handle(in, bus);
         Value v(sensehealth_v1());
         v.set("hp", Cell::integer(in.payload.get("seq")->as_int()));
-        last = bus.office_claim(office_, std::move(v));
+        last = bus.role_claim(role_, std::move(v));
     }
     SenseClaimResult last{};
 
 private:
-    std::string office_;
+    std::string role_;
 };
 
 /// A role name far past 127 bytes, built so that the ONLY thing distinguishing two of them
@@ -7053,24 +7053,24 @@ Value sense_probe(const std::string& role) {
 
 } // namespace
 
-static void sense_office_verbatim(const char* image) {
+static void sense_role_verbatim(const char* image) {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
 
     const std::string role_a = long_role('A');
     REQUIRE(role_a.size() > 128); // the case is meaningless if it fits in 128 bytes
 
-    // A native holder of the long office claims through it.
-    const WeaveId officer =
-        bus.register_weave(std::make_unique<HealthOfficer>(role_a), Grant{}.allow_any(), role_a);
-    bus.send(officer, Message(ping(42)));
+    // A native holder of the long role claims through it.
+    const WeaveId holder =
+        bus.register_weave(std::make_unique<HealthRoleHolder>(role_a), Grant{}.allow_any(), role_a);
+    bus.send(holder, Message(ping(42)));
     bus.drain_until_idle();
 
     // NATIVE: exact; std::string imposes no bound.
-    SenseReading native = bus.observe_office(role_a, "SenseHealth", 1);
+    SenseReading native = bus.observe_role(role_a, "SenseHealth", 1);
     REQUIRE(native);
-    CHECK(native.by.office == role_a);
-    CHECK(native.by.office.size() == role_a.size());
+    CHECK(native.by.role == role_a);
+    CHECK(native.by.role.size() == role_a.size());
 
     // DYNAMIC: the same question across the seam, and the same answer required.
     LoadResult dyn = kernel.load("reader", image, "",
@@ -7081,19 +7081,19 @@ static void sense_office_verbatim(const char* image) {
 
     SenseWindow w = sense_window(bus, dyn.id);
     CHECK(w.read_hp == 42);                    // it really did read the claim
-    CHECK_FALSE(w.read_personal);              // ...as an office claim
-    CHECK(w.read_office.size() == role_a.size()); // nothing was dropped
-    CHECK(w.read_office == role_a);             // ...and nothing was altered
-    CHECK(w.read_office == native.by.office);   // native and dynamic agree exactly
+    CHECK_FALSE(w.read_personal);              // ...as a role claim
+    CHECK(w.read_role.size() == role_a.size()); // nothing was dropped
+    CHECK(w.read_role == role_a);             // ...and nothing was altered
+    CHECK(w.read_role == native.by.role);   // native and dynamic agree exactly
 }
 
-TEST_CASE("a dynamic observation reports the EXACT authored office identity — a name past 127 "
+TEST_CASE("a dynamic observation reports the EXACT authored role identity — a name past 127 "
           "bytes crosses whole, not as a plausible prefix") {
-    sense_office_verbatim(ZEN_SO_SENSES);
+    sense_role_verbatim(ZEN_SO_SENSES);
 }
-ZEN_BOXED_TWIN("a boxed observation reports the exact authored office identity: a name past 127 "
+ZEN_BOXED_TWIN("a boxed observation reports the exact authored role identity: a name past 127 "
                "bytes crosses whole",
-               sense_office_verbatim, ZEN_BOX_SENSES)
+               sense_role_verbatim, ZEN_BOX_SENSES)
 
 // The generation facts must cross the seam SEPARATELY: `author_life_is_current` and
 // `author_incarnation_is_current` disagree across a live replacement, so a dynamic reader
@@ -7107,9 +7107,9 @@ static void sense_incarnation_moved(const char* image) {
     // A short role on purpose: what this pins is the generation facts, not name
     // length (that is the pair of cases above).
     const std::string role = "clinic.duty";
-    const WeaveId officer =
-        bus.register_weave(std::make_unique<HealthOfficer>(role), Grant{}.allow_any(), role);
-    bus.send(officer, Message(ping(42)));
+    const WeaveId holder =
+        bus.register_weave(std::make_unique<HealthRoleHolder>(role), Grant{}.allow_any(), role);
+    bus.send(holder, Message(ping(42)));
     bus.drain_until_idle();
 
     LoadResult dyn = kernel.load("reader", image, "",
@@ -7127,7 +7127,7 @@ static void sense_incarnation_moved(const char* image) {
 
     // NEW CODE BEHIND THE SAME LIVE ID. `swap_state` bumps the incarnation, and
     // `begin_new_life` advances only from `!alive` — so the life stands.
-    REQUIRE(bus.swap_state(officer, bus.snapshot_bytes(officer)).revived);
+    REQUIRE(bus.swap_state(holder, bus.snapshot_bytes(holder)).revived);
 
     // AFTER: the predecessor's claim is still materialized, still says who made
     // it, and the loaded reader is told the code behind that author has been
@@ -7142,7 +7142,7 @@ static void sense_incarnation_moved(const char* image) {
 
     // The successor claims for itself, and both read current again — so the flag
     // tracks the topology rather than latching once a swap has ever happened.
-    bus.send(officer, Message(ping(7)));
+    bus.send(holder, Message(ping(7)));
     bus.drain_until_idle();
     bus.send(dyn.id, Message(sense_probe(role)));
     bus.drain_until_idle();
@@ -7153,7 +7153,7 @@ static void sense_incarnation_moved(const char* image) {
 
     // ...and the host's own reading agrees at every step, so the seam neither
     // invented a fact nor lost one.
-    const SenseReading native = bus.observe_office(role, "SenseHealth", 1);
+    const SenseReading native = bus.observe_role(role, "SenseHealth", 1);
     REQUIRE(native);
     CHECK(native.by.author_life_is_current == current.read_life_current);
     CHECK(native.by.author_incarnation_is_current == current.read_inc_current);
@@ -7166,20 +7166,20 @@ TEST_CASE("a LOADED reader is told the incarnation moved while the life stood �
 ZEN_BOXED_TWIN("a boxed reader is told the incarnation moved while the life stood",
                sense_incarnation_moved, ZEN_BOX_SENSES)
 
-static void sense_long_offices_apart(const char* image) {
+static void sense_long_roles_apart(const char* image) {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
 
     const std::string role_a = long_role('A');
     const std::string role_b = long_role('B');
     // The adversarial property: identical far past 127 bytes, so a truncating seam hands back
-    // one identity for two different offices.
+    // one identity for two different roles.
     REQUIRE(role_a.size() == role_b.size());
     REQUIRE(role_a.substr(0, 128) == role_b.substr(0, 128));
     REQUIRE(role_a != role_b);
 
-    bus.register_weave(std::make_unique<HealthOfficer>(role_a), Grant{}.allow_any(), role_a);
-    bus.register_weave(std::make_unique<HealthOfficer>(role_b), Grant{}.allow_any(), role_b);
+    bus.register_weave(std::make_unique<HealthRoleHolder>(role_a), Grant{}.allow_any(), role_a);
+    bus.register_weave(std::make_unique<HealthRoleHolder>(role_b), Grant{}.allow_any(), role_b);
     bus.send_to_role(role_a, Message(ping(1)));
     bus.send_to_role(role_b, Message(ping(2)));
     bus.drain_until_idle();
@@ -7196,22 +7196,22 @@ static void sense_long_offices_apart(const char* image) {
     bus.drain_until_idle();
     const SenseWindow saw_b = sense_window(bus, dyn.id);
 
-    // Each reading names ITS OWN office, and the two are not confusable.
-    CHECK(saw_a.read_office == role_a);
-    CHECK(saw_b.read_office == role_b);
-    CHECK(saw_a.read_office != saw_b.read_office);
-    // ...and they really were different claims, not one office read twice.
+    // Each reading names ITS OWN role, and the two are not confusable.
+    CHECK(saw_a.read_role == role_a);
+    CHECK(saw_b.read_role == role_b);
+    CHECK(saw_a.read_role != saw_b.read_role);
+    // ...and they really were different claims, not one role read twice.
     CHECK(saw_a.read_hp == 1);
     CHECK(saw_b.read_hp == 2);
 }
 
-TEST_CASE("two long offices differing ONLY past 127 bytes stay distinguishable across the seam — "
-          "truncation would report them as the same office") {
-    sense_long_offices_apart(ZEN_SO_SENSES);
+TEST_CASE("two long roles differing ONLY past 127 bytes stay distinguishable across the seam — "
+          "truncation would report them as the same role") {
+    sense_long_roles_apart(ZEN_SO_SENSES);
 }
-ZEN_BOXED_TWIN("two long offices differing only past 127 bytes stay distinguishable to a boxed "
+ZEN_BOXED_TWIN("two long roles differing only past 127 bytes stay distinguishable to a boxed "
                "reader",
-               sense_long_offices_apart, ZEN_BOX_SENSES)
+               sense_long_roles_apart, ZEN_BOX_SENSES)
 
 TEST_CASE("a loaded weave without observe authority is refused a read, and its claim of an "
           "undeclared shape is refused — the seam carries the distinct reasons") {

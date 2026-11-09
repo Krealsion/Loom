@@ -4,7 +4,7 @@
 #ifndef ZEN_WEAVER_VOCABULARY_HPP
 #define ZEN_WEAVER_VOCABULARY_HPP
 
-// The authority-policy vocabulary: the shapes a governed session, a human operator and a
+// The authority-policy vocabulary: the shapes a governed session, a human weaver and a
 // Weaver say to one another. docs/reference/weaver.md#the-vocabulary
 //
 // It is a header of its own so that a governed session can ask for authority knowing nothing
@@ -21,7 +21,7 @@
 //   The decision is the shape, never a field. `ApproveAuthority` and `RefuseAuthority` are two
 //       shapes that carry only the name of the prompt they answer; a mistyped shape name is a
 //       gate refusal, never a yes.
-//   The request language is narrower than `LiveAuthority`: one shape, one version, one office,
+//   The request language is narrower than `LiveAuthority`: one shape, one version, one role,
 //       and at most one door. No "any shape", "any target", WeaveId or observe rule can be asked
 //       for, however wide the Weaver's ceiling.
 //
@@ -44,15 +44,15 @@ namespace loom {
 /// or, naming a `door`, "may I act at that door with it?". Sent as an ordinary message, so the
 /// Weaver answers through Loom's own answer authority and the session reads
 /// `mail.answers_ask()`; there is no request id of its own. A role, not a WeaveId: authority
-/// that follows an office follows whoever holds it at delivery, as `Grant::allow_to_role` does.
+/// that follows a role follows whoever holds it at delivery, as `Grant::allow_to_role` does.
 /// A door is parsed by the Weaver (`Door::parse`) and a malformed one refused in words; empty,
 /// the request is for a door-less rule. `purpose` is untrusted prose, never part of the
-/// decision, and escaped by the Weaver before an operator sees it (`safe_operator_text`); it may
+/// decision, and escaped by the Weaver before a weaver sees it (`safe_weaver_text`); it may
 /// be empty.
 struct RequestAuthority {
     std::string shape;    ///< the shape name the session wants to be allowed to send
     std::int64_t version; ///< that shape's version (1 .. UINT32_MAX)
-    std::string to_role;  ///< the office it wants to speak to
+    std::string to_role;  ///< the role it wants to speak to
     std::string purpose;  ///< requester-authored prose. UNTRUSTED. may be empty
     std::string door{};   ///< the door the rule is to name, or empty for a door-less rule
 
@@ -84,7 +84,7 @@ struct RequestAuthorityV1 {
 
 // ---- the Weaver asks the human ---------------------------------------------
 
-/// PUT ONE AUTHORITY REQUEST TO THE OPERATOR — everything a person needs to
+/// PUT ONE AUTHORITY REQUEST TO THE WEAVER — everything a person needs to
 /// decide, with the trusted and the untrusted told apart by name.
 ///
 ///   `prompt`         TRUSTED. This prompt's name: a number no other prompt on
@@ -99,28 +99,28 @@ struct RequestAuthorityV1 {
 ///                    already checked is the one subject it governs.
 ///   `shape/version/
 ///    to_role`        TRUSTED. The rule AS THE WEAVER PARSED IT — not as the
-///                    requester spelled it — so what the operator approves is
+///                    requester spelled it — so what the weaver approves is
 ///                    what will be installed.
 ///   `until`          TRUSTED. How long a yes lasts. Present because "allow
 ///                    once" does not exist here and a decision surface that let
 ///                    a person assume it did would be lying about the grant it
 ///                    is about to make.
 ///   `requester_says` UNTRUSTED, and the field name says so at the point of
-///                    reading rather than in documentation the operator does not
+///                    reading rather than in documentation the weaver does not
 ///                    have open. Escaped and bounded by the Weaver.
 ///
 /// IT DOES NOT CLAIM THE DESTINATION EXISTS. "requests: Work v1 -> role
 /// some.service" means exactly that and never "requests access to the running
 /// FooService at #19": the Weaver does not resolve the role, is not authorized
 /// to, and authority is not service discovery. Nor does a door claim that the
-/// office has such a pane or control: what a door names is the office's to answer.
+/// role has such a pane or control: what a door names is the role's to answer.
 struct AuthorityPrompt {
     std::int64_t prompt;        ///< TRUSTED: this prompt's name, unique on its bus
     std::string door;           ///< TRUSTED: the requested door, as parsed; empty for none
     std::int64_t requester;     ///< TRUSTED: the bus-stamped requester's WeaveId
     std::string shape;          ///< TRUSTED: the requested shape, as parsed
     std::int64_t version;       ///< TRUSTED: its version, as parsed
-    std::string to_role;        ///< TRUSTED: the requested office, as parsed
+    std::string to_role;        ///< TRUSTED: the requested role, as parsed
     std::string until;          ///< TRUSTED: what a yes lasts for (never "once")
     std::string requester_says; ///< UNTRUSTED: the requester's own prose, escaped
 
@@ -138,7 +138,7 @@ struct AuthorityPrompt {
 //
 // A decision names the prompt it answers, and nothing else. One pending request
 // is not enough to make a decision safe without the name: the request pending
-// when a decision arrives is not always the one its operator was shown. A key
+// when a decision arrives is not always the one its weaver was shown. A key
 // repeats, a press is doubled, a send arrives late, or the requester asks again
 // the moment it hears "granted", and a decision that named nothing would land on
 // the next request, or on the prompt of a Weaver that replaced its own. So a
@@ -151,7 +151,7 @@ struct AuthorityPrompt {
 
 /// YES — install the rule of the prompt named `prompt`, if that prompt is the
 /// one pending. Refused by the Weaver unless the bus-stamped sender is the
-/// configured operator seat: a weave that can REACH the Weaver is not thereby
+/// configured weaver seat: a weave that can REACH the Weaver is not thereby
 /// the user.
 struct ApproveAuthority {
     std::int64_t prompt = 0; ///< the `AuthorityPrompt::prompt` this decides; 0 names none
@@ -204,7 +204,7 @@ struct RevokeAuthority {
 
 /// WHAT IS ACTUALLY ENFORCED RIGHT NOW? Answered from the Kernel's own values
 /// through the Kernel's own predicates, never from a policy mirror. Accepted from
-/// the operator seat and from the governed session itself — the latter is
+/// the weaver seat and from the governed session itself — the latter is
 /// self-inspection, which reveals to a subject only what it could already
 /// discover by trying.
 struct DescribeAuthority {
@@ -221,16 +221,16 @@ struct DescribeAuthority {
 /// `basis` exists because there are two different yeses and confusing them would
 /// let the Weaver take credit for authority it never granted:
 ///
-///   "delegated"         an operator said yes, and a rule was installed
+///   "delegated"         a weaver said yes, and a rule was installed
 ///   "already-permitted" the effective authority ALREADY covered this, so
 ///                       nothing was installed, nobody was asked, and the
 ///                       delegated overlay is exactly what it was
 ///
 /// A session that hears the second learns something true and useful (its own
 /// baseline is wider than it assumed); one that heard a bare "yes" for both would
-/// have no way to tell an operator's decision from a no-op. It also means
+/// have no way to tell a weaver's decision from a no-op. It also means
 /// repeated identical requests can never grow a duplicate-rule vector: the second
-/// one is answered here and never reaches the operator at all.
+/// one is answered here and never reaches the weaver at all.
 ///
 /// RECEIVING IT PERFORMS NOTHING. The session must decide, in its own code,
 /// whether and when to retry what it wanted to do; no layer replays the message
@@ -247,7 +247,7 @@ struct AuthorityGranted {
 /// WHAT THE BUS WILL ACTUALLY DECIDE, rendered — the answer to
 /// `DescribeAuthority`.
 ///
-/// Two lists, not three: `base` is what the host admitted, `delegated` what an operator has
+/// Two lists, not three: `base` is what the host admitted, `delegated` what a weaver has
 /// installed since, and effective authority is their union, read rather than sent. Loom keeps
 /// no materialized effective authority either; it is computed at every delivery
 /// (`effective_permits*`, zen/switchboard/grant.hpp).
@@ -259,7 +259,7 @@ struct AuthorityGranted {
 struct AuthorityDescription {
     std::int64_t subject;                  ///< the one governed subject, from the capability
     std::vector<std::string> base;         ///< what the host attached at admission (immutable)
-    std::vector<std::string> delegated;    ///< what an operator has installed since
+    std::vector<std::string> delegated;    ///< what a weaver has installed since
 
     using ZenSelf = AuthorityDescription;
     static constexpr const char* zen_name = "zen.AuthorityDescription";

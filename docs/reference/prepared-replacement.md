@@ -10,7 +10,7 @@ been told. Laws: [PR-01..09](../laws/replacement-laws.md). Authoring surface:
 
 | Party | Holds | Meaning |
 |---|---|---|
-| operator | begins/aborts/commits; owns the outcome | the decision-maker |
+| initiator | begins/aborts/commits; owns the outcome | the decision-maker |
 | coordinator | the preparation conversation; offers the answer | talks the candidate through |
 | incumbent | the role, throughout preparation | never told anything |
 | candidate | sealed to the exact coordinator | outside the world until admitted |
@@ -31,12 +31,12 @@ Preparing ──ask/answer──► Ready ──commit──► AdmissionPending
   not a clock) may be spent via `tick_preparation`; the one preparation ask may
   be opened.
 - **Ready** — the candidate's authenticated answer was consumed. Nothing
-  commits automatically; the operator decides.
+  commits automatically; the initiator decides.
 - **AdmissionPending** — commit *scheduled* the admission envelope. The
   incumbent is still the service, the candidate still sealed, abort still
   possible. Real and observable; no layer may hide it.
 - **Committed / Aborted** — terminal, exact-once, recorded for the exact
-  operator life (16 retained, oldest dropped; consumed once).
+  initiator life (16 retained, oldest dropped; consumed once).
 
 Bounds: 8 concurrent transactions · budget ≤ 1024 · one active transaction per
 incumbent *and* per candidate. Capacity refuses before anything is inspected.
@@ -85,7 +85,7 @@ refuse the activation; "publicly admitted but never told" is unrepresentable.
 The activation is **Loom's act, not a send**: enqueued ungated, authorized by
 the lifecycle authority checked at scheduling; the coordinator's ordinary
 `Emit<zen.Activated>` grant is never consulted. The stamped sender names *who
-admitted* (for the consumer's per-operator lineage rule), not who spoke. Its
+admitted* (for the consumer's per-initiator lineage rule), not who spoke. Its
 handler holds **no answer authority** ([LIFE-05](../laws/lifecycle-laws.md)).
 
 Failure direction, always: the incumbent remains public, unsealed, serving;

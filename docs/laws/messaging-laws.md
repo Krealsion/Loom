@@ -32,7 +32,7 @@ MEANS
 - out-of-process and bridge frames get their sender from the connection.
 
 DOES NOT MEAN
-- that the stamp says anything about *office*: see MSG-04.
+- that the stamp says anything about *role*: see MSG-04.
 
 PROVEN BY — `WeaveBus` (the only bus a handler holds); suites `switchboard`,
 `isolation` (stamped-from-connection), `bridge` (forged wire frame loses).
@@ -53,7 +53,7 @@ DOES NOT MEAN
 PROVEN BY — `Envelope::sender_life`; suite `provenance` (life/incarnation
 cases).
 
-## MSG-04 — Role addressing is destination, not office
+## MSG-04 — Role addressing is destination, not authorship
 
 LAW — `send_to_role(R, m)` means *deliver to whoever holds R at delivery time*.
 It proves nothing about the sender having spoken *as* R.
@@ -63,15 +63,15 @@ MEANS
 - authorization for role sends is by role name (stable across replacement).
 
 DOES NOT MEAN
-- that a message *from* a role-holder carries any attestation of that office —
+- that a message *from* a role-holder carries any attestation of that role —
   merely *holding* R could never supply it (the same weave, holding the same
-  office, may speak personally or as the office; holding is necessary, not
+  role, may speak personally or as the role; holding is necessary, not
   sufficient). Deliberately speaking **as** R is its own explicit act with its
   own law: [MSG-07](#msg-07--role-authorship-is-explicit).
 
 PROVEN BY — delivery-time resolution: suite `switchboard`; the
 destination/authorship orthogonality: suite `role_authorship` (all four
-combinations, and the two roles of an office-to-office send never conflating).
+combinations, and the two roles of a role-to-role send never conflating).
 
 ## MSG-05 — Refusals are structured and observable
 
@@ -80,7 +80,7 @@ observers with a named `RefusalReason`; a refused delivery reaches nobody.
 
 MEANS
 - silence is never an outcome the bus produces on its own initiative;
-- reasons are distinct because they send an operator to distinct fixes.
+- reasons are distinct because they send a weaver to distinct fixes.
 
 DOES NOT MEAN
 - that every refusal reaches its sender. An explicit notice acceptor may learn
@@ -101,7 +101,7 @@ MEANS
 - zero recipients is legal, not an error.
 
 DOES NOT MEAN
-- that an ordinary publication attests an office — office-authored publication
+- that an ordinary publication attests a role — role-authored publication
   is the explicit act ([MSG-07](#msg-07--role-authorship-is-explicit)), whose
   one authorship moment coincides with this law's one recipient-pick moment.
 
@@ -115,17 +115,17 @@ deliberately requested authorship as R **and** Loom verified at that moment
 that the sender held R. Holding R alone attaches nothing.
 
 MEANS
-- personal and office speech by the same WeaveId differ, and a recipient can
+- personal and role speech by the same WeaveId differ, and a recipient can
   tell (`mail.authored_from_role(R)` / `mail.authored_role()`);
-- office identity can survive replacement: a successor legitimately authors as
+- role identity can survive replacement: a successor legitimately authors as
   the inherited role, a predecessor's *new* attempt refuses
   (`RoleAuthorshipDenied` — never a silent downgrade to personal speech);
 - the recipient need not query current role topology — the delivery already
   carries the historical fact, stamped at the authorship moment and never
   recomputed from later topology;
-- publication can carry office provenance, to every recipient, with
+- publication can carry role provenance, to every recipient, with
   "authorship refused" and "authorized, zero recipients" kept distinct
-  (`OfficePublication`);
+  (`RolePublication`);
 - the fact crosses the dynamic seam both ways (since ABI v5), with the host
   verifying membership — a library requests, never attests.
 
@@ -138,11 +138,11 @@ DOES NOT MEAN
   history, not a claim about now;
 - payload role strings have standing — provenance has no wire form, and a
   copied Message re-sent is personal speech;
-- a successor inherits predecessor identity — the office survives its
-  officeholder precisely *without* conflating the two.
+- a successor inherits predecessor identity — the role survives its
+  holder precisely *without* conflating the two.
 
-PROVEN BY — `Switchboard::office_send_as` / `office_send_to_role_as` /
-`office_publish_as` (`holds_role_now` at enqueue); suite `role_authorship`
+PROVEN BY — `Switchboard::role_send_as` / `role_send_to_role_as` /
+`role_publish_as` (`holds_role_now` at enqueue); suite `role_authorship`
 (the hostile matrix, the replacement matrix, the definition-of-done program);
 suite `kernel` (dynamic parity, the previous-ABI refusal); suite `isolation` (fail-closed
 across the pipe); and the role-authorship replay in [Night Lab](../evidence/night-lab.md).
@@ -184,8 +184,8 @@ DOES NOT MEAN, of that last clause
 - that a publication cannot fail. One whose shape RESOLVES and whose bytes fail
   the gate is still refused: somebody accepts that shape and would have been
   handed those bytes, so a delivery that should have happened did not;
-- that an addressed reach is ever quiet. A send, a role send, an answer and an
-  office send each named somewhere they expected to arrive, so zero arrivals is a
+- that an addressed reach is ever quiet. A send, a role send, an answer and a
+  role send each named somewhere they expected to arrive, so zero arrivals is a
   failure there whatever the reason;
 - that the library is told less. The seam's status to the emitting library is the
   same either way; only Loom's own diagnostic is withheld, and `Bus::publish`'s
@@ -284,8 +284,8 @@ finite backlog cleared whole, FIFO and `stop()` across the boundary, the
 empty-queue no-op, reentrancy, the drain still draining to empty, one
 perpetually productive world left measurably different by each turn, and an
 outer host loop keeping control every lap while the service stays healthy),
-suite `bridge` (a bridge host staying responsive — accepting and welcoming an
-operator — while a perpetual driver runs, and the default still draining).
+suite `bridge` (a bridge host staying responsive — accepting and welcoming a
+weaver — while a perpetual driver runs, and the default still draining).
 
 ## MSG-10 — A callback that throws costs the delivery, not the bus
 
@@ -407,7 +407,7 @@ authorship. Every ordinary send path strips caller-supplied attestation.
 
 MEANS
 
-- verified office authorship participates without changing grant or role resolution;
+- verified role authorship participates without changing grant or role resolution;
 - public reasons preserve authority-before-resolution and candidate concealment;
 - the exact queued attempt, never correlation alone, identifies local work;
 - notification is FIFO and non-reentrant, at most one per eligible refused send;

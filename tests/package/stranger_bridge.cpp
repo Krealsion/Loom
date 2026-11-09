@@ -82,7 +82,7 @@ int main() {
     const std::uint16_t port = loom::bridge_socket_port(listener);
 
     // THE POLICY IS THE STRANGER'S: one credential admits, as a name the stranger chose, with
-    // one shape to one office and no observation. Everything else is refused in words.
+    // one shape to one role and no observation. Everything else is refused in words.
     loom::BridgeServer server(bus, listener, [](const loom::ConnectionRequest& r) {
         if (r.credential != "let-me-in") {
             return loom::ConnectionVerdict::refuse("the stranger admits one credential");
@@ -149,7 +149,7 @@ int main() {
                 return delivered != nullptr;
             },
             3000);
-        ok(delivered != nullptr, "an office-addressed ask is answered across the crossing");
+        ok(delivered != nullptr, "a role-addressed ask is answered across the crossing");
         if (delivered != nullptr) {
             ok(delivered->correlation == 9 && delivered->answers_ask,
                "...under its correlation, with Loom's attestation that it IS the answer");

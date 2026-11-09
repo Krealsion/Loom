@@ -130,7 +130,7 @@ Four positions, four honest outcomes, **no automatic migration ever**:
 | Position | Outcome |
 |---|---|
 | before the boundary | means what it always meant |
-| after the boundary, incumbent still in office | delivered; the **domain** declines it |
+| after the boundary, incumbent still in role | delivered; the **domain** declines it |
 | queued around commit (role-addressed) | resolved at delivery → reaches the successor |
 | after the role moved | `NotAccepted`, visibly, by name |
 
@@ -155,9 +155,9 @@ and none is planned.
 
 ## Senses across a handoff
 
-- a **sealed candidate** has no office claim and cannot make one;
+- a **sealed candidate** has no role claim and cannot make one;
 - across the commit the incumbent's final claim stays the incumbent's, stamped
-  `office_holder_is_current = false`;
+  `role_holder_is_current = false`;
 - the successor is considered to have claimed nothing until its own
   `zen.Activated` handler claims — after which the role-bound view follows it, at
   the next revision of the same key;

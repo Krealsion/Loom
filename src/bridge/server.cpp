@@ -156,9 +156,9 @@ namespace {
 
 // The proxy's trivial state (it is in-process, never crash-revived). A 1-field count keeps
 // register_weave's snapshot-seeding happy -- exactly as the in-process console's state does.
-std::shared_ptr<const loom::Schema> operator_state_schema() {
+std::shared_ptr<const loom::Schema> connection_state_schema() {
     static const auto s =
-        loom::SchemaBuilder("zen.OperatorState", 1).field("n", loom::Kind::Int).build();
+        loom::SchemaBuilder("zen.ProxyState", 1).field("n", loom::Kind::Int).build();
     return s;
 }
 
@@ -199,7 +199,7 @@ std::string encode_for(PayloadEncoding e, const loom::Value& v) {
 
 } // namespace
 
-BridgeAdmission operator_admission() {
+BridgeAdmission weaver_admission() {
     return [](const ConnectionRequest& r) {
         ConnectionAdmitted a;
         a.grant = loom::Grant{}.allow_any();
@@ -215,16 +215,16 @@ BridgeAdmission operator_admission() {
 // bridge stamps on every send it makes for the connection. handle() ships each delivery to the
 // peer as a Delivered frame with the facts the bus stamped on it, since a peer given only the
 // bytes could not tell an attested answer from any participant's helpful `zen.Result`.
-class OperatorProxy final : public loom::Weave {
+class ConnectionProxy final : public loom::Weave {
 public:
     /// `slot` is the connection's non-owning pointer back to this proxy, cleared when the proxy
     /// dies -- which the BUS decides, not the server: at teardown the bus destroys its weaves in
     /// registry order, so a proxy may be gone before the weave that owns the server is, and the
     /// server's own destructor must find a null rather than a freed object.
-    OperatorProxy(BridgeChannel* ch, OperatorProxy** slot, PayloadEncoding encoding,
+    ConnectionProxy(BridgeChannel* ch, ConnectionProxy** slot, PayloadEncoding encoding,
                   BridgeWake* wake)
         : ch_(ch), slot_(slot), encoding_(encoding), wake_(wake) {}
-    ~OperatorProxy() override {
+    ~ConnectionProxy() override {
         if (slot_ != nullptr && *slot_ == this) {
             *slot_ = nullptr;
         }
@@ -266,7 +266,7 @@ public:
         }
     }
     loom::Value snapshot() const override {
-        loom::Value v(operator_state_schema());
+        loom::Value v(connection_state_schema());
         v.set("n", loom::Cell::integer(0));
         return v;
     }
@@ -287,7 +287,7 @@ public:
 
 private:
     BridgeChannel* ch_;
-    OperatorProxy** slot_;
+    ConnectionProxy** slot_;
     PayloadEncoding encoding_;
     BridgeWake* wake_;
 };
@@ -298,7 +298,7 @@ BridgeServer::BridgeServer(loom::Switchboard& bus, socket_t listener, BridgeAdmi
     : bus_(bus), listener_(listener), admission_(std::move(admission)),
       wake_(std::make_unique<BridgeWake>()) {
     if (!admission_) {
-        admission_ = operator_admission();
+        admission_ = weaver_admission();
     }
     tap_obs_ = bus_.add_observer([this](const loom::BusEvent& e) { on_tap(e); });
 }
@@ -372,7 +372,7 @@ void BridgeServer::accept_new() {
         if (s == kInvalidSocket) {
             break; // nothing pending (would_block) or a transient error: try again next service
         }
-        if (conns_.size() >= kMaxOperatorConnections) {
+        if (conns_.size() >= kMaxWeaverConnections) {
             // Shed past the cap: accept (so the OS pending queue clears) then close, and count it.
             bridge_close(s);
             ++declined_;
@@ -423,8 +423,8 @@ void BridgeServer::send_refused(Conn& c, std::uint64_t correlation, const std::s
 }
 
 void BridgeServer::admit(Conn& c, const ConnectionAdmitted& a) {
-    auto proxy = std::make_unique<OperatorProxy>(c.ch.get(), &c.proxy, a.encoding, wake_.get());
-    OperatorProxy* raw = proxy.get();
+    auto proxy = std::make_unique<ConnectionProxy>(c.ch.get(), &c.proxy, a.encoding, wake_.get());
+    ConnectionProxy* raw = proxy.get();
     loom::WeaveId id;
     try {
         // Under the POLICY'S grant -- a grant, not host root -- and its accept mode. Its id is the
@@ -631,7 +631,7 @@ void BridgeServer::on_frame(Conn& c, const BridgeIncoming& f) {
         if (settle && kind == kEmitPublish) {
             send_refused(c, correlation,
                          "a publication cannot be settled: it has no one delivery to follow; send it "
-                         "to one target or office");
+                         "to one target or role");
             break;
         }
         if (settle && c.settling.size() >= kMaxSettlingPerConnection) {

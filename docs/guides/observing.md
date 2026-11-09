@@ -14,7 +14,7 @@ Reference: [senses](../reference/senses.md). Laws:
 | please do something | a message (`send`) |
 | answer this question | an ask + an answer |
 | **this is what I currently claim is so** | **a Sense** |
-| (as a reader elsewhere) tell me each thing that office publishes, as it happens | a subscription at the host's [observation relay](#following-another-participants-publications) |
+| (as a reader elsewhere) tell me each thing that role publishes, as it happens | a subscription at the host's [observation relay](#following-another-participants-publications) |
 
 If a consumer would otherwise ask the same question over and over and act on the
 reply, that is a Sense. If the *asking* is the point — because it changes
@@ -45,9 +45,9 @@ seq, and produces no bus event.
 set registers at mount so consumers can discover what you provide before you have
 claimed anything.
 
-## Claiming as an office
+## Claiming as a role
 
-Same law as office speech, same grammar:
+Same law as role speech, same grammar:
 
 ```cpp
 mail.as_role("room.light").claim(Brightness{state_.level});
@@ -55,11 +55,11 @@ mail.as_role("room.light").claim(Brightness{state_.level});
 
 Holding the role attaches nothing — a personal claim stays personal. This is the
 deliberate act, verified at the claim moment, and a claimant that does not hold
-the office is refused (`OfficeNotHeld`) with nothing stored.
+the role is refused (`RoleNotHeld`) with nothing stored.
 
-Claim as the office when the thing claiming is **the service**, and personally
-when it is **this particular weave**. A successor should claim as the office from
-its `zen.Activated` handler; before that, the office's claim is its
+Claim as the role when the thing claiming is **the service**, and personally
+when it is **this particular weave**. A successor should claim as the role from
+its `zen.Activated` handler; before that, the role's claim is its
 predecessor's and says so.
 
 ## Observing
@@ -102,12 +102,12 @@ if (!r) {
 `NoClaim` and `NotAuthorized` send you to opposite places. Treating them as one
 empty answer is how a misconfigured grant becomes an afternoon.
 
-**3. Decide what a stale office claim means to you.** After a role moves, a
+**3. Decide what a stale role claim means to you.** After a role moves, a
 role-bound reading is the *predecessor's*, honestly stamped:
 
 ```cpp
-if (r && r.by.office_holder_is_current) { /* the current holder's claim */ }
-if (r && r.by.office_claim_is_stale())  { /* the previous holder's */ }
+if (r && r.by.role_holder_is_current) { /* the current holder's claim */ }
+if (r && r.by.role_claim_is_stale())  { /* the previous holder's */ }
 ```
 
 Loom will not hide the distinction, and will not choose for you.

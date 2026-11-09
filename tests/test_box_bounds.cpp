@@ -243,7 +243,7 @@ TEST_CASE("the backend keeps kBoxModulesKept compiled modules after their images
     // one more than the backend keeps, so opening the first again finds it let go.
     const std::vector<const char*> modules = {
         ZEN_BOX_PROBE,        ZEN_BOX_COUNTER_WASM, ZEN_BOX_DEFERS,
-        ZEN_BOX_SENSES,       ZEN_BOX_OFFICE_WORKER, ZEN_BOX_DISPATCH,
+        ZEN_BOX_SENSES,       ZEN_BOX_ROLE_WORKER, ZEN_BOX_DISPATCH,
         ZEN_BOX_JOINT,        ZEN_BOX_VERSIONED_V1, ZEN_BOX_VERSIONED_V2};
     REQUIRE(modules.size() == kBoxModulesKept + 1);
     const auto open_and_close = [](const char* path) {
