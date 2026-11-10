@@ -172,7 +172,7 @@ void bin_encode_value(const Cell& c, const TypeRef& t, std::string& out) {
     }
     case Kind::Message: {
         bin_require_kind(c, Kind::Message);
-        const std::shared_ptr<Value>& nested = c.as_message();
+        const std::shared_ptr<const Value>& nested = c.as_message();
         if (!nested) {
             throw std::invalid_argument(
                 "serialize: a present Message field is null (validate before serializing)");
@@ -531,7 +531,7 @@ void json_encode_cell(const Cell& c, std::string& out) {
         detail::json_quote(detail::base64_encode(c.as_bytes()), out);
         break;
     case Kind::Message: {
-        const std::shared_ptr<Value>& nested = c.as_message();
+        const std::shared_ptr<const Value>& nested = c.as_message();
         if (nested) {
             json_encode_fields(*nested, out);
         } else {
