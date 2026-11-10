@@ -683,6 +683,51 @@ FileAccess access_of(const fs::path& file, const std::vector<unsigned char>& sid
     return a;
 }
 
+// On Windows Server an administrator's new file belongs to the Administrators group, so the read
+// names that owner before the directory's permissions. Assign this user and leave the DACL the
+// directory gave the file. The restore privilege lets that assignment name the user; a file this
+// user already owns is kept when the token does not carry it.
+void own_as_this_user(const fs::path& file) {
+    std::vector<unsigned char> sid = test_user_sid();
+    std::wstring wfile = file.wstring();
+    HANDLE token = nullptr;
+    TOKEN_PRIVILEGES previous{};
+    bool held = false;
+    if (::OpenProcessToken(::GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token)) {
+        LUID luid{};
+        // Spelled wide. SE_RESTORE_NAME follows TEXT(), which is narrow unless UNICODE is set.
+        if (::LookupPrivilegeValueW(nullptr, L"SeRestorePrivilege", &luid)) {
+            TOKEN_PRIVILEGES enable{};
+            enable.PrivilegeCount = static_cast<DWORD>(1);
+            enable.Privileges[0].Luid = luid;
+            enable.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+            DWORD returned = 0;
+            ::SetLastError(ERROR_SUCCESS);
+            if (::AdjustTokenPrivileges(token, FALSE, &enable, static_cast<DWORD>(sizeof(previous)),
+                                        &previous, &returned) &&
+                ::GetLastError() == ERROR_SUCCESS) {
+                held = true;
+            }
+        }
+    } else {
+        token = nullptr;
+    }
+    const DWORD rc =
+        ::SetNamedSecurityInfoW(wfile.data(), SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION,
+                                static_cast<PSID>(sid.data()), nullptr, nullptr, nullptr);
+    if (held) {
+        ::AdjustTokenPrivileges(token, FALSE, &previous, 0, nullptr, nullptr);
+    }
+    if (token != nullptr) {
+        ::CloseHandle(token);
+    }
+    const FileAccess got = access_of(file, sid);
+    // A Windows client already owns the file it created, so a refused assignment there still
+    // leaves this user as owner. The directory's DACL stays the fault.
+    REQUIRE_MESSAGE(got.owner_is_user, ("owner assignment returned " + std::to_string(rc)));
+    REQUIRE_FALSE(got.protected_dacl);
+}
+
 } // namespace
 #endif
 
@@ -773,10 +818,11 @@ TEST_CASE("session files: a key that is not its user's alone does not read as ow
     ::FreeSid(everyone);
     CHECK_FALSE(loom::host::reads_as_owner_only(key, &why));
     CHECK(why == "it reads back with 2 access entries, not 1");
-    // A file that takes its directory's permissions.
+    // A file that takes its directory's permissions, owned by this user.
     grant_everyone_read(dir.path);
     const fs::path plain = dir.path / "plain.txt";
     REQUIRE_MESSAGE(loom::host::write_session_text(plain, "x\n", false, &why), why);
+    own_as_this_user(plain);
     CHECK_FALSE(loom::host::reads_as_owner_only(plain, &why));
     CHECK(why == "it reads back taking permissions from its directory");
 #else
