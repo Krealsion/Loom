@@ -106,6 +106,45 @@ Schema::Schema(std::string name, std::uint32_t version, std::vector<Field> field
     content_id_ = compute_content_id(name_, version_, fields_);
 }
 
+Schema::Schema(GivenContentId, std::string name, std::uint32_t version, std::vector<Field> fields,
+               ContentId content_id)
+    : Schema(std::move(name), version, std::move(fields)) {
+    content_id_ = content_id;
+}
+
+namespace {
+
+bool same_type(const TypeRef& a, const TypeRef& b) noexcept {
+    if (a.kind != b.kind) {
+        return false;
+    }
+    switch (a.kind) {
+    case Kind::Message:
+        return same_identity(*a.message, *b.message);
+    case Kind::List:
+        return same_type(*a.element, *b.element);
+    default:
+        return true;
+    }
+}
+
+} // namespace
+
+bool same_structure(const Schema& a, const Schema& b) noexcept {
+    const std::vector<Field>& fa = a.fields();
+    const std::vector<Field>& fb = b.fields();
+    if (fa.size() != fb.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < fa.size(); ++i) {
+        if (fa[i].name != fb[i].name || fa[i].required != fb[i].required ||
+            !same_type(fa[i].type, fb[i].type)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 const Field* Schema::find(std::string_view field_name) const noexcept {
     for (const Field& f : fields_) {
         if (f.name == field_name) {

@@ -16,10 +16,14 @@ namespace loom {
 
 class Schema;
 
+namespace detail {
+struct SchemaAccess;
+} // namespace detail
+
 /// A stable, deterministic 64-bit identity for a schema's normalized structure.
 /// Two schemas with the same name, version, and field shape have the same
-/// ContentId on every machine and every run. The gate uses it as a cheap "is
-/// your claim the shape this door expects" check instead of a recursive compare.
+/// ContentId on every machine and every run. The gate asks it first, as a cheap
+/// "is your claim the shape this door expects", before its field-by-field compare.
 using ContentId = std::uint64_t;
 
 /// The type of a field, or the element type of a list. Recursive: a list's
@@ -70,24 +74,43 @@ public:
     const Field* find(std::string_view field_name) const noexcept;
 
 private:
+    // A schema whose content id is the one given rather than the one computed, so that a check
+    // which must not trust the id can be shown two definitions sharing it without searching for
+    // a real collision. Reached only through `detail::SchemaAccess`, which the suite defines
+    // (tests/schema_access.hpp); nothing in the library makes one.
+    friend struct detail::SchemaAccess;
+    struct GivenContentId {};
+    Schema(GivenContentId, std::string name, std::uint32_t version, std::vector<Field> fields,
+           ContentId content_id);
+
     std::string name_;
     std::uint32_t version_;
     std::vector<Field> fields_;
     ContentId content_id_;
 };
 
-/// True iff both schemas are the *same identity*: same name, same version, and
-/// same normalized structure (content id). This is resolvable identity plus
-/// structural integrity — it cannot be fooled by a content-id hash collision,
-/// nor by an unregistered schema claiming a taken (name, version) with a
-/// different shape. Reaching for same_identity is therefore always correct.
+/// True iff the two schemas have the same fields, in the same order: each field's name,
+/// requiredness and type, a nested message compared by `same_identity` and a list by its
+/// element, however deep. Name and version are not compared.
+bool same_structure(const Schema& a, const Schema& b) noexcept;
+
+/// True iff both schemas are one definition: the same name, version and content id, AND the
+/// same structure (`same_structure`). The content id is a 64-bit FNV-1a hash of the normalized
+/// structure, not a cryptographic one, so it is asked first, as the cheap answer for drifted
+/// definitions; equal ids are then confirmed field by field, and two definitions of one (name,
+/// version) that share an id but not a structure are told apart. One object is its own
+/// definition without either question.
 ///
-/// Bare `a.content_id() == b.content_id()` is a different, narrower thing: an
-/// integrity/drift check the gate, the wire reader, and the registry use inline,
-/// where the (name, version) is already established upstream by door selection.
+/// This is what decides that two definitions agree: the registry's claims and publication, a
+/// reload candidate's vocabulary and state shape, and a weave's typed handler selection. Bare
+/// `a.content_id() == b.content_id()` is only the drift check, which the gate asks before its
+/// own field-by-field compare.
 inline bool same_identity(const Schema& a, const Schema& b) noexcept {
+    if (&a == &b) {
+        return true;
+    }
     return a.name() == b.name() && a.version() == b.version() &&
-           a.content_id() == b.content_id();
+           a.content_id() == b.content_id() && same_structure(a, b);
 }
 
 /// Fluent construction of a schema. build() returns an immutable shared owner.

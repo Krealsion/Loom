@@ -4,6 +4,7 @@
 #include <doctest.h>
 
 #include "fixtures.hpp"
+#include "schema_access.hpp"
 
 #include <zen/gate.hpp>
 #include <zen/registry.hpp>
@@ -441,6 +442,95 @@ TEST_CASE("reads stay safe while claims are acquired AND released") {
     CHECK(read_failures.load() == 0);
     CHECK(use_after_release.load() == 0);
     CHECK(reg.size() == 1); // the permanent one, and nothing the churn left behind
+}
+
+// ---- agreement is by structure; the content id only asks first --------------------------------
+// A twin carries another definition's name, version and content id but not its structure
+// (tests/schema_access.hpp). It is a conflict, as a differing id is, whichever comes first.
+
+namespace {
+std::shared_ptr<const Schema> foo_int() {
+    return SchemaBuilder("Foo", 1).field("x", Kind::Int).build();
+}
+std::shared_ptr<const Schema> foo_text_twin() {
+    return zen_test::twin_of(*foo_int(), {Field{"x", type_of(Kind::Text), true}});
+}
+} // namespace
+
+TEST_CASE("agreement: a twin sharing name, version and content id is not the same definition") {
+    const auto honest = foo_int();
+    const auto twin = foo_text_twin();
+    REQUIRE(twin->content_id() == honest->content_id());
+    CHECK_FALSE(same_structure(*honest, *twin));
+    CHECK_FALSE(same_identity(*honest, *twin));
+    // Honest twins, built apart, agree; one object is its own definition.
+    CHECK(same_identity(*honest, *foo_int()));
+    CHECK(same_identity(*twin, *twin));
+}
+
+TEST_CASE("agreement: a claim refuses a twin of a live definition, whichever is claimed first") {
+    {
+        Registry reg;
+        SchemaClaimScope held = reg.claim({foo_int()});
+        CHECK_THROWS_AS(reg.claim({foo_text_twin()}), SchemaConflict);
+        CHECK(reg.lookup("Foo", 1)->fields()[0].type.kind == Kind::Int);
+    }
+    {
+        Registry reg;
+        SchemaClaimScope held = reg.claim({foo_text_twin()});
+        CHECK_THROWS_AS(reg.claim({foo_int()}), SchemaConflict);
+        CHECK(reg.lookup("Foo", 1)->fields()[0].type.kind == Kind::Text);
+    }
+    // In one request, the two together.
+    Registry reg;
+    CHECK_THROWS_AS(reg.claim({foo_int(), foo_text_twin()}), SchemaConflict);
+    CHECK(reg.lookup("Foo", 1) == nullptr);
+    // An honest twin is the same definition: claimed beside it, one entry.
+    SchemaClaimScope a = reg.claim({foo_int()});
+    SchemaClaimScope b = reg.claim({foo_int()});
+    CHECK(reg.size() == 1);
+}
+
+TEST_CASE("agreement: publication refuses a twin, whichever is published first") {
+    {
+        Registry reg;
+        reg.register_schema(foo_int());
+        CHECK_THROWS_AS(reg.register_schema(foo_text_twin()), SchemaConflict);
+    }
+    {
+        Registry reg;
+        reg.register_schema(foo_text_twin());
+        CHECK_THROWS_AS(reg.register_schema(foo_int()), SchemaConflict);
+    }
+    Registry reg;
+    reg.register_schema(foo_int());
+    CHECK_FALSE(reg.register_schema(foo_int()).inserted); // the honest twin agrees
+}
+
+TEST_CASE("agreement: a twin nested inside two outer shapes makes the outer shapes differ") {
+    // The outer content ids are equal by construction, since an outer id folds in the nested
+    // one; only the nested structure differs.
+    const auto part = SchemaBuilder("Part", 1).field("a", Kind::Int).build();
+    const auto part_twin = zen_test::twin_of(
+        *part, {Field{"a", type_of(Kind::Int), true}, Field{"b", type_of(Kind::Int), true}});
+    const auto box = SchemaBuilder("Box", 1).message("part", part).build();
+    const auto box_over_twin = SchemaBuilder("Box", 1).message("part", part_twin).build();
+    REQUIRE(box->content_id() == box_over_twin->content_id());
+    CHECK_FALSE(same_identity(*box, *box_over_twin));
+    // In a list, as deep.
+    const auto boxes = SchemaBuilder("Boxes", 1).list("all", type_message(part)).build();
+    const auto boxes_over_twin =
+        SchemaBuilder("Boxes", 1).list("all", type_message(part_twin)).build();
+    REQUIRE(boxes->content_id() == boxes_over_twin->content_id());
+    CHECK_FALSE(same_identity(*boxes, *boxes_over_twin));
+    // The closure keeps both Part definitions, for the wall to meet; the wall refuses them.
+    std::vector<std::shared_ptr<const Schema>> closure;
+    collect_referenced(*box, closure);
+    collect_referenced(*box_over_twin, closure);
+    CHECK(closure.size() == 2);
+    Registry reg;
+    SchemaClaimScope held = reg.claim({part, box});
+    CHECK_THROWS_AS(reg.claim({part_twin, box_over_twin}), SchemaConflict);
 }
 
 } // TEST_SUITE

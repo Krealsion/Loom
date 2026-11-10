@@ -71,7 +71,9 @@ the content-id derived from the shape, never the C++ type.
 
 MEANS
 - evolving a shape means publishing a new version;
-- two parties agree across a `.so` seam iff their content-ids match
+- two parties agree across a `.so` seam iff their definitions are the same:
+  content-ids match and, since the content-id is not cryptographic, the
+  structure does too, field by field and nested shapes included
   (`SchemaConflict` otherwise) — and "agree" is checked at the door for **every
   shape each party declares** (accepted, claimed, emitted, persisted) and every
   component those shapes nest, natively and across the seam alike, so a divergent
@@ -80,7 +82,7 @@ MEANS
 - a declaration that contradicts itself — two definitions of one `(name, version)`
   nested under different doors of one weave, or two entries of one manifest — is
   refused whole, never admitted with one definition substituted for the other;
-- `same_identity` is the full `(name, version, content_id)` triple.
+- `same_identity` is name, version, content-id and structure.
 
 DOES NOT MEAN
 - that old versions vanish — both stay registered and distinct;

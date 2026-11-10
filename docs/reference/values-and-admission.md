@@ -9,7 +9,9 @@ A `Schema` is a frozen, named, versioned shape: `(name, version)` plus ordered
 fields of the seven permanent primitive kinds (`Int` i64, `Float` f64, `Text`,
 `Bool`, `Bytes`, `List`, `Message` — nested by schema). Identity across any
 boundary is the **content-id** (FNV over the canonical shape), never the C++
-type; `same_identity` is the full `(name, version, content_id)` triple.
+type; `same_identity` is name, version and content-id, confirmed field by field
+(`same_structure`), since the content-id is a fast hash rather than a
+cryptographic one.
 Published schemas are immutable: evolving a shape is publishing a new version
 ([GATE-04](../laws/admission-laws.md)). Build one with `SchemaBuilder`, or
 derive one from a struct with `ZEN_SHAPE`

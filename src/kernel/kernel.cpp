@@ -1468,7 +1468,7 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
         declare(cand.state);
         for (const auto& s : closure) {
             const std::shared_ptr<const Schema> live = bus_.resolve_schema(s->name(), s->version());
-            if (live && live->content_id() != s->content_id()) {
+            if (live && !same_identity(*live, *s)) {
                 destroy_instance(new_abi, new_inst);
                 return {false, false, false,
                         std::string("new library refused: ") +
@@ -1480,9 +1480,7 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
     }
 
     const std::shared_ptr<const Schema>& old_state = rec.adapter->state_schema();
-    if (cand.state->name() != old_state->name() ||
-        cand.state->version() != old_state->version() ||
-        cand.state->content_id() != old_state->content_id()) {
+    if (!same_identity(*cand.state, *old_state)) {
         destroy_instance(new_abi, new_inst);
         return {true, false, true, "state schema version mismatch; reload refused"};
     }

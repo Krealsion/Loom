@@ -57,7 +57,7 @@ struct RegistryCore {
             }
             Key key{s->name(), s->version()};
             if (auto seen = wanted.find(key); seen != wanted.end()) {
-                if (seen->second->content_id() != s->content_id()) {
+                if (!same_identity(*seen->second, *s)) {
                     throw SchemaConflict(s->name(), s->version(), seen->second->content_id(),
                                          s->content_id());
                 }
@@ -77,7 +77,7 @@ struct RegistryCore {
                 ++additions;
                 continue;
             }
-            if (it->second->content_id() != schema->content_id()) {
+            if (!same_identity(*it->second, *schema)) {
                 throw SchemaConflict(schema->name(), schema->version(), it->second->content_id(),
                                      schema->content_id());
             }
@@ -232,7 +232,7 @@ Registry::Registration Registry::register_schema(std::shared_ptr<const Schema> s
     std::unique_lock<std::shared_mutex> lk(core_->mtx);
     if (auto it = core_->current->find(key); it != core_->current->end()) {
         const std::shared_ptr<const Schema>& existing = it->second;
-        if (existing->content_id() == schema->content_id()) {
+        if (same_identity(*existing, *schema)) {
             // Identical re-registration is a no-op on the population — but it is
             // still a claim nobody will release, which is what keeps a schema
             // published this way from being reclaimed under a caller who never

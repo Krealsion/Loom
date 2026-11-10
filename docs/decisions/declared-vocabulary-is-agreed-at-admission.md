@@ -39,9 +39,15 @@ through the one wall, natively and across the seam alike.** Concretely:
   `Emit<...>`, `final`. `Switchboard::register_weave` and the code-swap re-claim take the
   **closure** of the accept-set, claim-set, emit-set and state shape.
 - The closure is walked by one traversal, `collect_referenced` in `zen/schema.hpp` — the
-  layer that owns schemas, not the kernel codec — deduplicated by **identity** (name, version *and* content-id), never by name alone. Two
-  definitions of one key both survive the walk; the Registry's existing same-key/different-
-  content comparison refuses them, inside one declaration or against a live one.
+  layer that owns schemas, not the kernel codec — deduplicated by **identity** (`same_identity`:
+  name, version, content-id *and* structure), never by name alone. Two definitions of one key
+  both survive the walk; the Registry's same-key comparison refuses them, inside one declaration
+  or against a live one.
+- **Agreement is by structure; the content-id only asks first.** The content-id is a 64-bit
+  FNV-1a hash, not a cryptographic one, so two definitions of one key that share it are compared
+  field by field, nested shapes included, before they are taken as one: at the Registry's claims
+  and publication, at a reload candidate's vocabulary and state shape, and in typed handler
+  selection. A definition built to share another's content-id is refused as a differing one is.
 - `zen.Manifest` v5 adds the optional `emits` list; `do_describe` writes it from the same
   virtual; `Kernel::reconstruct` claims it beside the accept-set; the host adapter and the
   isolation proxy answer `emitted_schemas()` from it. The encoder's `referenced` section carries
@@ -118,7 +124,8 @@ through the one wall, natively and across the seam alike.** Concretely:
 
 ## Current laws supported
 
-GATE-04 (agreement across a seam is on content-id, for every declared shape and component);
+GATE-04 (agreement across a seam is on structure, the content-id asking first, for every declared
+shape and component);
 LIFE-08 (a producer that declared a shape claims its definition; a grant-only producer still
 claims by key); SENSE-04 (the claim-set is enforced at the claim doors, which is what makes it
 particular — all three lists register); KERN-04 (v9 is paid as a break, rejection before

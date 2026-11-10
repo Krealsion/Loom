@@ -17,7 +17,7 @@
 schema             portable  8
 value              portable  8
 gate               portable  11
-registry           portable  23
+registry           portable  27
 serialize          portable  31
 compat             portable  10
 integration        portable  4
@@ -44,7 +44,7 @@ component          portable  19
 pixel              portable  12
 bridge             portable  39
 bridge             posix     8
-kernel             kernel    137
+kernel             kernel    139
 kernel             posix     2
 handoff            kernel    10
 manager            kernel    43

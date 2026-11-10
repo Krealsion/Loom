@@ -4,6 +4,7 @@
 #include <doctest.h>
 
 #include "box_twin.hpp"
+#include "schema_access.hpp"
 #include "switchboard_fixtures.hpp"
 #include "weavelib/role_protocol.hpp"
 #include "weavelib/prepared_replacement_protocol.hpp"
@@ -732,6 +733,59 @@ TEST_CASE("schema admission: a refused load leaves nothing behind, a valid load 
     LoadResult now_free = kernel.load("late", ZEN_SO_EMITS_CONFLICT, "latecomer");
     CHECK_MESSAGE(now_free.ok, now_free.error);
     CHECK(bus.resolve_schema("Greet", 1)->content_id() == greet_text()->content_id());
+}
+
+// A native twin of the library's Greet v1 {text}: the same name, version and content id, the
+// structure of Greet v1 {msg} (tests/schema_access.hpp). Agreement is by structure, so it meets
+// the wall as a differing id would.
+namespace sa {
+inline std::shared_ptr<const Schema> greet_text_twin() {
+    static const auto s = zen_test::twin_of(*greet_text(), {Field{"msg", type_of(Kind::Text), true}});
+    return s;
+}
+} // namespace sa
+
+TEST_CASE("schema admission: a twin sharing a loaded definition's content id but not its "
+          "structure is refused, whichever comes first") {
+    using namespace sa;
+    REQUIRE(greet_text_twin()->content_id() == greet_text()->content_id());
+    {
+        Switchboard bus;
+        Kernel kernel(bus, sbfx::fixture_admission());
+        Registered twin = register_probe(bus, {greet_text_twin()});
+        REQUIRE(twin.weave != nullptr);
+        LoadResult late = kernel.load("late", ZEN_SO_EMITS_CONFLICT, "latecomer");
+        CHECK(refused_over(late, "Greet"));
+        CHECK(bus.resolve_schema("Greet", 1)->fields()[0].name == "msg");
+    }
+    Switchboard bus;
+    Kernel kernel(bus, sbfx::fixture_admission());
+    LoadResult first = kernel.load("first", ZEN_SO_EMITS_CONFLICT, "first");
+    REQUIRE_MESSAGE(first.ok, first.error);
+    CHECK_THROWS_AS(register_probe(bus, {greet_text_twin()}), SchemaConflict);
+    CHECK(bus.resolve_schema("Greet", 1)->fields()[0].name == "text");
+    // The honest definition agrees with the loaded one.
+    Registered honest = register_probe(bus, {greet_text()});
+    REQUIRE(honest.weave != nullptr);
+    CHECK(bus.resolve_schema("Greet", 1)->fields()[0].name == "text");
+}
+
+TEST_CASE("schema admission: a reload candidate whose vocabulary shares a native definition's "
+          "content id but not its structure is refused before the incumbent is touched") {
+    using namespace sa;
+    Switchboard bus;
+    Kernel kernel(bus, sbfx::fixture_admission());
+    LoadResult w = kernel.load("w", ZEN_SO_WEAVE);
+    REQUIRE_MESSAGE(w.ok, w.error);
+    Registered hears = register_probe(bus, {greet_text_twin()}); // native only
+    REQUIRE(hears.weave != nullptr);
+    ReloadResult refused = kernel.reload_from("w", ZEN_SO_EMITS_CONFLICT);
+    CHECK_FALSE(refused.ok);
+    CHECK_FALSE(refused.reloaded);
+    CHECK(refused.error.find("new library refused: schema 'Greet' v1") != std::string::npos);
+    CHECK(refused.error.find(kConflict) != std::string::npos);
+    CHECK(kernel.weave_id("w") == w.id);
+    CHECK(bus.emitted_schemas(w.id).empty());
 }
 
 TEST_CASE("schema admission: a reload candidate whose declared vocabulary disagrees with a "
