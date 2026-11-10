@@ -439,6 +439,8 @@ public:
     /// if `holder` does not hold `role` now.
     /// MSG-13; docs/laws/messaging-laws.md
     RoleRelease release_role(WeaveId holder, std::string_view role);
+    /// The root's own release: a host holds no role, so it is the Bus default, `NotOffered`.
+    using Bus::release_role;
 
     /// Register with an accept-mode: `AnyRegistered` accepts any registered shape, gated against
     /// the registry's schema at delivery. A capability distinct from the grant.
