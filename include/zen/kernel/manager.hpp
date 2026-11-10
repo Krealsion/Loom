@@ -19,18 +19,21 @@
 // A consumer that must survive its provider's replacement addresses it by role: the successor
 // is a different weave with a different id. Every outcome crosses as a standard shape, never a
 // throw:
-//   zen.LoadWeave{name, path, role}   -> zen.Result{id}   | zen.Refused{why}
+//   zen.LoadWeave{name, path, roles}  -> zen.Result{id}   | zen.Refused{why}
 //   zen.SwapWeave{role, name, path}   -> zen.Result{id}   | zen.Refused{why}
 //   zen.ReloadWeave{name, path}       -> zen.Ack          | zen.Refused{why}
-//   zen.ListLoaded{}                  -> zen.Result{"a,b@role"}
+//   zen.ListLoaded{}                  -> zen.Result{"a,b@role,c@r1+r2"}
 // A weave is named by the file it is loaded from.
 //
 // Reload and swap are different machines. Reload is in place: same WeaveId, same state schema,
 // state transplanted, and a differently shaped library refused. Swap replaces the role holder:
 // the incumbent is unloaded and a successor loaded into the role with fresh state.
 //
-// A swap is two messages, UnloadRole then LoadLibrary, delivered in that order. Between them
-// the role is unheld, and a send resolved then is refused `NoSuchTarget`. If the successor
+// A swap first asks the door who holds the role (QueryRole), and refuses, in words and changing
+// nothing, a holder that holds other roles too: the successor would be loaded into one role and
+// the rest would go unheld. Then it is two messages, UnloadRole then LoadLibrary, delivered in
+// that order. Between them the role is unheld, and a send resolved then is refused
+// `NoSuchTarget`. If the successor
 // fails to load the role stays unheld and the asker gets the refusal. Traffic already queued
 // to the incumbent still reaches it, but its own queued replies are refused `SenderLifeEnded`
 // once it is removed (MSG-03). The unload's answer is unsolicited (correlation 0) and dropped:
@@ -42,7 +45,8 @@
 // hang the swap), wait for its letter before unloading (a sender removed mid-queue loses its
 // queued sends), and learn the successor's id (so only it may claim):
 //
-//   SwapWeave{graceful}  ->  QueryRole{role}  ->  RoleInfo{holder, converses}
+//   SwapWeave{graceful}  ->  QueryRole{role}  ->  RoleInfo{holder, converses, roles}
+//     several roles?  ->  refused, nothing unloaded (a hard swap asks this too)
 //     converses?  no  ->  the hard swap, automatically
 //                 yes ->  PrepareShutdown -> Bequest  (stamped sender == holder, or dropped)
 //                     ->  store the letter, then unload + load + bind
@@ -72,12 +76,26 @@ namespace loom {
 // ---- the lifecycle-initiator command shapes ---------------------------------
 // Registered by hand so the wire names carry the "zen." prefix.
 
-/// Load a weave, optionally binding it to a role.
+/// Load a weave, binding it to every role in `roles`, all or none; none binds no role.
 struct LoadWeave {
     std::string name;
     std::string path;
-    std::string role; ///< empty = bind no role
+    std::vector<std::string> roles; ///< in binding order; empty = bind no role
     using ZenSelf = LoadWeave;
+    static constexpr const char* zen_name = "zen.LoadWeave";
+    static constexpr std::uint32_t zen_version = 2;
+    static auto zen_fields() {
+        return std::make_tuple(ZEN_FIELD(name), ZEN_FIELD(path), ZEN_FIELD(roles));
+    }
+};
+
+/// The load of version 1, which names one role. The Manager forwards it as the load of a set of
+/// one, and an empty `role` as a load that binds none.
+struct LoadWeaveV1 {
+    std::string name;
+    std::string path;
+    std::string role; ///< empty = bind no role
+    using ZenSelf = LoadWeaveV1;
     static constexpr const char* zen_name = "zen.LoadWeave";
     static constexpr std::uint32_t zen_version = 1;
     static auto zen_fields() {
@@ -132,7 +150,9 @@ struct SwapInFlight {
     std::int64_t asker = 0;     ///< captured from routing metadata when the op arrived
     std::int64_t corr = 0;      ///< the asker's own correlation, restored at the end
     std::int64_t incumbent = 0; ///< established by RoleInfo; the sender a Bequest must carry
-    std::int64_t stage = 0;     ///< 0 awaiting RoleInfo, 1 awaiting Bequest, 2 awaiting load
+    /// 0 awaiting RoleInfo for a graceful swap, 3 awaiting it for a hard one, 1 awaiting
+    /// Bequest, 2 awaiting load
+    std::int64_t stage = 0;
     std::string role;
     std::string name;
     std::string path;
@@ -180,30 +200,32 @@ struct ManagerState {
 class WeaveManager
     : public WeaveBase<
           WeaveManager, ManagerState,
-          Accept<LoadWeave, SwapWeave, ReloadWeave, ListLoaded, ClaimBequest, RoleInfo, Bequest,
-                 Result, Ack, Refused>,
+          Accept<LoadWeave, LoadWeaveV1, SwapWeave, ReloadWeave, ListLoaded, ClaimBequest,
+                 RoleInfo, Bequest, Result, Ack, Refused>,
           Emit<LoadLibrary, ReloadLibrary, UnloadRole, ListLibraries, QueryRole, PrepareShutdown,
                Bequest, Result, Ack, Refused>> {
 public:
     explicit WeaveManager(WeaveId control) : control_(control) {}
 
     void on(const LoadWeave& c, Mail& mail) {
-        forward(mail, state_.relay, door(), LoadLibrary{c.name, c.path, c.role});
+        forward(mail, state_.relay, door(), LoadLibrary{c.name, c.path, c.roles});
+    }
+
+    void on(const LoadWeaveV1& c, Mail& mail) {
+        forward(mail, state_.relay, door(), LoadLibrary{c.name, c.path, set_of(c.role)});
     }
 
     void on(const SwapWeave& c, Mail& mail) {
-        if (!c.graceful) {
-            hard_swap(mail, c.role, c.name, c.path, asker_of(mail), mail.correlation());
-            return;
-        }
-        // Ask the door who holds the role and whether it converses before asking the
-        // incumbent anything, so a weave that never opted in is never waited on.
+        // Ask the door who holds the role, every role it holds and whether it converses before
+        // anything is unloaded, so a holder of several roles is refused with nothing changed,
+        // and a weave that never opted in is never waited on.
         if (state_.swaps.size() >= kMaxSwapsInFlight) {
             state_.swaps.erase(state_.swaps.begin());
         }
         const std::int64_t seq = ++state_.relay.next_seq;
         state_.swaps.push_back(SwapInFlight{seq, static_cast<std::int64_t>(asker_of(mail).value),
-                                            static_cast<std::int64_t>(mail.correlation()), 0, 0,
+                                            static_cast<std::int64_t>(mail.correlation()), 0,
+                                            c.graceful ? kAwaitingHolder : kAwaitingHolderHard,
                                             c.role, c.name, c.path});
         mail.send(control_, QueryRole{c.role}, static_cast<std::uint64_t>(seq));
     }
@@ -216,11 +238,29 @@ public:
 
     /// Stage 2 of the ceremony: the door has told us who holds the role.
     void on(const RoleInfo& info, Mail& mail) {
-        SwapInFlight* s = match_swap(mail, /*stage=*/0, door());
+        SwapInFlight* s = match_swap(mail, kAwaitingHolder, door());
+        if (s == nullptr) {
+            s = match_swap(mail, kAwaitingHolderHard, door());
+        }
         if (s == nullptr) {
             return; // unsolicited or forged — the door is the only voice here
         }
-        if (!info.converses || info.holder == 0) {
+        if (info.roles.size() > 1) {
+            // A swap loads the successor into one role: the holder's others would go unheld.
+            // Refused before anything is unloaded, until a replacement can move a set (MSG-13).
+            const SwapInFlight done = *s;
+            retire(s);
+            std::string held;
+            for (const std::string& r : info.roles) {
+                held += held.empty() ? r : "+" + r;
+            }
+            mail.send(WeaveId{static_cast<std::uint64_t>(done.asker)},
+                      Refused{"the holder of role '" + done.role + "' holds several roles (" +
+                              held + "); a swap moves one role, so nothing was unloaded"},
+                      static_cast<std::uint64_t>(done.corr));
+            return;
+        }
+        if (s->stage == kAwaitingHolderHard || !info.converses || info.holder == 0) {
             // Not a participant: the hard swap, automatically.
             const SwapInFlight done = *s;
             retire(s);
@@ -307,7 +347,15 @@ public:
     }
 
 private:
+    /// A swap's stages before the door answers who holds the role: graceful, then hard.
+    static constexpr std::int64_t kAwaitingHolder = 0;
+    static constexpr std::int64_t kAwaitingHolderHard = 3;
+
     std::int64_t door() const { return static_cast<std::int64_t>(control_.value); }
+
+    static std::vector<std::string> set_of(const std::string& role) {
+        return role.empty() ? std::vector<std::string>{} : std::vector<std::string>{role};
+    }
 
     static WeaveId asker_of(const Mail& mail) {
         return mail.reply_to().valid() ? mail.reply_to() : mail.sender();
@@ -318,13 +366,14 @@ private:
     void hard_swap(Mail& mail, const std::string& role, const std::string& name,
                    const std::string& path, WeaveId asker, std::uint64_t corr) {
         mail.send(control_, UnloadRole{role}, /*correlation=*/0);
-        (void)forward_for(mail, state_.relay, door(), LoadLibrary{name, path, role}, asker, corr);
+        (void)forward_for(mail, state_.relay, door(), LoadLibrary{name, path, set_of(role)}, asker,
+                          corr);
     }
 
     /// The same two messages, from a recorded swap.
     std::int64_t begin_replacement(Mail& mail, const SwapInFlight& s) {
         mail.send(control_, UnloadRole{s.role}, /*correlation=*/0);
-        return forward_for(mail, state_.relay, door(), LoadLibrary{s.name, s.path, s.role},
+        return forward_for(mail, state_.relay, door(), LoadLibrary{s.name, s.path, set_of(s.role)},
                            WeaveId{static_cast<std::uint64_t>(s.asker)},
                            static_cast<std::uint64_t>(s.corr));
     }

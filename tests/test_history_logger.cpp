@@ -262,6 +262,7 @@ TEST_CASE("the shipped default keeps weave-lifecycle and authority vocabulary") 
     const LoggerSelection s = default_selection();
     CHECK(s.rule_for("LoadLibrary") != nullptr);
     CHECK(s.rule_for("UnloadLibrary") != nullptr);
+    CHECK(s.rule_for("ReleaseRole") != nullptr); // which roles a loaded weave holds changed
     CHECK(s.rule_for("zen.SwapWeave") != nullptr);
     CHECK(s.rule_for("zen.RevokeAuthority") != nullptr);
     CHECK(s.rule_for("zen.AuthorityGranted") != nullptr);

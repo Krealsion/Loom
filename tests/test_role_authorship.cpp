@@ -113,6 +113,23 @@ struct Tap {
 
 Value activation_of(std::int64_t sequence) { return to_value(loom::Activated{sequence}); }
 
+/// Register a probe bound to a set of roles, accepting Ping and Greet and declaring Tick as a
+/// claim, so it can be reached, author and claim as each role it holds.
+Registered register_set_probe(Switchboard& bus, std::vector<std::string> roles) {
+    auto owned = std::make_unique<ProbeWeave>(
+        std::vector<std::shared_ptr<const Schema>>{ping_schema(), greet_schema()});
+    owned->declared_claims = {sbfx::tick_schema()};
+    ProbeWeave* raw = owned.get();
+    WeaveId id = bus.register_weave(std::move(owned), Grant{}.allow_any(), std::move(roles));
+    return {id, raw};
+}
+
+std::int64_t claimed_n(const SenseReading& r) {
+    return r.value ? r.value->get("n")->as_int() : -1;
+}
+
+using Roles = std::vector<std::string>;
+
 } // namespace
 
 TEST_SUITE("role_authorship") {
@@ -747,6 +764,205 @@ TEST_CASE("the whole program — a strict player joins only role-authored matche
     // no role lookup, no payload field — the delivery already carried the fact.
     CHECK(player_raw->joined() == 1);
     CHECK(player_raw->rejected() == 1);
+}
+
+// ---------------------------------------------------------------------------
+// A weave answering to a set of roles (MSG-13): bound at registration, all or none, each role
+// still with one holder, and released one at a time by its holder.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("a weave holding two roles is reached, authors and claims as each, and is refused as "
+          "neither once it holds neither") {
+    Switchboard bus;
+    auto log = std::make_shared<Listener>();
+    Registered player = Listener::mount(bus, {greet_schema()}, log);
+    Registered holder = register_set_probe(bus, {"svc.one", "svc.two"});
+    CHECK(bus.roles_of(holder.id) == Roles{"svc.one", "svc.two"}); // in binding order
+    CHECK(bus.role_holder("svc.one") == holder.id);
+    CHECK(bus.role_holder("svc.two") == holder.id);
+
+    // Reached by each name: one weave, two addresses.
+    bus.send_to_role("svc.one", Message(ping(1)));
+    bus.send_to_role("svc.two", Message(ping(2)));
+    bus.drain_until_idle();
+    CHECK(holder.weave->handled_values == std::vector<std::int64_t>{1, 2});
+
+    // Authors as each, verified per statement, and the listener can tell them apart.
+    REQUIRE(bus.role_send_as(holder.id, "svc.one", player.id, Message(greet("as one"))).valid());
+    REQUIRE(bus.role_send_as(holder.id, "svc.two", player.id, Message(greet("as two"))).valid());
+    bus.drain_until_idle();
+    REQUIRE(log->heard.size() == 2);
+    CHECK(log->heard[0].authored_role == "svc.one");
+    CHECK(log->heard[1].authored_role == "svc.two");
+
+    // Claims as each, under each role's own key.
+    REQUIRE(bus.role_claim_as(holder.id, "svc.one", sbfx::tick(1)));
+    REQUIRE(bus.role_claim_as(holder.id, "svc.two", sbfx::tick(2)));
+    CHECK(claimed_n(bus.observe_role("svc.one", "Tick", 1)) == 1);
+    CHECK(claimed_n(bus.observe_role("svc.two", "Tick", 1)) == 2);
+    CHECK(bus.observe_role("svc.two", "Tick", 1).by.role_holder_is_current);
+
+    // Released one at a time: it leaves `svc.one` and keeps `svc.two`.
+    CHECK(bus.release_role(holder.id, "svc.one") == RoleRelease::Released);
+    CHECK(bus.roles_of(holder.id) == Roles{"svc.two"});
+    CHECK_FALSE(bus.role_holder("svc.one").valid());
+    CHECK(bus.release_role(holder.id, "svc.one") == RoleRelease::NotHeld); // nothing twice
+    CHECK_FALSE(bus.role_send_as(holder.id, "svc.one", player.id, Message(greet("x"))).valid());
+    CHECK(bus.role_claim_as(holder.id, "svc.one", sbfx::tick(3)).why == SenseRefusal::RoleNotHeld);
+    CHECK(bus.observe_role("svc.one", "Tick", 1).refusal == SenseRefusal::NoClaim); // ended
+    CHECK(claimed_n(bus.observe_role("svc.two", "Tick", 1)) == 2); // the other role's stays
+    CHECK(bus.observe_role("svc.two", "Tick", 1).by.role_holder_is_current);
+
+    // ...and then the last: it is a weave holding no role, refused as either.
+    CHECK(bus.release_role(holder.id, "svc.two") == RoleRelease::Released);
+    CHECK(bus.roles_of(holder.id).empty());
+    CHECK_FALSE(bus.role_send_as(holder.id, "svc.two", player.id, Message(greet("y"))).valid());
+    const Ticket late = bus.send_to_role("svc.two", Message(ping(9)));
+    bus.drain_until_idle();
+    CHECK(bus.outcome(late).refusal.reason == RefusalReason::NoSuchTarget);
+    CHECK(holder.weave->handled_values == std::vector<std::int64_t>{1, 2}); // nothing more
+    CHECK(bus.alive(holder.id)); // a release ends a role, never the weave
+}
+
+TEST_CASE("a set overlapping a held role is refused whole, and binds none of it") {
+    Switchboard bus;
+    Registered incumbent = register_role_probe(bus, "shared", {ping_schema()});
+    const auto refused = [&bus](Roles roles) {
+        auto owned = std::make_unique<ProbeWeave>(
+            std::vector<std::shared_ptr<const Schema>>{ping_schema()});
+        CHECK_THROWS_AS(bus.register_weave(std::move(owned), Grant{}, std::move(roles)),
+                        std::invalid_argument);
+    };
+    refused({"fresh", "shared"}); // the held name comes second: the first must not be bound
+    CHECK_FALSE(bus.role_holder("fresh").valid());
+    CHECK(bus.role_holder("shared") == incumbent.id);
+    CHECK(bus.roles_of(incumbent.id) == Roles{"shared"});
+
+    refused({"fresh", ""});      // an empty name
+    refused({"fresh", "fresh"}); // a name twice
+    Roles nine;
+    for (int i = 0; i < 9; ++i) {
+        nine.push_back("r" + std::to_string(i));
+    }
+    refused(nine); // past the bound
+    CHECK_FALSE(bus.role_holder("fresh").valid());
+    CHECK_FALSE(bus.role_holder("r0").valid());
+
+    // The bound itself is a set it may hold.
+    nine.pop_back();
+    REQUIRE(nine.size() == Switchboard::kMaxRolesPerWeave);
+    Registered eight = register_set_probe(bus, nine);
+    CHECK(bus.roles_of(eight.id) == nine);
+}
+
+TEST_CASE("removal and release each let go of exactly their own roles and those roles' claims") {
+    Switchboard bus;
+    Registered a = register_set_probe(bus, {"a.one", "a.two"});
+    Registered b = register_set_probe(bus, {"b.one"});
+    REQUIRE(bus.role_claim_as(a.id, "a.one", sbfx::tick(11)));
+    REQUIRE(bus.role_claim_as(a.id, "a.two", sbfx::tick(12)));
+    REQUIRE(bus.role_claim_as(b.id, "b.one", sbfx::tick(21)));
+    CHECK(bus.retained_claim_count() == 3);
+
+    // A release: one role and its claims, nothing of the holder's other role or of b.
+    REQUIRE(bus.release_role(a.id, "a.one") == RoleRelease::Released);
+    CHECK(bus.retained_claim_count() == 2);
+    CHECK(bus.observe_role("a.one", "Tick", 1).refusal == SenseRefusal::NoClaim);
+    CHECK(claimed_n(bus.observe_role("a.two", "Tick", 1)) == 12);
+    CHECK(claimed_n(bus.observe_role("b.one", "Tick", 1)) == 21);
+    CHECK(bus.release_role(b.id, "a.two") == RoleRelease::NotHeld); // not b's to release
+    CHECK(bus.role_holder("a.two") == a.id);
+
+    // A removal: every role it still holds, and their claims; b keeps its own.
+    Registered a2 = register_set_probe(bus, {"c.one", "c.two"});
+    REQUIRE(bus.role_claim_as(a2.id, "c.one", sbfx::tick(31)));
+    REQUIRE(bus.role_claim_as(a2.id, "c.two", sbfx::tick(32)));
+    REQUIRE(bus.unregister_weave(a2.id) != nullptr);
+    CHECK_FALSE(bus.role_holder("c.one").valid());
+    CHECK_FALSE(bus.role_holder("c.two").valid()); // the second goes with the first
+    CHECK(bus.observe_role("c.one", "Tick", 1).refusal == SenseRefusal::NoClaim);
+    CHECK(bus.observe_role("c.two", "Tick", 1).refusal == SenseRefusal::NoClaim);
+    REQUIRE(bus.unregister_weave(a.id) != nullptr);
+    CHECK_FALSE(bus.role_holder("a.two").valid());
+    CHECK(bus.retained_claim_count() == 1);
+    CHECK(claimed_n(bus.observe_role("b.one", "Tick", 1)) == 21);
+    CHECK(bus.role_holder("b.one") == b.id);
+
+    // A role let go of is a name another weave may be loaded into.
+    Registered next = register_set_probe(bus, {"a.one", "c.two"});
+    CHECK(bus.roles_of(next.id) == Roles{"a.one", "c.two"});
+}
+
+TEST_CASE("a holder releases its own role from its own delivery, and a host's bus holds none to "
+          "release") {
+    Switchboard bus;
+    Registered holder = register_set_probe(bus, {"keep", "leave"});
+    RoleRelease said = RoleRelease::NotOffered;
+    holder.weave->on_handle = [&said](const Message&, Bus& b, ProbeWeave&) {
+        said = b.release_role("leave");
+    };
+    bus.send(holder.id, Message(ping(1)));
+    bus.drain_until_idle();
+    CHECK(said == RoleRelease::Released);
+    CHECK(bus.roles_of(holder.id) == Roles{"keep"});
+    CHECK(std::string(name_of(said)) == "Released");
+
+    // The root surface is a host: it holds no role, so it has none to leave, and says so.
+    Bus& root = bus;
+    CHECK(root.release_role("keep") == RoleRelease::NotOffered);
+    CHECK(bus.role_holder("keep") == holder.id);
+}
+
+TEST_CASE("a release during a prepared replacement over that weave aborts it, RoleChanged") {
+    Switchboard bus;
+    Registered op = register_probe(bus, {ping_schema()});
+    Registered coordinator = register_probe(bus, {ping_schema()});
+    Registered incumbent = register_set_probe(bus, {"svc"});
+    Registered candidate = register_probe(bus, {ping_schema()});
+    REQUIRE(bus.seal_weave(candidate.id, coordinator.id));
+    const TxnResult begun = bus.begin_prepared_replacement(op.id, coordinator.id, incumbent.id,
+                                                           candidate.id, "svc", 4);
+    REQUIRE(begun);
+    REQUIRE(bus.transaction_active(begun.id));
+
+    REQUIRE(bus.release_role(incumbent.id, "svc") == RoleRelease::Released);
+    CHECK_FALSE(bus.transaction_active(begun.id));
+    TxnOutcome out;
+    REQUIRE(bus.take_outcome(op.id, begun.id, out));
+    CHECK(out.state == TxnState::Aborted);
+    CHECK(out.reason == TxnReason::RoleChanged);
+}
+
+TEST_CASE("a replacement of an incumbent holding two roles is refused in words, and nothing "
+          "moves") {
+    Switchboard bus;
+    Registered op = register_probe(bus, {ping_schema()});
+    Registered coordinator = register_probe(bus, {ping_schema()});
+    Registered incumbent = register_set_probe(bus, {"svc", "aux"});
+    Registered candidate = register_probe(bus, {ping_schema(), sbfx::counter_schema()});
+    REQUIRE(bus.seal_weave(candidate.id, coordinator.id));
+
+    // The prepared replacement: refused before a slot is taken.
+    const TxnResult begun = bus.begin_prepared_replacement(op.id, coordinator.id, incumbent.id,
+                                                           candidate.id, "svc", 4);
+    CHECK_FALSE(begun);
+    CHECK(begun.why == TxnReason::SeveralRoles);
+    CHECK(std::string(name_of(begun.why)) == "SeveralRoles");
+    CHECK(bus.active_transactions() == 0);
+
+    // The direct commit, and a direct admission: refused, nothing moved.
+    CHECK_FALSE(bus.commit_candidate(candidate.id, incumbent.id, "svc"));
+    const AdmitResult admitted =
+        bus.admit_candidate(candidate.id, incumbent.id, "svc", host_lifecycle_authority(bus),
+                            Message(activation_of(1)), 1);
+    CHECK_FALSE(admitted);
+    CHECK(admitted.why == AdmitRefusal::SeveralRoles);
+    CHECK(std::string(name_of(admitted.why)) == "SeveralRoles");
+    bus.drain_until_idle();
+    CHECK(bus.roles_of(incumbent.id) == Roles{"svc", "aux"});
+    CHECK(bus.roles_of(candidate.id).empty());
+    CHECK(bus.sealed(candidate.id));
+    CHECK_FALSE(bus.sealed(incumbent.id));
 }
 
 } // TEST_SUITE

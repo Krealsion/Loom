@@ -151,7 +151,7 @@ const loom::WeaveId control = loom::mount_control(kernel, bus);
 // The host holds root: Switchboard::send is ungated. A weave that loads on the
 // host's behalf holds load_capability(control) in its grant instead.
 bus.send(control, loom::Message(loom::to_value(
-    loom::LoadLibrary{"responder-v1", path, "responder"})));   // role optional: ""
+    loom::LoadLibrary{"responder-v1", path, {"responder"}})));   // roles: none, one, or a set
 bus.drain_until_idle();
 
 if (!kernel.is_loaded("responder-v1")) { /* the door answered zen.Refused with the loader's words */ }

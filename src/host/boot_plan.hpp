@@ -27,10 +27,20 @@ enum class OnFailure {
 struct BootEntry {
     std::string name;  ///< the artifact name the host will know it by
     std::string path;  ///< the file
-    std::string role;  ///< the role it should hold, or empty
+    std::vector<std::string> roles; ///< the roles it should hold, in order, or none
     bool enabled = true;
     OnFailure on_failure = OnFailure::Continue;
 };
+
+/// `roles` as a row prints them: `<lead>r1+r2`, or nothing for none.
+inline std::string roles_text(const std::vector<std::string>& roles, const char* lead) {
+    std::string out;
+    for (const std::string& r : roles) {
+        out += out.empty() ? lead : "+";
+        out += r;
+    }
+    return out;
+}
 
 /// A LINK TO ANOTHER RUNNING HOST, as the person wrote it: a name (the role local weaves
 /// address is `loom.link.<name>`), where to connect, and what this host says about itself when

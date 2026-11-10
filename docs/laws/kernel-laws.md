@@ -58,8 +58,9 @@ DOES NOT MEAN
 - that the Kernel has no books at all — artifacts (names, libraries,
   statuses) are its truth; *roles* are the bus's.
 
-PROVEN BY — `role_of`/`query_role`/`unload_role` all derive; suite `kernel`
-(direct-admission visibility, pending-window truth).
+PROVEN BY — `roles_of`/`query_role`/`unload_role`/`release_role` all derive;
+suite `kernel` (direct-admission visibility, pending-window truth), suite
+`manager` (a library loaded into a set of roles, and one of them released).
 
 ## KERN-04 — The ABI seam refuses loudly
 

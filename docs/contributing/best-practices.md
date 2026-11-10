@@ -103,7 +103,7 @@ the entry `optional_member_types`.
 
 ## Messaging, dispatch and answers
 
-Laws MSG-01 to MSG-12 in [messaging](../laws/messaging-laws.md) and ANS-01 to ANS-07 in
+Laws MSG-01 to MSG-13 in [messaging](../laws/messaging-laws.md) and ANS-01 to ANS-07 in
 [answer authority](../laws/answer-authority-laws.md); reference
 [messaging](../reference/messaging.md); the suites `switchboard`, `provenance`,
 `role_authorship`, `ask_book`, `poke`, `describe` and `dispatch_refusal`, and `kernel` and

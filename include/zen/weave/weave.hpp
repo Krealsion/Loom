@@ -168,6 +168,12 @@ public:
     /// nothing; each statement is verified at the bus.
     Role as_role(std::string_view role) { return Role(*this, role); }
 
+    /// Leave `role`, now: this weave stops holding it and keeps every other role it holds.
+    /// Traffic addressed to it is refused at its turn and its role claims end. A loaded library's
+    /// bus offers no release (`NotOffered`): it asks the control door (`loom::ReleaseRole`).
+    /// MSG-13; docs/laws/messaging-laws.md
+    loom::RoleRelease release_role(std::string_view role) { return bus_.release_role(role); }
+
     // ---- Senses (SENSE-01..05; docs/reference/senses.md) --------------------
 
     /// Claim `observation` personally: "this is what I most recently claim is so". `T` must be

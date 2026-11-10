@@ -1194,7 +1194,7 @@ void Kernel::admit_with(AdmissionPolicy policy) {
 }
 
 bool Kernel::ask_admission(AdmissionStage stage, AdmissionKind kind, const std::string& name,
-                           const std::string& path, const std::string& role,
+                           const std::string& path, const std::vector<std::string>& roles,
                            const BuildIdentity& build, const CapabilityAsk* declared,
                            Grant* granted, std::string* why) const {
     AdmissionRequest req;
@@ -1202,7 +1202,7 @@ bool Kernel::ask_admission(AdmissionStage stage, AdmissionKind kind, const std::
     req.kind = kind;
     req.name = name;
     req.path = path;
-    req.role = role;
+    req.roles = roles;
     req.build = build; // a copy SHARES the one reading; it does not start another
     if (declared != nullptr) {
         req.declared = *declared;
@@ -1223,18 +1223,34 @@ bool Kernel::ask_admission(AdmissionStage stage, AdmissionKind kind, const std::
     return true;
 }
 
+namespace {
+std::vector<std::string> set_of(const std::string& role) {
+    return role.empty() ? std::vector<std::string>{} : std::vector<std::string>{role};
+}
+} // namespace
+
 LoadResult Kernel::load(const std::string& name, const std::string& path,
                         const std::string& role) {
-    return load_impl(name, path, role, AdmissionKind::Load, nullptr);
+    return load_impl(name, path, set_of(role), AdmissionKind::Load, nullptr);
+}
+
+LoadResult Kernel::load(const std::string& name, const std::string& path,
+                        const std::vector<std::string>& roles) {
+    return load_impl(name, path, roles, AdmissionKind::Load, nullptr);
 }
 
 LoadResult Kernel::load(const std::string& name, const std::string& path, const std::string& role,
                         Grant grant) {
-    return load_impl(name, path, role, AdmissionKind::Load, &grant);
+    return load_impl(name, path, set_of(role), AdmissionKind::Load, &grant);
+}
+
+LoadResult Kernel::load(const std::string& name, const std::string& path,
+                        const std::vector<std::string>& roles, Grant grant) {
+    return load_impl(name, path, roles, AdmissionKind::Load, &grant);
 }
 
 LoadResult Kernel::load_impl(const std::string& name, const std::string& path,
-                             const std::string& role, AdmissionKind kind,
+                             const std::vector<std::string>& roles, AdmissionKind kind,
                              const Grant* explicit_grant) {
     if (libs_.count(name) != 0) {
         return {false, {}, "already loaded: " + name};
@@ -1249,7 +1265,7 @@ LoadResult Kernel::load_impl(const std::string& name, const std::string& path,
     const BuildIdentity build(path);
     if (explicit_grant == nullptr) {
         std::string why;
-        if (!ask_admission(AdmissionStage::Open, kind, name, path, role, build,
+        if (!ask_admission(AdmissionStage::Open, kind, name, path, roles, build,
                            /*declared=*/nullptr, &grant, &why)) {
             return {false, {}, why};
         }
@@ -1283,7 +1299,7 @@ LoadResult Kernel::load_impl(const std::string& name, const std::string& path,
         // takes, so the instance is destroyed and the library closed by the same machinery.
         if (explicit_grant == nullptr) {
             std::string why;
-            if (!ask_admission(AdmissionStage::Speak, kind, name, path, role, build,
+            if (!ask_admission(AdmissionStage::Speak, kind, name, path, roles, build,
                                mf.declared_present ? &mf.declared : nullptr, &grant, &why)) {
                 throw DllBoundaryError(why);
             }
@@ -1307,9 +1323,8 @@ LoadResult Kernel::load_impl(const std::string& name, const std::string& path,
         // bus grant bounds what it may say, never what it may touch; containment is the
         // out-of-process OS sandbox. docs/reference/capabilities.md#the-grant-in-process
         // docs/guides/dynamic-weaves.md#what-loading-it-in-process-means
-        // A non-empty role binds the slot here; if it is held, register_weave throws, the
-        // catch below makes a clean LoadResult failure, and the incumbent keeps its role.
-        loom::WeaveId id = bus_.register_weave(std::move(adapter), std::move(grant), role);
+        // The roles bind here, all or none (MSG-13): a refused set throws, binding none.
+        loom::WeaveId id = bus_.register_weave(std::move(adapter), std::move(grant), roles);
         raw->set_self(id);
         // The manifest's claim becomes the record's: from here the artifact being
         // loaded is why its vocabulary resolves in this Kernel. Had anything above
@@ -1353,7 +1368,7 @@ LoadResult Kernel::candidate_impl(const std::string& name, const std::string& pa
     // `fanout` chooses its recipients at enqueue, so a queued publication never named this
     // weave and a later one finds it sealed, and no delivery runs here, in host code.
     LoadResult lr =
-        load_impl(name, path, /*role=*/std::string{}, AdmissionKind::Candidate, explicit_grant);
+        load_impl(name, path, /*roles=*/{}, AdmissionKind::Candidate, explicit_grant);
     if (!lr.ok) {
         return lr;
     }
@@ -1396,7 +1411,7 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
         Grant ignored;
         std::string why;
         if (!ask_admission(AdmissionStage::Open, AdmissionKind::Reload, name, new_path,
-                           /*role=*/std::string{}, new_build, /*declared=*/nullptr, &ignored,
+                           /*roles=*/{}, new_build, /*declared=*/nullptr, &ignored,
                            &why)) {
             return {false, false, false, why};
         }
@@ -1438,7 +1453,7 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
         Grant ignored;
         std::string why;
         if (!ask_admission(AdmissionStage::Speak, AdmissionKind::Reload, name, new_path,
-                           /*role=*/std::string{}, new_build,
+                           /*roles=*/{}, new_build,
                            cand.declared_present ? &cand.declared : nullptr, &ignored, &why)) {
             destroy_instance(new_abi, new_inst);
             return {false, false, false, why};
@@ -1598,7 +1613,19 @@ bool Kernel::unload_role(const std::string& role) {
     if (rec == nullptr) {
         return false; // unheld, or held by a native weave that is not ours to unload
     }
-    return unload(rec->name); // the unregister releases the role slot
+    return unload(rec->name); // the unregister releases every role the artifact holds
+}
+
+bool Kernel::release_role(const std::string& role) {
+    if (role.empty()) {
+        return false;
+    }
+    // As unload_role, the bus's table names the holder; only one of ours is ours to change.
+    const loom::WeaveId holder = bus_.role_holder(role);
+    if (record_for(holder) == nullptr) {
+        return false;
+    }
+    return bus_.release_role(holder, role) == loom::RoleRelease::Released;
 }
 
 loom::WeaveId Kernel::weave_id(const std::string& name) const {
@@ -1606,11 +1633,11 @@ loom::WeaveId Kernel::weave_id(const std::string& name) const {
     return it == libs_.end() ? loom::WeaveId{} : it->second.id;
 }
 
-std::string Kernel::role_of(const std::string& name) const {
+std::vector<std::string> Kernel::roles_of(const std::string& name) const {
     auto it = libs_.find(name);
-    // Derived, never remembered: the Switchboard is the only thing that moves a
-    // role, so it is the only thing that can answer for one.
-    return it == libs_.end() ? std::string{} : bus_.role_of(it->second.id);
+    // Derived, never remembered: the Switchboard is the only thing that moves or
+    // ends a role, so it is the only thing that can answer for one.
+    return it == libs_.end() ? std::vector<std::string>{} : bus_.roles_of(it->second.id);
 }
 
 ArtifactStatus Kernel::status(const std::string& name) const {
@@ -1643,6 +1670,7 @@ Kernel::RoleQuery Kernel::query_role(const std::string& role, const std::string&
     }
     out.holder = rec->id;
     out.accepts = accepts(rec->id, shape_name, shape_version);
+    out.roles = bus_.roles_of(rec->id);
     return out;
 }
 

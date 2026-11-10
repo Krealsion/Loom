@@ -25,6 +25,7 @@ std::shared_ptr<const loom::Schema> boot_entry_schema() {
                               .field("name", loom::Kind::Text)
                               .field("path", loom::Kind::Text)
                               .field("role", loom::Kind::Text, /*required=*/false)
+                              .list("roles", loom::type_of(loom::Kind::Text), /*required=*/false)
                               .field("enabled", loom::Kind::Bool, /*required=*/false)
                               .field("on_failure", loom::Kind::Text, /*required=*/false)
                               .build();
@@ -137,7 +138,17 @@ bool read_boot_plan(const std::string& path, BootPlan* out, std::string* error) 
         BootEntry entry;
         entry.name = e.get("name")->as_text();
         entry.path = e.get("path")->as_text();
-        entry.role = text_or(e, "role", "");
+        // `role` names one, `roles` a set; a row may write both, `role` first. The load judges
+        // the whole set, so a name written twice is refused there, with every other row's.
+        const std::string one = text_or(e, "role", "");
+        if (!one.empty()) {
+            entry.roles.push_back(one);
+        }
+        if (const loom::Cell* set = e.get("roles")) {
+            for (const loom::Cell& r : set->as_list()) {
+                entry.roles.push_back(r.as_text());
+            }
+        }
         entry.enabled = bool_or(e, "enabled", true);
         const std::string on_fail = text_or(e, "on_failure", "continue");
         if (on_fail == "stop") {
@@ -255,9 +266,7 @@ std::vector<std::string> BootReport::render() const {
         line += name_of(r.state);
         line.resize(11, ' ');
         line += r.entry.name;
-        if (!r.entry.role.empty()) {
-            line += " @" + r.entry.role;
-        }
+        line += roles_text(r.entry.roles, " @");
         if (r.state == BootState::Started) {
             line += "  (weave " + std::to_string(r.weave) + ")";
         }

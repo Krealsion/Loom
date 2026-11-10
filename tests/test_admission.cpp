@@ -169,7 +169,7 @@ TEST_CASE("the policy is asked twice, and the first ask is before the file is op
     CHECK(q.kind == AdmissionKind::Load);
     CHECK(q.name == "t");
     CHECK(q.path == ZEN_SO_WEAVE);
-    CHECK(q.role == "some.role");
+    CHECK(q.roles == std::vector<std::string>{"some.role"});
     // The identity is the file's bytes, and it is the SAME identity the isolation
     // ledger keys by — one answer to "is this the build I approved", not two. It was
     // in the policy's hands at `open`, before any library had been opened.
@@ -281,7 +281,7 @@ TEST_CASE("the prepared-candidate door asks too, and says which door it is") {
     CHECK(rec.seen[1].kind == AdmissionKind::Candidate);
     // A candidate holds no role by construction, and the question says so rather than
     // making a policy guess.
-    CHECK(rec.seen[0].role.empty());
+    CHECK(rec.seen[0].roles.empty());
 
     SUBCASE("and a refusing policy stops a candidate before the world is touched") {
         Recorder strict;
@@ -384,10 +384,7 @@ TEST_CASE("the message-driven door spends the policy, and the asker hears the po
             reasons.push_back(why->as_text());
         }
     };
-    Value ask(schema_of<LoadWeave>());
-    ask.set("name", Cell::text("t"));
-    ask.set("path", Cell::text(ZEN_SO_WEAVE));
-    ask.set("role", Cell::text(""));
+    Value ask = to_value(LoadWeave{"t", ZEN_SO_WEAVE, {}});
     bus.send_as(asker.id, manager, Message(std::move(ask), WeaveId{}, asker.id, 1));
     bus.drain_until_idle();
 
@@ -485,10 +482,7 @@ TEST_CASE("a policy that never asks which build it is makes no door read the fil
     Registered asker =
         register_probe(bus, {schema_of<Refused>()}, 2, true,
                        Grant{}.allow(LoadWeave::zen_name, LoadWeave::zen_version, manager));
-    Value ask(schema_of<LoadWeave>());
-    ask.set("name", Cell::text("by-message"));
-    ask.set("path", Cell::text(ZEN_SO_WEAVE_B));
-    ask.set("role", Cell::text(""));
+    Value ask = to_value(LoadWeave{"by-message", ZEN_SO_WEAVE_B, {}});
     bus.send_as(asker.id, manager, Message(std::move(ask), WeaveId{}, asker.id, 1));
     bus.drain_until_idle();
     REQUIRE(kernel.is_loaded("by-message"));

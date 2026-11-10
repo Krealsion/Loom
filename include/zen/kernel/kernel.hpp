@@ -137,9 +137,9 @@ public:
     const AdmissionPolicy& admission_policy() const noexcept { return admit_; }
 
     /// Load `path`, mount its Weave under `name`, and return its id, asking the installed
-    /// admission policy what it may do. A non-empty `role` binds the Weave to that role, and
-    /// load is the only moment one can be bound; a role already held is a clean failure and the
-    /// incumbent keeps it.
+    /// admission policy what it may do. A non-empty `role` binds the Weave to that role (the
+    /// set overload with a set of one), and load is the only moment one can be bound; a role
+    /// already held is a clean failure and the incumbent keeps it.
     ///
     /// The policy is asked twice: before the library is opened (`AdmissionStage::Open`: may this
     /// file's code run here?), and after its manifest crosses the gate, before it is registered
@@ -150,12 +150,22 @@ public:
     LoadResult load(const std::string& name, const std::string& path,
                     const std::string& role = "");
 
+    /// As `load`, binding the Weave to every role in `roles`, all or none: a held name, an
+    /// empty one, one named twice, or more than `Switchboard::kMaxRolesPerWeave` is a clean
+    /// failure that binds none of them, and every incumbent keeps its role. The policy is asked
+    /// about the whole set (`AdmissionRequest::roles`).
+    /// MSG-13; docs/laws/messaging-laws.md
+    LoadResult load(const std::string& name, const std::string& path,
+                    const std::vector<std::string>& roles);
+
     /// As `load`, with the host naming the grant and bypassing the policy: the call site is the
     /// decision the policy would make, in code the host owns. The policy governs the loads a host
     /// did not write, the ones that arrive as messages. The grant's floor is empty, so a loaded
     /// weave that should observe Senses is granted that here.
     LoadResult load(const std::string& name, const std::string& path, const std::string& role,
                     Grant grant);
+    LoadResult load(const std::string& name, const std::string& path,
+                    const std::vector<std::string>& roles, Grant grant);
 
     /// Hot-reload `name` from `new_path`: snapshot the live Weave, swap the library behind the
     /// same WeaveId, and revive from the snapshot through the gate.
@@ -195,7 +205,7 @@ public:
 
     /// Unseal `candidate_name` and move `role` to it, as one change to what delivery can see
     /// (PR-07). False, changing nothing, unless the candidate is a live sealed weave and
-    /// `incumbent_name` holds the role.
+    /// `incumbent_name` holds the role and no other: a commit moves one role.
     bool commit_candidate(const std::string& incumbent_name, const std::string& candidate_name,
                           const std::string& role);
 
@@ -209,8 +219,15 @@ public:
 
     /// Unload whichever loaded library holds `role` now; false if none, or if the holder is a
     /// native weave. Resolved from the Switchboard's role table, so a role moved by admission
-    /// selects its actual holder. The role is released for a successor.
+    /// selects its actual holder. The artifact goes, so every role it holds is released for a
+    /// successor, not only this one.
     bool unload_role(const std::string& role);
+
+    /// Release `role` from the loaded library that holds it now, which keeps running and keeps
+    /// its other roles (`Switchboard::release_role`); false, changing nothing, if none holds it
+    /// or the holder is a native weave.
+    /// MSG-13; docs/laws/messaging-laws.md
+    bool release_role(const std::string& role);
 
     loom::WeaveId weave_id(const std::string& name) const;
 
@@ -232,14 +249,16 @@ public:
     /// `Sealed`, which outranks `Live`: a dead weave receives nothing whatever its seal.
     ArtifactStatus status(const std::string& name) const;
 
-    /// The role this artifact's weave holds now, asked of the Switchboard, or empty. Not the role
-    /// it was loaded under: an admission moves a role with no Kernel call.
-    std::string role_of(const std::string& name) const;
+    /// The roles this artifact's weave holds now, in binding order, asked of the Switchboard, or
+    /// none. Not the roles it was loaded under: an admission moves a role, and a release ends
+    /// one, with no Kernel call.
+    std::vector<std::string> roles_of(const std::string& name) const;
 
     /// A role's holder, as far as this Kernel can say.
     struct RoleQuery {
         loom::WeaveId holder{}; ///< the kernel-loaded holder, or 0 — see below
         bool accepts = false;   ///< holder declares (shape_name, shape_version) in its accept-set
+        std::vector<std::string> roles{}; ///< every role the holder holds now, `role` among them
     };
 
     /// Whether the holder of `role` accepts a shape, read from the bus's role table and published
@@ -312,7 +331,7 @@ private:
     /// The one loading machine. `explicit_grant == nullptr` asks the installed policy at both
     /// stages; non-null is the host's grant and the policy is not consulted.
     LoadResult load_impl(const std::string& name, const std::string& path,
-                         const std::string& role, AdmissionKind kind,
+                         const std::vector<std::string>& roles, AdmissionKind kind,
                          const Grant* explicit_grant);
 
     /// `load_impl` plus the seal.
@@ -323,7 +342,7 @@ private:
     /// True when admitted; on a refusal `*why` gets the sentence to report. `build` is the
     /// operation's one identity, shared by its two stages and read only if the policy asks.
     bool ask_admission(AdmissionStage stage, AdmissionKind kind, const std::string& name,
-                       const std::string& path, const std::string& role,
+                       const std::string& path, const std::vector<std::string>& roles,
                        const BuildIdentity& build, const CapabilityAsk* declared,
                        Grant* granted, std::string* why) const;
 

@@ -147,10 +147,12 @@ const LogRule* LoggerSelection::rule_for(std::string_view shape) const noexcept 
 
 LoggerSelection default_selection() {
     LoggerSelection s;
-    // What code is loaded: the control door's four verbs that change it, and the weave
-    // manager's three. Each is rare: a whole interactive session delivers a few, at boot.
+    // What code is loaded, and under which roles: the control door's five verbs that change
+    // it, and the weave manager's three. Each is rare: a whole interactive session delivers a
+    // few, at boot.
     for (const char* shape : {"LoadLibrary", "ReloadLibrary", "UnloadLibrary", "UnloadRole",
-                              "zen.LoadWeave", "zen.SwapWeave", "zen.ReloadWeave"}) {
+                              "ReleaseRole", "zen.LoadWeave", "zen.SwapWeave",
+                              "zen.ReloadWeave"}) {
         s.shapes.push_back(LogRule{shape, 0});
     }
     // WHO MAY SPEAK. The Weaver's authority conversation — an ask, the prompt it

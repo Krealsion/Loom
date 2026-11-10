@@ -43,6 +43,7 @@ LOOM_WEAVE_MINGW_CLANG_LEAST    cmake/loom-weave.cmake                    LOOM_W
 kMaxDeferredAnswers             include/zen/switchboard/switchboard.hpp   kMaxDeferredAnswers
 kJournalCapacity                include/zen/switchboard/switchboard.hpp   kJournalCapacity
 kMaxPreparedReplacements        include/zen/switchboard/switchboard.hpp   kMaxPreparedReplacements
+kMaxRolesPerWeave               include/zen/switchboard/switchboard.hpp   kMaxRolesPerWeave
 kMaxPreparationBudget           include/zen/switchboard/switchboard.hpp   kMaxPreparationBudget
 kMaxTerminalOutcomes            include/zen/switchboard/switchboard.hpp   kMaxTerminalOutcomes
 kMaxJointOperations             include/zen/switchboard/switchboard.hpp   kMaxJointOperations

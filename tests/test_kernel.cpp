@@ -1171,8 +1171,8 @@ TEST_CASE("a sealed candidate is loaded from a real artifact and is NOT in the w
     CHECK(bus.sealed(candidate.id));
     CHECK_FALSE(bus.sealed(incumbent.id));
     CHECK(bus.alive(candidate.id)); // real, constructed, and alive — just not present
-    CHECK(kernel.role_of("cand").empty());
-    CHECK(kernel.role_of("live") == "worker");
+    CHECK(kernel.roles_of("cand").empty());
+    CHECK(kernel.roles_of("live") == std::vector<std::string>{"worker"});
 
     // IT IS NOT IN THE WORLD, one routing path at a time.
     //
@@ -1313,8 +1313,8 @@ TEST_CASE("commit is ONE visible change — no observer sees a gap, two holders,
     // ...and the incumbent is still alive and addressable by id — it retired from
     // the ROLE, not from existence. Retirement is a separate act.
     CHECK(bus.alive(incumbent.id));
-    CHECK(kernel.role_of("live").empty());
-    CHECK(kernel.role_of("cand") == "worker");
+    CHECK(kernel.roles_of("live").empty());
+    CHECK(kernel.roles_of("cand") == std::vector<std::string>{"worker"});
 }
 
 TEST_CASE("a refused commit changes NOTHING — it is observationally identical to never having "
@@ -1334,8 +1334,8 @@ TEST_CASE("a refused commit changes NOTHING — it is observationally identical 
 
     CHECK(bus.role_holder("worker") == incumbent.id);
     CHECK(bus.sealed(candidate.id));
-    CHECK(kernel.role_of("live") == "worker");
-    CHECK(kernel.role_of("cand").empty());
+    CHECK(kernel.roles_of("live") == std::vector<std::string>{"worker"});
+    CHECK(kernel.roles_of("cand").empty());
 
     // The incumbent never stopped serving.
     bus.send_to_role("worker", Message(ping(1)));
@@ -4266,7 +4266,7 @@ void artifact_released(Kernel& kernel, const char* name, const char* path) {
     CHECK_FALSE(kernel.is_loaded(name));
     CHECK(kernel.status(name) == ArtifactStatus::NotLoaded);
     CHECK_FALSE(kernel.weave_id(name).valid());
-    CHECK(kernel.role_of(name).empty());
+    CHECK(kernel.roles_of(name).empty());
     const std::vector<std::string> names = kernel.loaded();
     CHECK(std::find(names.begin(), names.end(), std::string(name)) == names.end());
     // ...and the two operations that would have touched stale state answer
@@ -4316,8 +4316,8 @@ TEST_CASE("a lifecycle-driven abort releases the candidate's artifact, and nobod
     // BEFORE: the Kernel and the Switchboard agree about both artifacts.
     CHECK(kernel.status("v1") == ArtifactStatus::Live);
     CHECK(kernel.status("v2") == ArtifactStatus::Sealed);
-    CHECK(kernel.role_of("v1") == kService);
-    CHECK(kernel.role_of("v2").empty());
+    CHECK(kernel.roles_of("v1") == std::vector<std::string>{kService});
+    CHECK(kernel.roles_of("v2").empty());
     CHECK(service_query(kernel).holder == d.incumbent);
 
     dyn_ask(bus, d, t.id, plan);
@@ -4352,7 +4352,7 @@ TEST_CASE("a lifecycle-driven abort releases the candidate's artifact, and nobod
     // THE KERNEL'S SIDE, WITHOUT A CLEANUP CALL.
     artifact_released(kernel, "v2", ZEN_SO_VERSIONED_V2);
     CHECK(kernel.is_loaded("v1")); // and the incumbent's artifact is untouched
-    CHECK(kernel.role_of("v1") == kService);
+    CHECK(kernel.roles_of("v1") == std::vector<std::string>{kService});
 
     // EXACTLY ONCE, both of them. One instance destroyed (the candidate's), one
     // library closed (the candidate's) — and nothing created or opened, so a
@@ -4447,7 +4447,7 @@ TEST_CASE("a released candidate name is reusable, and nothing of the old artifac
     for (const WeaveId old : was) {
         CHECK(bus.weave(old) == nullptr);
         CHECK_FALSE(bus.alive(old));
-        CHECK(bus.role_of(old).empty());
+        CHECK(bus.roles_of(old).empty());
         const Ticket t = bus.send(old, Message(to_value(versioned::QueryVersion{1})));
         bus.drain_until_idle();
         CHECK(bus.outcome(t).refusal.reason == RefusalReason::NoSuchTarget);
@@ -4487,8 +4487,8 @@ TEST_CASE("the committed candidate is the service, in the Kernel's books as well
     //    sealed. Asked with a shape only v2 declares, so both fields discriminate.
     CHECK(kernel.status("v1") == ArtifactStatus::Live);
     CHECK(kernel.status("v2") == ArtifactStatus::Sealed);
-    CHECK(kernel.role_of("v1") == kService);
-    CHECK(kernel.role_of("v2").empty());
+    CHECK(kernel.roles_of("v1") == std::vector<std::string>{kService});
+    CHECK(kernel.roles_of("v2").empty());
     CHECK(service_query(kernel).holder == d.incumbent);
     CHECK_FALSE(service_query(kernel).accepts);
 
@@ -4512,8 +4512,8 @@ TEST_CASE("the committed candidate is the service, in the Kernel's books as well
     //     is exactly where a cache would have been "helpfully" updated early.
     CHECK(bus.transaction_state(t.id) == TxnState::AdmissionPending);
     CHECK(service_query(kernel).holder == d.incumbent);
-    CHECK(kernel.role_of("v1") == kService);
-    CHECK(kernel.role_of("v2").empty());
+    CHECK(kernel.roles_of("v1") == std::vector<std::string>{kService});
+    CHECK(kernel.roles_of("v2").empty());
     CHECK(kernel.status("v1") == ArtifactStatus::Live);
     CHECK(kernel.status("v2") == ArtifactStatus::Sealed);
 
@@ -4521,8 +4521,8 @@ TEST_CASE("the committed candidate is the service, in the Kernel's books as well
 
     // 8-12. IMMEDIATELY — no later host call, no reconciliation pass.
     CHECK(bus.role_holder(kService) == d.candidate);
-    CHECK(kernel.role_of("v2") == kService);
-    CHECK(kernel.role_of("v1").empty());
+    CHECK(kernel.roles_of("v2") == std::vector<std::string>{kService});
+    CHECK(kernel.roles_of("v1").empty());
     const Kernel::RoleQuery q = service_query(kernel);
     CHECK(q.holder == d.candidate);
     CHECK(q.accepts); // and the answer's SECOND field moved with it
@@ -4532,9 +4532,9 @@ TEST_CASE("the committed candidate is the service, in the Kernel's books as well
 
     // The four things the Kernel must never say about a committed topology.
     CHECK(service_query(kernel).holder.valid());            // never "no holder"
-    CHECK_FALSE(kernel.role_of("v1") == kernel.role_of("v2")); // never both
+    CHECK_FALSE(kernel.roles_of("v1") == kernel.roles_of("v2")); // never both
     CHECK_FALSE(kernel.status("v1") == ArtifactStatus::Live);  // incumbent is not live production
-    CHECK_FALSE(kernel.role_of("v2").empty());                 // candidate is not roleless
+    CHECK_FALSE(kernel.roles_of("v2").empty());                 // candidate is not roleless
 
     // 13. And production answers "v2".
     CHECK(d.ask(bus) == "v2");
@@ -4582,7 +4582,7 @@ TEST_CASE("unloading the retired incumbent does not disturb the new service") {
 
     // The successor is untouched by its predecessor's retirement.
     CHECK(kernel.status("v2") == ArtifactStatus::Live);
-    CHECK(kernel.role_of("v2") == kService);
+    CHECK(kernel.roles_of("v2") == std::vector<std::string>{kService});
     CHECK(bus.role_holder(kService) == d.candidate);
     CHECK(d.ask(bus) == "v2");
 }
@@ -4607,15 +4607,15 @@ TEST_CASE("a role moved by DIRECT admission — no transaction at all — is see
 
     // Direct admission is SCHEDULED too (PR-07): one primitive, one behaviour, and the Kernel
     // says the truthful thing in both windows, at once in both.
-    CHECK(kernel.role_of("v1") == kService);
-    CHECK(kernel.role_of("v2").empty());
+    CHECK(kernel.roles_of("v1") == std::vector<std::string>{kService});
+    CHECK(kernel.roles_of("v2").empty());
     CHECK(kernel.status("v1") == ArtifactStatus::Live);
     CHECK(kernel.status("v2") == ArtifactStatus::Sealed);
 
     bus.drain_until_idle();
 
-    CHECK(kernel.role_of("v2") == kService);
-    CHECK(kernel.role_of("v1").empty());
+    CHECK(kernel.roles_of("v2") == std::vector<std::string>{kService});
+    CHECK(kernel.roles_of("v1").empty());
     const Kernel::RoleQuery q = service_query(kernel);
     CHECK(q.holder == d.candidate);
     CHECK(q.accepts);
@@ -4642,8 +4642,8 @@ TEST_CASE("Kernel::commit_candidate leaves no bookkeeping to catch up") {
     // The Kernel's own commit door keeps no cached role to patch: its answers are the ones the
     // transaction road produces.
     REQUIRE(kernel.commit_candidate("v1", "v2", kService));
-    CHECK(kernel.role_of("v2") == kService);
-    CHECK(kernel.role_of("v1").empty());
+    CHECK(kernel.roles_of("v2") == std::vector<std::string>{kService});
+    CHECK(kernel.roles_of("v1").empty());
     CHECK(service_query(kernel).holder == d.candidate);
     CHECK(bus.role_holder(kService) == d.candidate);
     // commit_candidate is the narrower door: it unseals without retiring, so
@@ -4653,8 +4653,8 @@ TEST_CASE("Kernel::commit_candidate leaves no bookkeeping to catch up") {
 
     // A refused commit changes nothing, on either side.
     CHECK_FALSE(kernel.commit_candidate("v2", "v1", kService));
-    CHECK(kernel.role_of("v2") == kService);
-    CHECK(kernel.role_of("v1").empty());
+    CHECK(kernel.roles_of("v2") == std::vector<std::string>{kService});
+    CHECK(kernel.roles_of("v1").empty());
 }
 
 TEST_CASE("reloading a weave a transaction bound as its candidate releases the artifact, and the "
@@ -4998,7 +4998,7 @@ TEST_CASE("admission and first breath are one event — v2 is never publicly the
     CHECK(bus.role_holder(kService) == d.incumbent);
     CHECK(bus.sealed(d.candidate));
     CHECK_FALSE(bus.sealed(d.incumbent));
-    CHECK(kernel.role_of("v1") == kService);
+    CHECK(kernel.roles_of("v1") == std::vector<std::string>{kService});
     CHECK(state_field(bus, d.candidate, "activations") == 0);
 
     // 9-12. One dispatch does the whole thing.
@@ -5030,8 +5030,8 @@ TEST_CASE("admission and first breath are one event — v2 is never publicly the
     CHECK(bus.active_transactions() == 0);
 
     // 16. The Kernel's role and artifact records agree with the Switchboard.
-    CHECK(kernel.role_of("v2") == kService);
-    CHECK(kernel.role_of("v1").empty());
+    CHECK(kernel.roles_of("v2") == std::vector<std::string>{kService});
+    CHECK(kernel.roles_of("v1").empty());
     CHECK(kernel.status("v2") == ArtifactStatus::Live);
     CHECK(kernel.status("v1") == ArtifactStatus::Sealed);
 
@@ -5525,7 +5525,7 @@ TEST_CASE("a lifecycle change during a pending admission ends the transaction, r
     // unregistered, and its record and library go with it (KERN-02,
     // unchanged by the pending window).
     CHECK(bus.role_holder(kService) == d.incumbent);
-    CHECK(kernel.role_of("v1") == kService);
+    CHECK(kernel.roles_of("v1") == std::vector<std::string>{kService});
     CHECK(kernel.status("v2") == ArtifactStatus::NotLoaded);
     CHECK_FALSE(kernel.is_loaded("v2"));
     TxnOutcome second{};

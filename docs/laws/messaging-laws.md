@@ -60,9 +60,13 @@ It proves nothing about the sender having spoken *as* R.
 
 MEANS
 - resolution happens at delivery, so queued role traffic follows the topology;
-- authorization for role sends is by role name (stable across replacement).
+- authorization for role sends is by role name (stable across replacement);
+- each role has one holder, and a holder may hold other roles too
+  ([MSG-13](#msg-13--a-weave-answers-to-the-set-of-roles-it-was-bound-to)):
+  whoever holds R is reached, whatever else it holds.
 
 DOES NOT MEAN
+- that a role may have several holders: the role table maps each name to one;
 - that a message *from* a role-holder carries any attestation of that role —
   merely *holding* R could never supply it (the same weave, holding the same
   role, may speak personally or as the role; holding is necessary, not
@@ -425,3 +429,47 @@ PROVEN BY — Switchboard::capture_refusal_recipient, notify_dispatch_refusal,
 deliver_one; suites dispatch_refusal, dispatch_loaded, terminal, isolation;
 installed-package witness. Full representation and disposal contract:
 [messaging](../reference/messaging.md#sender-visible-dispatch-refusal).
+
+## MSG-13 — A weave answers to the set of roles it was bound to
+
+LAW — A weave may hold several roles. They are bound at registration, or at a
+load, and nowhere else: the whole set, judged before any of it is recorded, and
+bound all or none, at most `kMaxRolesPerWeave` of them. A holder may release one
+role at any time, and keeps the rest.
+
+MEANS
+- an empty name, a name twice, a held name, or a set past the bound refuses the
+  registration, and binds none of its names; every incumbent keeps its role;
+- an admission policy is asked about the whole set (`AdmissionRequest::roles`),
+  so one that allowed a weave one role has not by that allowed it a second;
+- a release is the holder leaving that role: traffic addressed to it is refused
+  at its turn (`NoSuchTarget`), as to any unheld role; its role claims end
+  ([SENSE-05](sense-laws.md#sense-05--reading-is-authorized-and-the-repository-is-bounded));
+  a prepared replacement over the holder aborts, `RoleChanged`. The holder's
+  other roles, its life and its queued speech are untouched;
+- a holder releases through its own bus (`mail.release_role`), a host through
+  `Switchboard::release_role`, and a loaded library's role through the control
+  door (`ReleaseRole`); a bus with no release says `NotOffered`;
+- removal releases every role the weave holds, and each one's claims;
+- a replacement moves one role, so an incumbent holding several is refused, in
+  words, before anything moves: `TxnReason::SeveralRoles` at `begin`,
+  `AdmitRefusal::SeveralRoles` at an admission, `false` from a direct commit,
+  and a `zen.Refused` from the Weave Manager's swap before it unloads anything.
+
+DOES NOT MEAN
+- that a running weave can take a role: a role is bound only when a weave is
+  registered or loaded;
+- that a role has several holders ([MSG-04](#msg-04--role-addressing-is-destination-not-authorship));
+- that holding two roles lets a weave speak for either without saying so:
+  speaking as a role is a statement's own act ([MSG-07](#msg-07--role-authorship-is-explicit));
+- that roles split a weave's authority: its grant is one, whatever it holds.
+  Whether a second role is right is the application's judgement, not Loom's.
+
+PROVEN BY — `Switchboard::register_weave` (the set overload), `release_role`,
+`roles_of`, `admission_blocked`, `begin_prepared_replacement`; suite
+`role_authorship` (the set reached, authoring and claiming as each role; a set
+refused whole; release and removal letting go of exactly their roles; a release
+aborting a replacement; a two-role incumbent's replacement refused), suite
+`manager` (a library loaded into a set, the control door's list, release and
+the older load; a two-role holder's swap refused), suite `host_policy` (a boot
+row's `roles`). [Decision](../decisions/a-weave-answers-to-the-roles-it-is-loaded-with.md).

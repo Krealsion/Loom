@@ -13,6 +13,7 @@ to unmake without knowing what rejected them. How Loom came to be this way is in
 | [committed-activation-is-not-answerable](committed-activation-is-not-answerable.md) | first breath is a fact, not an ask |
 | [no-rollback-after-committed-production](no-rollback-after-committed-production.md) | failure direction is refuse-before, never unwind-after |
 | [role-authorship-is-deliberate](role-authorship-is-deliberate.md) | speaking as a role is an explicit verified act, never inferred from holding |
+| [a-weave-answers-to-the-roles-it-is-loaded-with](a-weave-answers-to-the-roles-it-is-loaded-with.md) | several roles, each with one holder, bound at load all or none, released one at a time |
 | [a-claim-is-not-a-message](a-claim-is-not-a-message.md) | Senses earn their category by carrying no causality, no history and no default reach |
 | [migration-is-authored-not-inferred](migration-is-authored-not-inferred.md) | supersedes automatic gate migration: an authored transformation before admission, never coercion inside it |
 | [dispatch-refusal-returns-to-its-author](dispatch-refusal-returns-to-its-author.md) | authenticated later refusal, exact attempts, original incarnation and ordinary consumer ownership |

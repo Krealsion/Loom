@@ -126,6 +126,20 @@ const char* name_of(AdmitRefusal r) noexcept {
         return "RoleNotHeld";
     case AdmitRefusal::CandidateContract:
         return "CandidateContract";
+    case AdmitRefusal::SeveralRoles:
+        return "SeveralRoles";
+    }
+    return "?";
+}
+
+const char* name_of(RoleRelease r) noexcept {
+    switch (r) {
+    case RoleRelease::Released:
+        return "Released";
+    case RoleRelease::NotHeld:
+        return "NotHeld";
+    case RoleRelease::NotOffered:
+        return "NotOffered";
     }
     return "?";
 }
@@ -190,6 +204,8 @@ const char* name_of(TxnReason r) noexcept {
         return "LateReadiness";
     case TxnReason::PreparationAlreadyAsked:
         return "PreparationAlreadyAsked";
+    case TxnReason::SeveralRoles:
+        return "SeveralRoles";
     }
     return "?";
 }
@@ -336,12 +352,40 @@ WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant
 }
 
 WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant, std::string role) {
+    std::vector<std::string> roles;
+    if (!role.empty()) {
+        roles.push_back(std::move(role));
+    }
+    return register_weave(std::move(incoming), std::move(grant), std::move(roles));
+}
+
+WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant,
+                                    std::vector<std::string> roles) {
     if (!incoming) {
         throw std::invalid_argument("register_weave: weave must be non-null");
     }
-    if (!role.empty() && roles_.count(role) != 0) {
-        throw std::invalid_argument("register_weave: role '" + role +
-                                    "' is already held (roles are singletons)");
+    // THE SET IS JUDGED WHOLE, before anything is recorded or claimed, so a refusal binds
+    // none of it: all or none (MSG-13).
+    if (roles.size() > kMaxRolesPerWeave) {
+        throw std::invalid_argument("register_weave: " + std::to_string(roles.size()) +
+                                    " roles asked, and a weave holds at most " +
+                                    std::to_string(kMaxRolesPerWeave));
+    }
+    for (std::size_t i = 0; i < roles.size(); ++i) {
+        if (roles[i].empty()) {
+            throw std::invalid_argument("register_weave: a role in the set is empty");
+        }
+        for (std::size_t j = 0; j < i; ++j) {
+            if (roles[j] == roles[i]) {
+                throw std::invalid_argument("register_weave: role '" + roles[i] +
+                                            "' is named twice in the set");
+            }
+        }
+        if (roles_.count(roles[i]) != 0) {
+            throw std::invalid_argument("register_weave: role '" + roles[i] +
+                                        "' is already held (a role has one holder), so no role "
+                                        "of the set is bound");
+        }
     }
 
     // Record the accept-set, so all Weaves agree on what a given (name, version)
@@ -459,9 +503,9 @@ WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant
                     /*incarnation=*/1, // this id's first code; bumped by swap_state alone
                     /*life=*/1,        // its first life; bumped only on a revival
                     /*sealed_by=*/CandidateOwner{}, // in the world from the moment it exists
-                    role};
+                    roles};
     weaves_.emplace(id.value, std::move(rec));
-    if (!role.empty()) {
+    for (std::string& role : roles) {
         roles_.emplace(std::move(role), id);
     }
     return id;
@@ -510,14 +554,14 @@ std::unique_ptr<Weave> Switchboard::unregister_weave(WeaveId id) {
     if (it == weaves_.end()) {
         return nullptr;
     }
-    if (!it->second.role.empty()) {
-        roles_.erase(it->second.role); // a role has no holder once its Weave is removed
+    for (const std::string& role : it->second.roles) {
+        roles_.erase(role); // a role has no holder once its Weave is removed
         // ...and a role with no role holder has no current claimant, so its
-        // latest claims go with it. This is the ONLY way role claims
-        // are dropped: an admission moves the role holder IN PLACE and never
+        // latest claims go with it. Removal and release are the only ways role
+        // claims are dropped: an admission moves the role holder IN PLACE and never
         // passes through unheld, so a replacement leaves the predecessor's claim
         // standing — stamped stale, never deleted and never relabelled.
-        forget_role_claims(it->second.role);
+        forget_role_claims(role);
     }
     // The weave's own latest claims end with it. This is what bounds the
     // repository by CURRENT keys rather than by claims ever made.
@@ -1063,15 +1107,17 @@ JointBegin Switchboard::begin_joint_as(WeaveId caller, const JointAuthority& aut
         // THE CEILING IS A SET OF ROLES, RESOLVED NOW: the claimant must hold one
         // of them at this moment. What is bound is the exact participant, so a
         // role that moves afterwards does not move the operation with it.
-        bool within = false;
+        // The first ceiling role it holds is the one that admitted the key: the role a failure
+        // is told in for a key named by weave, whatever else the claimant holds.
+        std::string ceiling_role;
         for (const std::string& role : authority.ceiling()) {
             const auto held = roles_.find(role);
             if (held != roles_.end() && held->second == key.claimant) {
-                within = true;
+                ceiling_role = role;
                 break;
             }
         }
-        if (!within) {
+        if (ceiling_role.empty()) {
             return JointBegin{false, 0, JointRefusal::OutsideCeiling};
         }
         const PersonalKey pk{key.claimant.value, key.schema_name, key.schema_version};
@@ -1098,7 +1144,7 @@ JointBegin Switchboard::begin_joint_as(WeaveId caller, const JointAuthority& aut
         // for a key named by weave -- the one the claimant holds at this moment. A
         // fact about the bound participant, recorded now, so a later role movement
         // does not rewrite whom the initiator was coordinating.
-        part.bound_role = named_role.empty() ? claimant->role : named_role;
+        part.bound_role = named_role.empty() ? ceiling_role : named_role;
         part.revision = record->second.revision;
         parts.push_back(std::move(part));
     }
@@ -2297,7 +2343,7 @@ void Switchboard::deliver_one(Envelope env) {
     ev.correlation = env.msg.correlation;
     ev.addressed_role = env.role;
     ev.dispatch_parent = env.dispatch_parent;
-    // The STAMPED authorship fact, read from the envelope — never a role_of()
+    // The STAMPED authorship fact, read from the envelope — never a roles_of()
     // lookup, which would report current membership instead of historical
     // authorship (MSG-07). Set before any refusal branch, so a refused
     // role-authored delivery still shows which role it was authored as.
@@ -2837,7 +2883,7 @@ bool Switchboard::seal_weave(WeaveId candidate, WeaveId coordinator) {
     // be sealed to a correspondent that never answers. A sealed candidate is not resealable:
     // changing owners would hand a prepared candidate to another transaction, and there is no
     // transfer.
-    if (rec == nullptr || owner == nullptr || !owner->alive || !rec->role.empty() ||
+    if (rec == nullptr || owner == nullptr || !owner->alive || !rec->roles.empty() ||
         rec->sealed_by.valid()) {
         return false;
     }
@@ -2857,9 +2903,30 @@ WeaveId Switchboard::role_holder(std::string_view role) const {
     return it == roles_.end() ? WeaveId{} : it->second;
 }
 
-std::string Switchboard::role_of(WeaveId id) const {
+std::vector<std::string> Switchboard::roles_of(WeaveId id) const {
     const WeaveRecord* rec = find(id);
-    return rec == nullptr ? std::string{} : rec->role;
+    return rec == nullptr ? std::vector<std::string>{} : rec->roles;
+}
+
+RoleRelease Switchboard::release_role(WeaveId holder, std::string_view role) {
+    WeaveRecord* rec = find(holder);
+    const auto held = role.empty() ? roles_.end() : roles_.find(std::string(role));
+    if (rec == nullptr || held == roles_.end() || !(held->second == holder)) {
+        return RoleRelease::NotHeld;
+    }
+    // THE HOLDER LEAVING THE ROLE, and nothing else of it: its other roles, its life and its
+    // queued speech are untouched. Traffic addressed to the role resolves at its own turn and
+    // finds no holder (NoSuchTarget), as for a holder that left by removal.
+    const std::string name = held->first;
+    roles_.erase(held);
+    rec->roles.erase(std::remove(rec->roles.begin(), rec->roles.end(), name), rec->roles.end());
+    // A role with no holder has no current claimant: its claims end here, as at removal
+    // (SENSE-05). Only the released role's: the holder's other roles keep theirs.
+    forget_role_claims(name);
+    // A prepared replacement over this holder bound the role it had; the same check that
+    // notices a role moved ends it now, RoleChanged.
+    invalidate_transactions_for(holder);
+    return RoleRelease::Released;
 }
 
 bool Switchboard::sealed(WeaveId id) const {
@@ -2882,14 +2949,17 @@ bool Switchboard::commit_candidate(WeaveId candidate, WeaveId incumbent,
     if (held == roles_.end() || !(held->second == incumbent)) {
         return false; // somebody else holds the slot; this is not our replacement
     }
+    if (inc->roles.size() != 1) {
+        return false; // a commit moves one role, and would leave the rest on the incumbent
+    }
 
     // ...and then the whole change, with no delivery between any two lines of it. No lock is
     // needed: dispatch is single-threaded and non-reentrant, so an observer's next delivery
     // precedes all of this or follows all of it. The same change as several ordinary messages
     // would not be atomic; that is the observable window a `zen.SwapWeave` has.
     cand->sealed_by = CandidateOwner{};
-    inc->role.clear();
-    cand->role = role;
+    inc->roles.clear();
+    cand->roles = {role};
     held->second = candidate;
     return true;
 }
@@ -2934,6 +3004,11 @@ AdmitRefusal Switchboard::admission_blocked(const ParticipantRef& candidate,
     const auto held = roles_.find(role);
     if (held == roles_.end() || !(held->second == incumbent.who)) {
         return AdmitRefusal::RoleNotHeld;
+    }
+    // An admission moves this one role, then seals the incumbent for retirement: any other role
+    // it holds would be left on a sealed weave, which holds none (PR-01).
+    if (inc->roles.size() != 1) {
+        return AdmitRefusal::SeveralRoles;
     }
     return AdmitRefusal::None;
 }
@@ -3099,8 +3174,8 @@ void Switchboard::deliver_admission(Envelope env) {
     WeaveRecord* inc = find(env.admission.incumbent.who);
     const CandidateOwner owner = env.admission.owner;
     cand->sealed_by = CandidateOwner{};
-    inc->role.clear();
-    cand->role = env.admission.role;
+    inc->roles.clear(); // its one role: admission_blocked refuses an incumbent holding more
+    cand->roles = {env.admission.role};
     roles_.find(env.admission.role)->second = env.admission.candidate.who;
     // The incumbent is sealed FOR RETIREMENT, to the same coordinator: it stops
     // receiving production entirely — not merely role traffic — and remains
@@ -3331,7 +3406,7 @@ TxnResult Switchboard::begin_prepared_replacement(WeaveId op, WeaveId coordinato
     const WeaveRecord* cand = find(candidate);
     // The incumbent must be a public service holding the role; the candidate must
     // be sealed by exactly this coordinator and hold no role at all.
-    if (inc->sealed_by.valid() || !cand->sealed_by.valid() || !cand->role.empty()) {
+    if (inc->sealed_by.valid() || !cand->sealed_by.valid() || !cand->roles.empty()) {
         return {false, TxnId{}, TxnReason::PreconditionFailed};
     }
     if (!(cand->sealed_by.who == coordinator) || cand->sealed_by.life != c.life ||
@@ -3341,6 +3416,11 @@ TxnResult Switchboard::begin_prepared_replacement(WeaveId op, WeaveId coordinato
     const auto held = roles_.find(role);
     if (held == roles_.end() || !(held->second == incumbent)) {
         return {false, TxnId{}, TxnReason::RoleChanged};
+    }
+    // A replacement moves the one role it names, then retires the incumbent: any other role it
+    // holds would be left on a sealed, retiring weave. Refused until a replacement moves a set.
+    if (inc->roles.size() != 1) {
+        return {false, TxnId{}, TxnReason::SeveralRoles};
     }
     // One incumbent, one replacement, and one candidate, one replacement: otherwise a sealed
     // candidate could be promised to two incumbents, one readiness would answer both, and
