@@ -72,8 +72,9 @@ the reference pages, and the main suites and other CTest entries that witness it
 - **One issue is one branch and one pull request, which closes it with `Fixes #n`.**
   [Taking an issue](taking-an-issue.md#1-choose-a-ready-issue) and
   [the pull request](taking-an-issue.md#9-the-pull-request)
-- **A commit is authored by the person who makes it, never the AI agent they use, with no
-  co-author line and no AI credit**: `cmake -P tests/check_commit_attribution.cmake`.
+- **A commit is authored by the person who makes it, never by an AI agent as author or
+  committer, with no co-author line and no AI credit**:
+  `cmake -P tests/check_commit_attribution.cmake`.
   [Attribution](../../CONTRIBUTING.md#attribution) and
   [the attribution guard](../../tests/check_commit_attribution.cmake)
 - **The whole diff is read before the push.**
