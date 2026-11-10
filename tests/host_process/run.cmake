@@ -272,6 +272,22 @@ quit
     zen_check("neither over-long line ran in part: every command after them ran"
               text MATCHES "run +probe")
 
+    # 7. A native participant that throws ends the host in words and leaves no session file.
+    # `fault` mounts a native handler and sends it the text, so the exception leaves the pump
+    # (a loaded weave is caught at its ABI and would not). The line carries that text and the
+    # participant the tap names. The host said it was serving, so both session files existed,
+    # and neither remains. Exit 1 is this end; an abort is a different code and fails here.
+    message(STATUS "host_process/console: a native participant that throws ends the host in words")
+    zen_scenario_dir(native-throw dir)
+    zen_run_host("${dir}" "fault kettle-7f3a\n" "--serve;${dir}" text code)
+    zen_check("the host had written the session files: it said it was serving"
+              text MATCHES "session: serving")
+    zen_check("it names the participant the tap names and the exception's text"
+              text MATCHES "native participant weave [0-9]+ 'loom.fault' failed: kettle-7f3a")
+    zen_check("a native participant's exception exits 1" code EQUAL 1)
+    zen_check("session.json is gone" NOT EXISTS "${dir}/session.json")
+    zen_check("session.key is gone" NOT EXISTS "${dir}/session.key")
+
 endif()
 
 # ---- the weaves group --------------------------------------------------------

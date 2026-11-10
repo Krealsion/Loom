@@ -8,7 +8,8 @@
 // reads it acts as the owner) before it listens and reads it back; a key not its user's alone (on
 // FAT or exFAT, never) is removed and nothing is served. Listening, it writes `session.json`
 // (endpoint, lifetime id, pid, version, start time; not a secret, not authority), and removes both
-// on a clean end. A host that dies leaves them describing a lifetime that is over.
+// when this process ends the session, a native participant's exception included. A host that is
+// killed leaves them describing a lifetime that is over.
 
 #include "../detail/json.hpp"
 

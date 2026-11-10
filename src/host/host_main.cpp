@@ -41,12 +41,14 @@
 
 #include <chrono>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <iostream>
 #include <map>
 #include <memory>
 #include <optional>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -143,9 +145,9 @@ usage: loom-host [options]
   --listen <port>     serve mode's loopback port (default: one the OS chooses).
   --help, --version
 
-exit codes: 0 ok   2 bad command line   3 a file would not parse   4 another host owns
-the decision store, or already serves that session directory   5 the session could not
-be opened (its directory, its files, its listener or its randomness)
+exit codes: 0 ok   1 a native participant failed   2 bad command line   3 a file would not parse
+  4 another host owns the decision store, or already serves that session directory
+  5 the session could not be opened (its directory, its files, its listener or its randomness)
 
 The two files are yours: written here at the console, readable and editable in any
 editor. Neither is required to start — a host with no files comes up empty and says so,
@@ -204,6 +206,30 @@ Options parse_options(int argc, char** argv) {
     }
     return o;
 }
+
+// A native participant whose only act is to throw the text it is sent. `zen.host.` is this
+// host's own vocabulary, so an application's shape cannot collide with it. Not mounted at
+// boot: `fault` mounts it, so the host's ordinary participants and their ids stay as they are.
+// The exception leaves the pump (MSG-10); main, below, is what reports it.
+struct HostThrow {
+    std::string text;
+    using ZenSelf = HostThrow;
+    static constexpr const char* zen_name = "zen.host.Throw";
+    static constexpr std::uint32_t zen_version = 1;
+    static auto zen_fields() { return std::make_tuple(ZEN_FIELD(text)); }
+};
+
+/// A woven weave has a state. This one keeps nothing the handler reads.
+struct HostThrowState {
+    std::int64_t seen = 0;
+    ZEN_SHAPE(HostThrowState, 1, ZEN_FIELD(seen));
+};
+
+class HostThrowWeave final
+    : public loom::WeaveBase<HostThrowWeave, HostThrowState, loom::Accept<HostThrow>> {
+public:
+    void on(const HostThrow& in, loom::Mail&) { throw std::runtime_error(in.text); }
+};
 
 // ---- the session ------------------------------------------------------------
 
@@ -489,6 +515,18 @@ public:
 
     // ---- turning the world ---------------------------------------------------
 
+    /// Mount `loom.fault` on first use and deliver `text` to it. Its handler throws, and that
+    /// exception leaves this call through the pump (MSG-10). Nothing here catches it.
+    void fail_native(const std::string& text) {
+        if (!fault_id_.valid()) {
+            auto weave = std::make_unique<HostThrowWeave>();
+            HostThrowWeave* raw = weave.get();
+            fault_id_ = bus_.register_weave(std::move(weave), loom::Grant{}, "loom.fault");
+            raw->zen_set_self(fault_id_);
+        }
+        (void)ask(fault_id_, HostThrow::zen_name, HostThrow::zen_version, {{"text", text}});
+    }
+
     /// One bounded host turn: `pump_pending` services exactly the backlog it found, so work
     /// a handler queues waits for the next turn, a self-re-arming producer cannot get around
     /// it, and this host has no call that can fail to return.
@@ -748,6 +786,7 @@ private:
     loom::host::HistoryReader* reader_ = nullptr; ///< serve mode only; owned by the bus
     loom::WeaveId reader_id_{};
     loom::WeaveId warden_id_{};
+    loom::WeaveId fault_id_{}; ///< `loom.fault`, mounted by `fault`; invalid until then
     /// What the adoption seam installed, in the order it installed it. Written from
     /// inside the door's delivery, read by whichever command caused the load.
     std::vector<std::string> adoption_log_;
@@ -790,6 +829,7 @@ void print_help() {
 
 )" << loom::host::authority_help()
               << R"(
+  fault <text>                  a native participant throws <text>; this host then ends
   quit                          shut this host down
 )";
 }
@@ -1250,6 +1290,14 @@ bool dispatch(const std::string& line, HostSession& session, const loom::host::B
     const std::string& cmd = tok[0].text;
     if (cmd == "quit" || cmd == "exit") {
         return false; // HOST shutdown; see the file header
+    } else if (cmd == "fault") {
+        if (tok.size() != 2 || tok[1].text.empty()) {
+            std::cout << "  usage: fault <text>\n";
+            return true;
+        }
+        // Throws out of the pump. main reports it; this command does not catch it (MSG-10).
+        session.fail_native(tok[1].text);
+        return true;
     } else if (cmd == "help") {
         print_help();
     } else if (cmd == "status") {
@@ -1428,6 +1476,42 @@ void report_late_answers(HostSession& session, bool& prompt_shown) {
             std::cout << line << '\n';
         }
     }
+}
+
+/// What escaped the pump: the exception's text, and the participant when the tap's latest
+/// HandlerFailed names one — its target, and that weave's role when it holds one.
+void report_native_failure(HostSession& session, const char* what) {
+    std::string who;
+    const std::vector<loom::TapEvent> ev = session.console().tap();
+    for (auto it = ev.rbegin(); it != ev.rend(); ++it) {
+        if (it->kind != "HandlerFailed" || !it->target.valid()) {
+            continue;
+        }
+        who = "weave " + std::to_string(it->target.value);
+        const std::string role = session.bus().role_of(it->target);
+        if (!role.empty()) {
+            who += " '" + role + "'";
+        }
+        break;
+    }
+    std::string line = "loom-host: ";
+    line += who.empty() ? "a native participant failed" : "native participant " + who + " failed";
+    if (what != nullptr && what[0] != '\0') {
+        line += ": ";
+        line += what;
+    }
+    // The prompt, if one is showing, has no newline yet. The failure starts on its own line.
+    std::cout << '\n' << std::flush;
+    std::cerr << line << '\n' << std::flush;
+}
+
+int end_on_native_failure(HostSession& session, bool serving, const std::filesystem::path& dir,
+                          const char* what) {
+    report_native_failure(session, what);
+    if (serving) {
+        loom::host::remove_session_files(dir);
+    }
+    return 1;
 }
 
 } // namespace
@@ -1654,128 +1738,137 @@ int main(int argc, char** argv) {
         std::cout << "  nothing from it was started. Fix " << plan_source.path
                   << " and restart, or start things by hand here.\n";
     }
-    // LINKS BEFORE THE BOOT WALK, so a boot row's weave finds its link's role already held
-    // when it is told it is live.
-    for (const std::string& line : session.mount_links(plan.links)) {
-        std::cout << line << '\n';
-    }
-    session.tell_reader_links();
-    session.boot(plan);
-    if (plan_source.parse_error.empty()) {
-        for (const std::string& line : session.report().render()) {
+    // A native exception leaves the pump and reaches this caller (MSG-10). This main reports
+    // it and removes the session files. Loom still propagates. A loaded weave's exception
+    // is caught at its ABI and never arrives here.
+    try {
+        // LINKS BEFORE THE BOOT WALK, so a boot row's weave finds its link's role already held
+        // when it is told it is live.
+        for (const std::string& line : session.mount_links(plan.links)) {
             std::cout << line << '\n';
         }
-    }
-    for (const std::string& line : session.take_adoption_log()) {
-        std::cout << line << '\n';
-    }
-    print_notes(store);
-    std::size_t notes_shown = store.notes().size();
-    if (!session.report().complete() || !plan_source.parse_error.empty()) {
-        // The console is the recovery surface, so say that it is one. A host that
-        // exited here would leave a person with nothing to diagnose from.
-        std::cout << "  the boot did not complete. The console is up: 'status' for the table, "
-                     "'authority pending' for what is waiting on you.\n";
-    }
-    std::cout << "type 'help' for commands, 'quit' to shut this host down.\n";
-
-    // ---- THE HOST LOOP ------------------------------------------------------
-    //
-    // Both parties get served, every pass: one bounded bus turn, then the person. Nothing here
-    // can fail to return because a participant keeps talking: a busy bus only looks, and an idle
-    // host rests in the one wait over its console and door (zen/host/reactor.hpp), which a line,
-    // a client and an answer the door owes each end at once.
-    loom::host::LineInput input;
-    bool prompt_shown = false;
-    bool running = true;
-    // Serve mode separates the console from the host's life. An interactive host ends when
-    // its console closes; a session host keeps serving, and closing its console (if it has
-    // one) closes only that way in. The session ends when a client asks it to
-    // (`loom.session.Shutdown`) or when someone types `quit`.
-    loom::host::SessionDoor* const door = session.door();
-    bool console_open = true;
-    loom::host::Reactor rest(session.bus());
-    rest.watch(&input);
-    if (door != nullptr && door->server() != nullptr) {
-        loom::BridgeServer* const server = door->server();
-        rest.watch_own([server] { return server->wait_set(); });
-    }
-    const auto rest_after_turn = [&session, &rest, door] {
-        if (session.busy()) {
-            return rest.after_turn(0);
-        }
-        if (!session.links().empty()) {
-            return rest.after_turn(door != nullptr ? kServeLinkLookMs : kLinkLookMs);
-        }
-        return rest.after_turn();
-    };
-    while (running) {
-        session.turn();
-        report_late_answers(session, prompt_shown);
-        if (store.notes().size() != notes_shown) {
-            if (prompt_shown) {
-                std::cout << '\n';
-                prompt_shown = false;
+        session.tell_reader_links();
+        session.boot(plan);
+        if (plan_source.parse_error.empty()) {
+            for (const std::string& line : session.report().render()) {
+                std::cout << line << '\n';
             }
+        }
+        for (const std::string& line : session.take_adoption_log()) {
+            std::cout << line << '\n';
+        }
+        print_notes(store);
+        std::size_t notes_shown = store.notes().size();
+        if (!session.report().complete() || !plan_source.parse_error.empty()) {
+            // The console is the recovery surface, so say that it is one. A host that
+            // exited here would leave a person with nothing to diagnose from.
+            std::cout << "  the boot did not complete. The console is up: 'status' for the table, "
+                         "'authority pending' for what is waiting on you.\n";
+        }
+        std::cout << "type 'help' for commands, 'quit' to shut this host down.\n";
+
+        // ---- THE HOST LOOP ------------------------------------------------------
+        //
+        // Both parties get served, every pass: one bounded bus turn, then the person. Nothing here
+        // can fail to return because a participant keeps talking: a busy bus only looks, and an idle
+        // host rests in the one wait over its console and door (zen/host/reactor.hpp), which a line,
+        // a client and an answer the door owes each end at once.
+        loom::host::LineInput input;
+        bool prompt_shown = false;
+        bool running = true;
+        // Serve mode separates the console from the host's life. An interactive host ends when
+        // its console closes; a session host keeps serving, and closing its console (if it has
+        // one) closes only that way in. The session ends when a client asks it to
+        // (`loom.session.Shutdown`) or when someone types `quit`.
+        loom::host::SessionDoor* const door = session.door();
+        bool console_open = true;
+        loom::host::Reactor rest(session.bus());
+        rest.watch(&input);
+        if (door != nullptr && door->server() != nullptr) {
+            loom::BridgeServer* const server = door->server();
+            rest.watch_own([server] { return server->wait_set(); });
+        }
+        const auto rest_after_turn = [&session, &rest, door] {
+            if (session.busy()) {
+                return rest.after_turn(0);
+            }
+            if (!session.links().empty()) {
+                return rest.after_turn(door != nullptr ? kServeLinkLookMs : kLinkLookMs);
+            }
+            return rest.after_turn();
+        };
+        while (running) {
+            session.turn();
+            report_late_answers(session, prompt_shown);
+            if (store.notes().size() != notes_shown) {
+                if (prompt_shown) {
+                    std::cout << '\n';
+                    prompt_shown = false;
+                }
+                print_new_notes(store, &notes_shown);
+            }
+            if (door != nullptr && door->ending()) {
+                break; // a client ended this lifetime; its answer is flushed below
+            }
+            if (console_open && !prompt_shown) {
+                std::cout << "loom> " << std::flush;
+                prompt_shown = true;
+            }
+            const loom::host::Reactor::Woke woke = rest_after_turn();
+            if (!console_open || !woke.line) {
+                continue;
+            }
+            std::string line;
+            const loom::host::LineInput::Status got = input.read(&line, 0);
+            if (got == loom::host::LineInput::Status::Closed) {
+                if (door == nullptr) {
+                    break;
+                }
+                console_open = false;
+                rest.watch(nullptr);
+                if (prompt_shown) {
+                    std::cout << '\n';
+                    prompt_shown = false;
+                }
+                std::cout << "  console closed; this session keeps serving " << door->endpoint()
+                          << " until a client ends it.\n"
+                          << std::flush;
+                continue;
+            }
+            if (got == loom::host::LineInput::Status::Idle) {
+                continue;
+            }
+            prompt_shown = false;
+            if (got == loom::host::LineInput::Status::TooLong) {
+                print_too_long(input.too_long());
+                continue;
+            }
+            running = dispatch(line, session, plan, plan_source, store, lock);
+            // What the policy decided during the command, said with the command's own output.
             print_new_notes(store, &notes_shown);
         }
-        if (door != nullptr && door->ending()) {
-            break; // a client ended this lifetime; its answer is flushed below
-        }
-        if (console_open && !prompt_shown) {
-            std::cout << "loom> " << std::flush;
-            prompt_shown = true;
-        }
-        const loom::host::Reactor::Woke woke = rest_after_turn();
-        if (!console_open || !woke.line) {
-            continue;
-        }
-        std::string line;
-        const loom::host::LineInput::Status got = input.read(&line, 0);
-        if (got == loom::host::LineInput::Status::Closed) {
-            if (door == nullptr) {
-                break;
+        if (door != nullptr) {
+            // THE LAST ANSWER LEAVES BEFORE THE PROCESS DOES. The Shutdown's Ack was queued in the
+            // turn that saw it; a few more bounded turns deliver it to the client's session and
+            // flush its socket. Bounded: a client that stopped reading does not hold the host open.
+            for (int i = 0; i < 8; ++i) {
+                session.turn();
+                (void)rest.after_turn(kServeLinkLookMs);
             }
-            console_open = false;
-            rest.watch(nullptr);
-            if (prompt_shown) {
-                std::cout << '\n';
-                prompt_shown = false;
+            const std::string reason = door->ending() ? door->ending_reason()
+                                                      : std::string("ended at its console");
+            if (session.journal().open()) {
+                session.journal().info("loom-host",
+                                       "session ended: lifetime " + lifetime + ": " + reason);
             }
-            std::cout << "  console closed; this session keeps serving " << door->endpoint()
-                      << " until a client ends it.\n"
+            std::cout << "  session ended (lifetime " << lifetime << "): " << reason << '\n'
                       << std::flush;
-            continue;
+            loom::host::remove_session_files(session_dir);
         }
-        if (got == loom::host::LineInput::Status::Idle) {
-            continue;
-        }
-        prompt_shown = false;
-        if (got == loom::host::LineInput::Status::TooLong) {
-            print_too_long(input.too_long());
-            continue;
-        }
-        running = dispatch(line, session, plan, plan_source, store, lock);
-        // What the policy decided during the command, said with the command's own output.
-        print_new_notes(store, &notes_shown);
-    }
-    if (door != nullptr) {
-        // THE LAST ANSWER LEAVES BEFORE THE PROCESS DOES. The Shutdown's Ack was queued in the
-        // turn that saw it; a few more bounded turns deliver it to the client's session and
-        // flush its socket. Bounded: a client that stopped reading does not hold the host open.
-        for (int i = 0; i < 8; ++i) {
-            session.turn();
-            (void)rest.after_turn(kServeLinkLookMs);
-        }
-        const std::string reason = door->ending() ? door->ending_reason()
-                                                  : std::string("ended at its console");
-        if (session.journal().open()) {
-            session.journal().info("loom-host",
-                                   "session ended: lifetime " + lifetime + ": " + reason);
-        }
-        std::cout << "  session ended (lifetime " << lifetime << "): " << reason << '\n'
-                  << std::flush;
-        loom::host::remove_session_files(session_dir);
+    } catch (const std::exception& ex) {
+        return end_on_native_failure(session, serving, session_dir, ex.what());
+    } catch (...) {
+        return end_on_native_failure(session, serving, session_dir, nullptr);
     }
     return 0;
 }
