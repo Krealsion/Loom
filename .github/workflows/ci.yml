@@ -289,6 +289,79 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$verify_rc"
 
+  # Clang on Linux, the same official lane as the GCC jobs. libstdc++ is the newest
+  # GCC install that has C++ headers: a newer libgcc without those headers is not a
+  # C++ toolchain, and Clang would otherwise select it.
+  loom-linux-clang:
+    name: Loom / Linux / Clang
+    needs: loom-change-kind
+    if: ${{ !cancelled() && needs.loom-change-kind.outputs.compiled != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out Loom
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Clang
+        run: sudo apt-get update && sudo apt-get install -y clang
+
+      - name: Record toolchain
+        run: |
+          clang++ --version
+          cmake --version
+          nm --version
+
+      # Hosted-image workaround, not a Loom requirement: ubuntu-24.04 as shipped
+      # restricts the unprivileged user namespaces the isolation suites create, and
+      # the official lane fails there without this ephemeral change. Remove it only
+      # with a run that passes without it.
+      - name: Permit Loom's unprivileged sandbox namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Configure
+        run: |
+          set -eu
+          gcc_install=""
+          for d in /usr/lib/gcc/*/*; do
+            ver="$(basename "$d")"
+            if [ -f "/usr/include/c++/${ver}/cstddef" ]; then
+              gcc_install="$d"
+            fi
+          done
+          if [ -z "$gcc_install" ]; then
+            echo "No GCC install with libstdc++ headers for Clang" >&2
+            exit 1
+          fi
+          echo "Clang using GCC install ${gcc_install}"
+          cmake -S . -B build-clang -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_CXX_FLAGS="--gcc-install-dir=${gcc_install}" \
+            -DCMAKE_EXE_LINKER_FLAGS="--gcc-install-dir=${gcc_install}" \
+            -DCMAKE_SHARED_LINKER_FLAGS="--gcc-install-dir=${gcc_install}" \
+            -DCMAKE_MODULE_LINKER_FLAGS="--gcc-install-dir=${gcc_install}"
+
+      - name: Build
+        run: cmake --build build-clang --parallel "$(nproc)"
+
+      - name: Verify the repository-owned population
+        run: |
+          set +e
+          cmake -DZEN_BUILD_DIR=build-clang -P tests/verify.cmake 2>&1 | tee verify.log
+          verify_rc="${PIPESTATUS[0]}"
+          verify_outcome=failed
+          if (( verify_rc == 0 )); then verify_outcome=passed; fi
+          {
+            printf '## Loom / Linux / Clang\n\n'
+            printf '**Verification:** %s (exit %s)\n\n' "$verify_outcome" "$verify_rc"
+            printf 'Selected lines from the repository verifier and CTest output:\n\n'
+            printf '```text\n'
+            grep -E 'verify:|[0-9]+% tests passed|test cases:|assertions:|OS-enforcement cases executed|DECLARED ABSENT|Total Test time' verify.log || true
+            printf '```\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$verify_rc"
+
   loom-linux-asan-ubsan:
     name: Loom / Linux / ASan + UBSan
     needs: [loom-change-kind, loom-wasm-modules]

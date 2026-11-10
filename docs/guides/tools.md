@@ -12,7 +12,7 @@ that says so, because it is the first place it matters.
 
 | | What | Why | Tested here |
 |---|---|---|---|
-| **C++ compiler** | GCC ≥ 11.4, Clang ≥ 14, or MSVC 19.3x | C++20. Loom's public shape macros use `__VA_OPT__` | GCC 11.4 (WSL Ubuntu 22.04); MinGW-w64 GCC 15.2 and MSVC 19.5x on Windows |
+| **C++ compiler** | GCC ≥ 11.4, Clang ≥ 14, or MSVC 19.3x | C++20. Loom's public shape macros use `__VA_OPT__` | GCC 11.4 (WSL Ubuntu 22.04); Clang 18.1 (Linux); MinGW-w64 GCC 15.2 and MSVC 19.5x on Windows |
 | **CMake** | ≥ 3.16 | Loom's build and its installed package are CMake; `find_package(loom)` and `loom_weave_build_contract()` are how a weave of yours gets built correctly | 3.22 (Linux), 3.31 (Windows) |
 | **A build tool** | GNU Make, Ninja, or Visual Studio | CMake generates for one of these; any of them is fine | GNU Make (Linux), Ninja (Windows) |
 
@@ -36,8 +36,9 @@ That is the whole list.
   including under WSL.
 - **Windows**: two routes, both tested — see [the Windows route](#the-windows-route)
   below, which gives the actual commands for each.
-- **macOS**: not tested. The portable subset has no reason not to build under Apple
-  Clang, and nobody has run it, so this page does not claim it.
+- **macOS**: not run. Apple Clang has not built Loom, so this page does not claim
+  it. Clang on Linux is a tested compiler; the version is in
+  [what these routes have been checked on](#what-these-routes-have-been-checked-on).
 
 ## The Linux route, end to end
 
@@ -169,9 +170,12 @@ change is in `.github/workflows/ci.yml`; these are the routes on this page, run 
 | WSL Ubuntu 22.04, GCC 11.4.0 | Debug, tests on | the official lane (`tests/verify.cmake`) |
 | Windows, MinGW-w64 GCC 15.2.0 (MSYS2) | Debug, `LOOM_ENABLE_WINDOWS_KERNEL=ON` | install, installed-package witness, external consumer, the weaver journey, the official lane |
 | Windows, MSVC 19.50 (VS 2026) | Debug, `LOOM_ENABLE_WINDOWS_KERNEL=ON` | install, installed-package witness, the official lane |
+| Linux, Clang 18.1.3 | Debug, tests on | the official lane (`tests/verify.cmake`) |
 
-macOS and Clang: not run. A default Windows build (kernel **off**) builds and consoles,
-and cannot host weaves; that configuration is exercised by CI rather than by this page.
+Clang 18.1.3 on Linux (libstdc++) builds Loom, and CI runs the official lane with
+Clang. macOS has not been run, so Apple Clang is not claimed. A default Windows
+build (kernel **off**) builds and consoles, and cannot host weaves; that
+configuration is exercised by CI rather than by this page.
 
 ## Optional, and what each one buys you
 
@@ -179,7 +183,7 @@ and cannot host weaves; that configuration is exercised by CI rather than by thi
 |---|---|---|
 | **Git** | To get the source, and to get updates | Download a source archive instead |
 | **Ninja** | Noticeably faster rebuilds than Make | Make is fine |
-| **`nm`** (binutils) | The installed-package witness and the weave build-contract check ask your artifact what it exports | Those two checks refuse to run rather than passing silently — absence of a tool is a failure, never a skip |
+| **`nm`** (binutils) | The installed-package witness and the weave build-contract check ask your artifact what it exports. Under Clang the contract also reads a probe object with it at configure | Those checks refuse to run, and a Clang configure refuses the contract, rather than passing silently — absence of a tool is a failure, never a skip |
 | **A debugger** (`gdb`, `lldb`, Visual Studio) | For a weave that crashes the host — an in-process weave shares the host's address space, so it is an ordinary native debugging problem | Read [diagnostics](diagnostics.md) instead |
 | **An editor with `compile_commands.json` support** | Configure with `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON` and most editors will resolve Loom's headers | Your editor will not know where `<zen/…>` lives |
 | **Python 3.8 or newer** (standard library only) | The [session](sessions.md) tooling: the `loom-session` CLI, Python clients, and the editable tools a session's run manager starts. The test lane's `session_journey` entry runs with it | Everything else works: `loom-host`, including `--serve`, needs no Python; the CLI says it found none, the run manager refuses a run in words, and the lane lists `session_journey` as DECLARED ABSENT. `LOOM_SESSION_PYTHON` names an interpreter at configure; `-DLOOM_BUILD_SESSION_TOOLS=OFF` leaves the tooling out |
