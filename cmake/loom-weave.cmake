@@ -47,6 +47,65 @@ endif()
 set_property(GLOBAL PROPERTY LOOM_WEAVE_TLS_RETURN_SOURCE
              "${CMAKE_CURRENT_LIST_DIR}/loom-weave-tls-return.cpp")
 
+# TRUE when this compiler emits STB_GNU_UNIQUE for a function-template local static.
+# nm reads the object. A probe that cannot be built or read refuses the configure:
+# recording the binding as absent without looking is not a result.
+function(_loom_clang_emits_gnu_unique out_var)
+    find_program(LOOM_WEAVE_NM NAMES nm llvm-nm)
+    if(NOT LOOM_WEAVE_NM)
+        message(FATAL_ERROR
+            "loom_weave_build_contract: Clang on ${CMAKE_SYSTEM_NAME} rejects -fno-gnu-unique, "
+            "and no nm was found to read whether it emits STB_GNU_UNIQUE. Refusing to call "
+            "the binding absent. Install binutils, or run on a host that has nm.")
+    endif()
+    set(_loom_probe_dir "${CMAKE_BINARY_DIR}/CMakeFiles/loom_clang_unique_probe")
+    file(MAKE_DIRECTORY "${_loom_probe_dir}")
+    file(WRITE "${_loom_probe_dir}/probe.cpp"
+"template <typename T>
+int& loom_unique_probe() {
+    static int n = 0;
+    return n;
+}
+struct LoomUniqueProbeTag {};
+extern \"C\" int loom_unique_probe_touch() {
+    return ++loom_unique_probe<LoomUniqueProbeTag>();
+}
+")
+    separate_arguments(_loom_cxx_flags NATIVE_COMMAND "${CMAKE_CXX_FLAGS}")
+    separate_arguments(_loom_link_flags NATIVE_COMMAND "${CMAKE_EXE_LINKER_FLAGS}")
+    execute_process(
+        COMMAND "${CMAKE_CXX_COMPILER}" ${_loom_cxx_flags} ${_loom_link_flags}
+                -shared -fPIC -o "${_loom_probe_dir}/probe.so" "${_loom_probe_dir}/probe.cpp"
+        RESULT_VARIABLE _loom_probe_rc
+        ERROR_VARIABLE _loom_probe_err
+        OUTPUT_VARIABLE _loom_probe_out)
+    if(NOT _loom_probe_rc EQUAL 0)
+        message(FATAL_ERROR
+            "loom_weave_build_contract: could not build a probe shared library with "
+            "${CMAKE_CXX_COMPILER} to read STB_GNU_UNIQUE (exit ${_loom_probe_rc}).\n"
+            "${_loom_probe_out}${_loom_probe_err}")
+    endif()
+    execute_process(
+        COMMAND "${LOOM_WEAVE_NM}" --defined-only "${_loom_probe_dir}/probe.so"
+        RESULT_VARIABLE _loom_nm_rc
+        OUTPUT_VARIABLE _loom_nm_out
+        ERROR_VARIABLE _loom_nm_err)
+    if(NOT _loom_nm_rc EQUAL 0)
+        message(FATAL_ERROR
+            "loom_weave_build_contract: ${LOOM_WEAVE_NM} failed on the Clang unique-binding "
+            "probe (exit ${_loom_nm_rc}).\n${_loom_nm_err}")
+    endif()
+    string(REPLACE "\r" "" _loom_nm_out "${_loom_nm_out}")
+    string(REPLACE "\n" ";" _loom_nm_lines "${_loom_nm_out}")
+    set(_loom_emits FALSE)
+    foreach(_loom_line IN LISTS _loom_nm_lines)
+        if(_loom_line MATCHES "^[0-9a-fA-F]+[ \t]+u[ \t]")
+            set(_loom_emits TRUE)
+        endif()
+    endforeach()
+    set(${out_var} "${_loom_emits}" PARENT_SCOPE)
+endfunction()
+
 # Apply Loom's weave build contract to an existing shared-library target:
 #   add_library(my-weave SHARED my_weave.cpp)
 #   target_link_libraries(my-weave PRIVATE loom::core loom::switchboard)
@@ -75,9 +134,9 @@ function(loom_weave_build_contract target)
 
     # ELF with GNU unique binding is where statics escape an unload: GCC on Linux emits
     # vague-linkage statics (inline function statics, template statics, inline variables) as
-    # STB_GNU_UNIQUE, and the option takes them to zero. PE-COFF and Mach-O have no unique
-    # binding, and MinGW GCC accepting the option's spelling does not make it needed. On PE-COFF
-    # the image instead carries its own C++ runtime. Anything else is unclassified, and says so.
+    # STB_GNU_UNIQUE, and -fno-gnu-unique takes them to zero. Clang on ELF emits none and
+    # rejects that option; a probe reads the binding rather than assuming it. PE-COFF and
+    # Mach-O have no unique binding. Anything else is unclassified, and says so.
     if(WIN32)
         set(_loom_pe "PE-COFF has no unique symbol binding")
         if(MSVC OR CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
@@ -198,6 +257,19 @@ function(loom_weave_build_contract target)
         endif()
         target_compile_options(${target} PRIVATE -fno-gnu-unique)
         set(_loom_wv "applied: -fno-gnu-unique")
+    elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        if(NOT DEFINED LOOM_CLANG_EMITS_GNU_UNIQUE)
+            _loom_clang_emits_gnu_unique(_loom_emits)
+            set(LOOM_CLANG_EMITS_GNU_UNIQUE "${_loom_emits}" CACHE INTERNAL
+                "Whether this Clang emits STB_GNU_UNIQUE for a function-template local static")
+        endif()
+        if(LOOM_CLANG_EMITS_GNU_UNIQUE)
+            message(FATAL_ERROR
+                "loom_weave_build_contract: Clang on ${CMAKE_SYSTEM_NAME} emits STB_GNU_UNIQUE "
+                "and rejects -fno-gnu-unique, so the contract cannot be expressed for "
+                "'${target}'. Refusing to build it as a reloadable weave.")
+        endif()
+        set(_loom_wv "not applicable: Clang emits no STB_GNU_UNIQUE")
     else()
         message(WARNING
             "loom_weave_build_contract: ${CMAKE_CXX_COMPILER_ID} on ${CMAKE_SYSTEM_NAME} "

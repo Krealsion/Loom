@@ -5738,7 +5738,7 @@ TEST_CASE("nothing delivered because of an activation can later be made to look 
     ProbeWeave* cand_raw = cand_weave.get();
     const WeaveId candidate = bus.register_weave(std::move(cand_weave), Grant{}.allow_any());
     REQUIRE(bus.seal_weave(candidate, coordinator.id));
-    cand_raw->on_handle = [&tried, coordinator](const Message& in, Bus& b, ProbeWeave&) {
+    cand_raw->on_handle = [&tried](const Message& in, Bus& b, ProbeWeave&) {
         if (in.payload.schema().name() != std::string_view(loom::Activated::zen_name)) {
             return;
         }
@@ -7628,10 +7628,10 @@ TEST_CASE("the transaction's own discard cannot destroy the weave whose callback
 }
 
 // ---- The reloadable-weave build contract, at runtime (KERN-05) --------------------
-// The `weave_contract` entry reads the built artifacts' symbol bindings; these two cases read
-// what the bindings DO: an image that will not die. Linux-only because the observation is:
-// RTLD_NOLOAD asks this process's loader whether an image is still mapped. PE has no
-// unique-symbol binding, so on Windows there is no claim to test.
+// weave_contract reads symbol bindings; these cases read what a load does. An uncontracted
+// image stays mapped after dlclose where the compiler unique-binds a static, and leaves
+// where it emits no such binding. RTLD_NOLOAD is the observation. PE has no unique-symbol
+// binding, so on Windows there is no claim to test.
 #if !defined(_WIN32)
 
 TEST_CASE("a contracted weave library really leaves when it is closed") {
@@ -7661,11 +7661,12 @@ TEST_CASE("a contracted weave library really leaves when it is closed") {
     }
 }
 
-TEST_CASE("without the contract the same source will not unload -- and dlclose says it did") {
-    // The negative control: same source, same compiler, same flags but one, and the image stays
-    // mapped after dlclose, so the case above cannot quietly become unfalsifiable. dlclose
-    // returns SUCCESS on the way: nothing in the API tells a host the image is still there,
-    // which is why the contract is applied at build time.
+TEST_CASE("an uncontracted image stays mapped after dlclose exactly when the compiler unique-binds it") {
+    // Same source as the contracted case, without the contract. GCC on ELF emits the
+    // sentinel's function-template static as STB_GNU_UNIQUE, so the image stays mapped,
+    // dlclose still returns success, and a later call continues the count. Clang emits
+    // no such binding, so the image leaves and a new load starts at 1. Collapsing either
+    // branch into the other would let that toolchain change pass.
     const char* path = ZEN_SO_CONTRACT_BYPASS;
 
     void* h = ::dlopen(path, RTLD_NOW | RTLD_LOCAL);
@@ -7674,21 +7675,36 @@ TEST_CASE("without the contract the same source will not unload -- and dlclose s
     REQUIRE(touch != nullptr);
     CHECK(touch() == 1);
 
-    CHECK(::dlclose(h) == 0); // "success"
+    CHECK(::dlclose(h) == 0); // success either way: the API does not say the image stayed
 
     void* still = ::dlopen(path, RTLD_NOLOAD | RTLD_NOW);
+#if defined(__clang__)
+    CHECK_MESSAGE(still == nullptr,
+                  "Clang left the uncontracted image mapped, so it unique-binds a static "
+                  "this case treats as unbound");
+    if (still != nullptr) {
+        ::dlclose(still);
+        return;
+    }
+    void* fresh = ::dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    REQUIRE(fresh != nullptr);
+    auto again = reinterpret_cast<int (*)()>(::dlsym(fresh, "zen_contract_touch"));
+    REQUIRE(again != nullptr);
+    CHECK(again() == 1);
+    CHECK(::dlclose(fresh) == 0);
+#else
     CHECK_MESSAGE(still != nullptr,
                   "the uncontracted control unloaded cleanly, so it no longer reproduces "
                   "the hazard the contracted case is contrasted against");
     if (still == nullptr) { return; }
 
-    // ...and the image that would not leave keeps its statics: a "fresh" load continues the
-    // previous one's count instead of starting over, and when the second library is a
-    // different one, that aliasing is a use-after-free.
+    // The image that would not leave keeps its statics: a later call continues the count,
+    // and when the second library is a different one that aliasing is a use-after-free.
     auto again = reinterpret_cast<int (*)()>(::dlsym(still, "zen_contract_touch"));
     REQUIRE(again != nullptr);
     CHECK(again() == 2);
     ::dlclose(still);
+#endif
 }
 
 #endif // !_WIN32

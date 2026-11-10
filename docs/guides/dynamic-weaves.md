@@ -81,6 +81,8 @@ emitted `STB_GNU_UNIQUE`, a binding glibc resolves through a process-wide table
 that ignores `RTLD_LOCAL` and outlives `dlclose`. Skip it and the second library
 sharing your vocabulary header silently reads the first one's destroyed statics;
 `dlclose` returns success and `kernel.unload()` returns true while it happens.
+Clang on ELF emits no such binding: the function applies no flag, and refuses
+the weave if a probe object shows one.
 On PE-COFF there is no unique binding; there the function links your weave's C++
 runtime into it instead (`-static` under MinGW-w64, the static runtime on the
 MSVC ABI), so it loads on a machine that holds only Windows and runs with its own

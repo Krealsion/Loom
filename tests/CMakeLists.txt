@@ -797,6 +797,7 @@ add_test(NAME hook_return_types COMMAND ${CMAKE_COMMAND}
     -B ${CMAKE_BINARY_DIR}/hook_return-witness
     -G ${CMAKE_GENERATOR}
     -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+    "-DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}"
     -DZEN_LOOM_INCLUDE=${CMAKE_SOURCE_DIR}/include
     "-DZEN_HOOK_ENV_INCLUDE=${zen_hook_env_include}"
     "-DZEN_HOOK_ENV_LIB=${zen_hook_env_lib}")
@@ -810,6 +811,7 @@ add_test(NAME optional_member_types COMMAND ${CMAKE_COMMAND}
     -B ${CMAKE_BINARY_DIR}/optional_members-witness
     -G ${CMAKE_GENERATOR}
     -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+    "-DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}"
     -DZEN_LOOM_INCLUDE=${CMAKE_SOURCE_DIR}/include
     "-DZEN_MEMBERS_ENV_INCLUDE=${zen_hook_env_include}"
     "-DZEN_MEMBERS_ENV_LIB=${zen_hook_env_lib}")
@@ -982,6 +984,7 @@ if(zen_weave_targets OR TARGET zen_test_contract_applied OR TARGET zen_test_cont
         "-DZEN_HOST_OPTIONS=$<JOIN:$<TARGET_PROPERTY:zen-tests,COMPILE_OPTIONS>,+>"
         -DZEN_BYPASS_LIB=$<TARGET_FILE:zen_test_contract_bypass>
         -DZEN_PLATFORM=${CMAKE_SYSTEM_NAME}
+        -DZEN_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}
         -DZEN_NM=${ZEN_NM}
         "-DZEN_PE_READER=${zen_pe_reader}"
         -P ${CMAKE_CURRENT_SOURCE_DIR}/check_weave_contract.cmake)

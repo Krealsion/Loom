@@ -2,10 +2,10 @@
 // Copyright (c) 2026 Joshua DeMoss
 
 // The weave build contract's sentinel (KERN-05). Two artifacts are built from this source, one
-// through loom_weave_build_contract() and one DELIBERATELY without it: the bypass twin must STILL
-// come out STB_GNU_UNIQUE on ELF and still import its C++ runtime on PE, or the sentinel can no
-// longer express the failure, and the contracted half would pass for the boring reason that it
-// had nothing to fail with.
+// through loom_weave_build_contract() and one DELIBERATELY without it: under GCC the bypass twin
+// must still come out STB_GNU_UNIQUE on ELF, and on PE it must still import its C++ runtime, or
+// the sentinel can no longer express the failure. Clang on ELF emits no such binding, so the
+// twin carrying none is the record, and the contracted half is not passing for lack of a hazard.
 
 // Free of every loom header, so the bypass artifact, loaded on purpose in that state, aliases
 // nothing else in the process. The symbol copies the real hazard's shape: loom::schema_of<T>()

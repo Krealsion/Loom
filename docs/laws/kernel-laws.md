@@ -104,9 +104,12 @@ MEANS
   compiled for one runtime;
 - it reaches exactly the target handed to it: a host executable, or any other
   consumer that merely links Loom, is untouched;
-- the platform predicate is semantic. ELF/GNU needs the unique-binding option;
-  PE-COFF and Mach-O have no such binding and never receive it, notwithstanding
-  that MinGW GCC accepts its spelling. On PE-COFF the image carries its C++
+- the platform predicate is semantic. ELF/GNU needs the unique-binding option.
+  Clang on ELF emits no `STB_GNU_UNIQUE` and rejects that option: the function
+  reads a probe object and applies nothing when the probe has no unique symbol,
+  and refuses the target when it has one. PE-COFF and Mach-O have no such binding
+  and never receive the option, notwithstanding that MinGW GCC accepts its spelling.
+  On PE-COFF the image carries its C++
   runtime instead: under MinGW-w64 (GCC, or Clang targeting it) a `SHARED` or
   `MODULE` weave links it in (`-static`), and on the MSVC ABI every object of
   the image is compiled for the static runtime (`MSVC_RUNTIME_LIBRARY`);
