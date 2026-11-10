@@ -14,11 +14,11 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Cheap, first, and independent of any build: the repository refuses a commit co-author
-  # line and an AI credit, and that holds for all of main. The check self-tests
-  # before it answers, because a clean history and a broken detector look identical from
-  # here. Full history is required -- it states the invariant over everything reachable,
-  # not just this push.
+  # Cheap, first, and independent of any build: the repository refuses an AI agent as
+  # author or committer, a co-author line and an AI credit, over all of main. On a pull
+  # request it also reads the title and the description. The check self-tests before it
+  # answers, because a clean history and a broken detector look identical from here, and
+  # needs full history to state the invariant over everything reachable, not just this push.
   loom-commit-attribution:
     name: Loom / commit attribution
     runs-on: ubuntu-24.04
@@ -30,7 +30,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Refuse co-author lines and AI credit in reachable history
+      # The title and the description reach the check as environment values. The run script
+      # does not interpolate them.
+      - name: Refuse agent authors, co-author lines and AI credit
+        env:
+          ZEN_PR_TITLE: "${{ github.event_name == 'pull_request' && github.event.pull_request.title || '' }}"
+          ZEN_PR_BODY: "${{ github.event_name == 'pull_request' && github.event.pull_request.body || '' }}"
         run: cmake -P tests/check_commit_attribution.cmake
 
   # Does the change touch a compiled line? tests/check_change_kind.cmake answers from the base (a

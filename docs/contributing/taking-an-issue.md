@@ -215,11 +215,11 @@ gh pr create --base main --title "<what the change does>" --body-file <file outs
   closes the issue when the pull request merges.
 - **Each commit is one coherent step**, its subject a sentence saying what it does or makes true,
   as the title does. The merge keeps every commit on `main`.
-- **Each commit is authored by the person who makes it**, never by the AI agent they use, and no
-  commit or body carries a co-author line or an AI credit
-  ([attribution](../../CONTRIBUTING.md#attribution)). The body becomes the merge commit's
-  message, which [the attribution guard](../../tests/check_commit_attribution.cmake) reads on
-  `main`.
+- **Each commit is authored by the person who makes it**, never by the AI agent they use as
+  its author or its committer, and no commit or body carries a co-author line or an AI
+  credit ([attribution](../../CONTRIBUTING.md#attribution)). The guard reads the pull
+  request's title and description before the merge, and the merge commit's message on
+  `main` ([the attribution guard](../../tests/check_commit_attribution.cmake)).
 - **The issue gets its `Fix pushed, awaiting CI` comment**, with the pull request (step 1).
 - **You do not merge.** Leave the pull request open once it is ready.
 
@@ -250,6 +250,9 @@ A check's link ends in its job's id.
 - **The merge waits only for the checks `gh pr checks <n> --required` lists.**
 - **A new push cancels the run in progress.** Push once, and read that run to its end before the
   next push.
+- **The attribution check's refusal on a pull request is cleared by a new run.** Edit the
+  title or the description and remove the credit, then push a commit or close and reopen
+  the pull request. A re-run reads the text its run began with.
 - **A red is diagnosed before the next push**: name the job, the step and the case, reproduce it
   where the platform allows, and fix it on the branch.
 
