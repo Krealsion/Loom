@@ -23,16 +23,41 @@ namespace loom::detail {
 struct JsonValue {
     enum class Type : std::uint8_t { Null, Bool, Number, String, Array, Object };
 
+    // Completed below. std::pair needs a complete value type, so it cannot be this
+    // node while the node is being defined, and Clang rejects that pair. Copying
+    // and destroying the vector are defined once the element type exists.
+    struct Member;
+
     Type type = Type::Null;
     bool boolean = false;
     std::string text; ///< decoded characters (String) or raw token (Number)
     std::vector<JsonValue> items;
-    std::vector<std::pair<std::string, JsonValue>> members;
+    std::vector<Member> members; ///< object members, key then value, in source order
 
     bool is(Type t) const noexcept { return type == t; }
     /// Object member by key, or nullptr. Keys are unique (parser rejects dups).
     const JsonValue* find(std::string_view key) const noexcept;
+
+    JsonValue() noexcept;
+    ~JsonValue();
+    JsonValue(const JsonValue&);
+    JsonValue(JsonValue&&) noexcept;
+    JsonValue& operator=(const JsonValue&);
+    JsonValue& operator=(JsonValue&&) noexcept;
 };
+
+/// One object member: `first` is the key and `second` the value, in that order.
+struct JsonValue::Member {
+    std::string first;
+    JsonValue second;
+};
+
+inline JsonValue::JsonValue() noexcept = default;
+inline JsonValue::~JsonValue() = default;
+inline JsonValue::JsonValue(const JsonValue&) = default;
+inline JsonValue::JsonValue(JsonValue&&) noexcept = default;
+inline JsonValue& JsonValue::operator=(const JsonValue&) = default;
+inline JsonValue& JsonValue::operator=(JsonValue&&) noexcept = default;
 
 struct JsonParse {
     bool ok = false;
