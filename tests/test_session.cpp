@@ -724,7 +724,7 @@ void own_as_this_user(const fs::path& file) {
     const FileAccess got = access_of(file, sid);
     // A Windows client already owns the file it created, so a refused assignment there still
     // leaves this user as owner. The directory's DACL stays the fault.
-    REQUIRE_MESSAGE(got.owner_is_user, "owner assignment returned " + std::to_string(rc));
+    REQUIRE_MESSAGE(got.owner_is_user, ("owner assignment returned " + std::to_string(rc)));
     REQUIRE_FALSE(got.protected_dacl);
 }
 
