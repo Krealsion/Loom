@@ -59,7 +59,7 @@ dispatch_refusal   portable  15
 dispatch_loaded    kernel    9
 admission          kernel    21
 joint              kernel    24
-session            portable  10
+session            portable  12
 observe            portable  15
 runs               runs      12
 windows_loader     windows   8

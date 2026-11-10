@@ -1602,16 +1602,22 @@ int main(int argc, char** argv) {
         file.started_ms = facts.started_ms;
         file.directory = facts.directory;
         std::string why;
+        // The KEY FIRST, before the door opens: a key that does not read back as this user's
+        // alone is refused, and nothing has listened. Then the file that says where to use it,
+        // so a client that finds session.json always finds the key beside it.
+        if (!loom::host::write_session_text(session_dir / loom::host::kSessionKeyFile,
+                                            client_key + "\n", /*owner_only=*/true, &why)) {
+            std::cerr << "loom-host: " << why << '\n';
+            loom::host::remove_session_files(session_dir);
+            return 5;
+        }
         if (!session.serve(facts, client_key, opt.listen, &why)) {
             std::cerr << "loom-host: " << why << '\n';
+            loom::host::remove_session_files(session_dir);
             return 5;
         }
         file.endpoint = session.door()->endpoint();
-        // The KEY FIRST, then the file that says where to use it: a client that finds
-        // session.json always finds the key beside it.
-        if (!loom::host::write_session_text(session_dir / loom::host::kSessionKeyFile,
-                                            client_key + "\n", /*owner_only=*/true, &why) ||
-            !loom::host::write_session_text(session_dir / loom::host::kSessionFile,
+        if (!loom::host::write_session_text(session_dir / loom::host::kSessionFile,
                                             loom::host::session_json(file), false, &why)) {
             std::cerr << "loom-host: " << why << '\n';
             loom::host::remove_session_files(session_dir);

@@ -5,12 +5,14 @@
 // whom, under what grant -- src/host/session_door.hpp) and the scoped history reader (what a
 // client that is not the console may learn from the host's Recorder -- src/host/history_reader.hpp).
 // Real sockets and real bridge clients; a real Recorder. The process-level journey that uses them
-// together with a real run manager and real Python workers is tests/session/journey.py.
+// together with a real run manager and real Python workers is tests/session/journey.py. The files a
+// serving host leaves for its clients (src/host/session_files.hpp) are read back from disk here.
 
 #include <doctest.h>
 
 #include "history_reader.hpp"
 #include "session_door.hpp"
+#include "session_files.hpp"
 
 #include <zen/bridge/client.hpp>
 #include <zen/bridge/link.hpp>
@@ -22,11 +24,26 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <thread>
 #include <vector>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <aclapi.h>
+#else
+#include <sys/stat.h>
+#endif
 
 using namespace loom;
 
@@ -577,6 +594,200 @@ TEST_CASE("reader: forgotten, unobserved and retained keep their own words; read
         reader_recorded = reader_recorded || rec.sender == h.reader_id || rec.target == h.reader_id;
     }
     CHECK_FALSE(reader_recorded);
+}
+
+} // TEST_SUITE("session")
+
+// The session key is the owner's client key. The directory is made to grant more than its owner
+// first, so a key that took the directory's grant would show it; session.json, which is no
+// secret, is the canary that the directory's grant reaches a plain file written there.
+#ifdef _WIN32
+namespace {
+
+std::vector<unsigned char> test_user_sid() {
+    HANDLE token = nullptr;
+    REQUIRE(::OpenProcessToken(::GetCurrentProcess(), TOKEN_QUERY, &token));
+    DWORD size = 0;
+    (void)::GetTokenInformation(token, TokenUser, nullptr, 0, &size);
+    std::vector<unsigned char> info(size);
+    REQUIRE(::GetTokenInformation(token, TokenUser, info.data(), size, &size));
+    ::CloseHandle(token);
+    const PSID user = reinterpret_cast<const TOKEN_USER*>(info.data())->User.Sid;
+    std::vector<unsigned char> sid(::GetLengthSid(user));
+    REQUIRE(::CopySid(static_cast<DWORD>(sid.size()), sid.data(), user));
+    return sid;
+}
+
+// Give Everyone read on the directory, inherited by the files made in it.
+void grant_everyone_read(const fs::path& dir) {
+    SID_IDENTIFIER_AUTHORITY world = SECURITY_WORLD_SID_AUTHORITY;
+    PSID everyone = nullptr;
+    REQUIRE(::AllocateAndInitializeSid(&world, 1, SECURITY_WORLD_RID, 0, 0, 0, 0, 0, 0, 0,
+                                       &everyone));
+    PACL old_dacl = nullptr;
+    PSECURITY_DESCRIPTOR old_sd = nullptr;
+    std::wstring wdir = dir.wstring();
+    REQUIRE(::GetNamedSecurityInfoW(wdir.c_str(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+                                    nullptr, nullptr, &old_dacl, nullptr, &old_sd) ==
+            ERROR_SUCCESS);
+    EXPLICIT_ACCESSW ea{};
+    ea.grfAccessPermissions = GENERIC_READ;
+    ea.grfAccessMode = GRANT_ACCESS;
+    ea.grfInheritance = OBJECT_INHERIT_ACE;
+    ea.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+    ea.Trustee.TrusteeType = TRUSTEE_IS_WELL_KNOWN_GROUP;
+    ea.Trustee.ptstrName = static_cast<LPWSTR>(everyone);
+    PACL new_dacl = nullptr;
+    REQUIRE(::SetEntriesInAclW(1, &ea, old_dacl, &new_dacl) == ERROR_SUCCESS);
+    REQUIRE(::SetNamedSecurityInfoW(wdir.data(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+                                    nullptr, nullptr, new_dacl, nullptr) == ERROR_SUCCESS);
+    ::LocalFree(new_dacl);
+    ::LocalFree(old_sd);
+    ::FreeSid(everyone);
+}
+
+struct FileAccess {
+    bool protected_dacl = false;
+    bool owner_is_user = false;
+    DWORD entries = 0;
+    bool only_the_user = true; // every entry allows, and names the process user
+};
+
+FileAccess access_of(const fs::path& file, const std::vector<unsigned char>& sid) {
+    PSID owner = nullptr;
+    PACL dacl = nullptr;
+    PSECURITY_DESCRIPTOR sd = nullptr;
+    std::wstring wfile = file.wstring();
+    REQUIRE(::GetNamedSecurityInfoW(wfile.c_str(), SE_FILE_OBJECT,
+                                    OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+                                    &owner, nullptr, &dacl, nullptr, &sd) == ERROR_SUCCESS);
+    const PSID user = const_cast<unsigned char*>(sid.data());
+    FileAccess a;
+    SECURITY_DESCRIPTOR_CONTROL control = 0;
+    DWORD revision = 0;
+    REQUIRE(::GetSecurityDescriptorControl(sd, &control, &revision));
+    a.protected_dacl = (control & SE_DACL_PROTECTED) != 0;
+    a.owner_is_user = owner != nullptr && ::EqualSid(owner, user);
+    REQUIRE(dacl != nullptr); // a null DACL grants everyone everything
+    a.entries = dacl->AceCount;
+    for (DWORD i = 0; i < dacl->AceCount; ++i) {
+        void* ace = nullptr;
+        REQUIRE(::GetAce(dacl, i, &ace));
+        const auto* header = static_cast<const ACE_HEADER*>(ace);
+        if (header->AceType != ACCESS_ALLOWED_ACE_TYPE ||
+            !::EqualSid(&static_cast<ACCESS_ALLOWED_ACE*>(ace)->SidStart, user)) {
+            a.only_the_user = false;
+        }
+    }
+    ::LocalFree(sd);
+    return a;
+}
+
+} // namespace
+#endif
+
+TEST_SUITE("session") {
+
+TEST_CASE("session files: the key is readable by the host's user alone, whatever the directory grants") {
+    TempDir dir("key-access");
+    const fs::path key = dir.path / loom::host::kSessionKeyFile;
+    const fs::path json = dir.path / loom::host::kSessionFile;
+#ifdef _WIN32
+    const std::vector<unsigned char> sid = test_user_sid();
+    grant_everyone_read(dir.path);
+#else
+    fs::permissions(dir.path, fs::perms::all);
+    const mode_t old_mask = ::umask(0);
+#endif
+    std::string why;
+    const bool key_written = loom::host::write_session_text(key, "secret\n", true, &why);
+    const bool json_written = loom::host::write_session_text(json, "{}\n", false, &why);
+#ifndef _WIN32
+    ::umask(old_mask);
+#endif
+    REQUIRE_MESSAGE(key_written, why);
+    REQUIRE_MESSAGE(json_written, why);
+    CHECK_FALSE(fs::exists(dir.path / "session.key.tmp"));
+    {
+        std::ifstream in(key, std::ios::binary);
+        std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        CHECK(text == "secret\n");
+    }
+#ifdef _WIN32
+    // The canary: the directory's grant reaches a plain file.
+    const FileAccess plain = access_of(json, sid);
+    REQUIRE_FALSE(plain.only_the_user);
+    // The key: a protected DACL with one entry, allowing the process user, who owns it.
+    const FileAccess secret = access_of(key, sid);
+    CHECK(secret.protected_dacl);
+    CHECK(secret.owner_is_user);
+    CHECK(secret.entries == 1);
+    CHECK(secret.only_the_user);
+#else
+    const fs::perms group_or_other = fs::perms::group_all | fs::perms::others_all;
+    REQUIRE((fs::status(json).permissions() & group_or_other) != fs::perms::none);
+    CHECK((fs::status(key).permissions() & fs::perms::all) ==
+          (fs::perms::owner_read | fs::perms::owner_write));
+#endif
+    // The host's own read-back agrees: the key reads as this user's alone, the plain file not.
+    std::string fault;
+    CHECK_MESSAGE(loom::host::reads_as_owner_only(key, &fault), fault);
+    CHECK_FALSE(loom::host::reads_as_owner_only(json, &fault));
+}
+
+// The read-back the host serves on: a key that anyone else could read is named, with why. A
+// volume that keeps no permissions (FAT, exFAT) is refused before any of this is read; no suite
+// has such a volume, so the live witness on one is the record of that branch.
+TEST_CASE("session files: a key that is not its user's alone does not read as owner-only, and says why") {
+    TempDir dir("key-readback");
+    const fs::path key = dir.path / loom::host::kSessionKeyFile;
+    std::string why;
+    REQUIRE_MESSAGE(loom::host::write_session_text(key, "secret\n", true, &why), why);
+    REQUIRE_MESSAGE(loom::host::reads_as_owner_only(key, &why), why);
+#ifdef _WIN32
+    // A second entry, for Everyone, beside the user's own, the DACL still protected.
+    SID_IDENTIFIER_AUTHORITY world = SECURITY_WORLD_SID_AUTHORITY;
+    PSID everyone = nullptr;
+    REQUIRE(::AllocateAndInitializeSid(&world, 1, SECURITY_WORLD_RID, 0, 0, 0, 0, 0, 0, 0,
+                                       &everyone));
+    PACL old_dacl = nullptr;
+    PSECURITY_DESCRIPTOR old_sd = nullptr;
+    std::wstring wkey = key.wstring();
+    REQUIRE(::GetNamedSecurityInfoW(wkey.c_str(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+                                    nullptr, nullptr, &old_dacl, nullptr, &old_sd) ==
+            ERROR_SUCCESS);
+    EXPLICIT_ACCESSW ea{};
+    ea.grfAccessPermissions = GENERIC_READ;
+    ea.grfAccessMode = GRANT_ACCESS;
+    ea.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+    ea.Trustee.TrusteeType = TRUSTEE_IS_WELL_KNOWN_GROUP;
+    ea.Trustee.ptstrName = static_cast<LPWSTR>(everyone);
+    PACL new_dacl = nullptr;
+    REQUIRE(::SetEntriesInAclW(1, &ea, old_dacl, &new_dacl) == ERROR_SUCCESS);
+    REQUIRE(::SetNamedSecurityInfoW(wkey.data(), SE_FILE_OBJECT,
+                                    DACL_SECURITY_INFORMATION |
+                                        PROTECTED_DACL_SECURITY_INFORMATION,
+                                    nullptr, nullptr, new_dacl, nullptr) == ERROR_SUCCESS);
+    ::LocalFree(new_dacl);
+    ::LocalFree(old_sd);
+    ::FreeSid(everyone);
+    CHECK_FALSE(loom::host::reads_as_owner_only(key, &why));
+    CHECK(why == "it reads back with 2 access entries, not 1");
+    // A file that takes its directory's permissions.
+    grant_everyone_read(dir.path);
+    const fs::path plain = dir.path / "plain.txt";
+    REQUIRE_MESSAGE(loom::host::write_session_text(plain, "x\n", false, &why), why);
+    CHECK_FALSE(loom::host::reads_as_owner_only(plain, &why));
+    CHECK(why == "it reads back taking permissions from its directory");
+#else
+    fs::permissions(key, fs::perms::owner_read | fs::perms::owner_write | fs::perms::group_read);
+    CHECK_FALSE(loom::host::reads_as_owner_only(key, &why));
+    CHECK(why == "it reads back as mode 0640, not 0600");
+    const fs::path link = dir.path / "link.key";
+    fs::create_symlink(key, link);
+    CHECK_FALSE(loom::host::reads_as_owner_only(link, &why));
+    CHECK(why == "it reads back as something other than a plain file");
+#endif
 }
 
 } // TEST_SUITE("session")

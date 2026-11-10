@@ -111,12 +111,17 @@ serving /home/you/work at 127.0.0.1:50113 -- lifetime 3f17415b4ee53b1ddce611b8ac
 A **serving host does not end when its console closes** — closing stdin closes only the console.
 It ends when a client asks (`loom-session stop work`, `Session.shutdown`), or at `quit` typed at
 its console. Exit codes are the host's usual ones, plus `4` when another host already serves the
-directory and `5` when the session could not be opened.
+directory and `5` when the session could not be opened, its key among the reasons (below).
 
 While it runs, the directory holds `session.json` (where to attach, and the **lifetime** — this
-host run's identity, minted at start and never reused) and `session.key` (the owner's client key:
-created owner-only on POSIX; on Windows it inherits the directory's permissions, so keep session
-directories under your profile). Both are removed when the host ends cleanly.
+host run's identity, minted at start and never reused) and `session.key` (the owner's client key,
+created readable by the host's user alone: mode 0600 on POSIX, and on Windows a security
+descriptor that grants that user alone and inherits nothing from the directory). The host reads
+the key back before it listens, and serves only when it is that user's alone; otherwise it removes
+the key, serves nothing, and exits `5`, naming the directory and why. FAT and exFAT keep no
+permissions, so a session directory there is always refused: keep session directories on NTFS,
+or on a file system that keeps POSIX permissions. Both files are removed when the host ends
+cleanly.
 
 ## 3. Attach, look, leave
 

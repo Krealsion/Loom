@@ -419,18 +419,23 @@ add_library(loom::host-policy ALIAS zen-host-policy)
 # Installed for a weave to link, as zen-terminal is (LOOM_PACKAGE_LIBRARIES).
 loom_weave_build_contract(zen-host-policy)
 
-# What stays loom-host's own, as a library the suite reaches: the boot plan's parser and serve
-# mode's idle wait. `main()` stays in the executable, driven as a real process by
-# tests/host_process/.
+# What stays loom-host's own, as a library the suite reaches: the boot plan's parser, serve
+# mode's idle wait and the session files it writes. `main()` stays in the executable, driven as a
+# real process by tests/host_process/.
 add_library(zen-host-boot STATIC
     src/host/boot_plan.cpp
-    src/host/idle_nap.cpp)
+    src/host/idle_nap.cpp
+    src/host/session_files.cpp)
 target_include_directories(zen-host-boot
     PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/host>)
 target_compile_features(zen-host-boot PUBLIC cxx_std_20)
 target_link_libraries(zen-host-boot
     PUBLIC  zen-host-policy zen-sanitize
     PRIVATE zen-warnings)
+if(WIN32)
+    # The session key's owner-only security descriptor (src/host/session_files.cpp).
+    target_link_libraries(zen-host-boot PRIVATE advapi32)
+endif()
 
 add_executable(loom-host src/host/host_main.cpp)
 # It links the history pair and the bridge: the host mounts Loom's own Recorder and Logger (from

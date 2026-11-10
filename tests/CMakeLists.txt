@@ -267,6 +267,9 @@ if(TARGET zen-kernel)
 endif()
 if(NOT WIN32)
     target_link_libraries(zen-tests PRIVATE zen-isolation)
+else()
+    # The `session` suite reads the session key's security descriptor back (aclapi.h).
+    target_link_libraries(zen-tests PRIVATE advapi32)
 endif()
 
 # The required-contract population (POP-05): the build-graph sweep and the exemption declaration.

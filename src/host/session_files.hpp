@@ -4,25 +4,18 @@
 #ifndef ZEN_HOST_SESSION_FILES_HPP
 #define ZEN_HOST_SESSION_FILES_HPP
 
-// Where a client finds a session, and what it presents: a session host writes `session.json`
-// (endpoint, lifetime id, pid, version, start time; not a secret and not authority) and
-// `session.key` (the owner's client key; owner-only on POSIX, the directory's ACL on Windows;
-// whoever reads it acts as the owner) once listening, and removes both on a clean end. A host
-// that dies leaves them describing a lifetime that is over; the host never reads them back.
+// Where a client finds a session. A host writes `session.key` (the owner's client key: whoever
+// reads it acts as the owner) before it listens and reads it back; a key not its user's alone (on
+// FAT or exFAT, never) is removed and nothing is served. Listening, it writes `session.json`
+// (endpoint, lifetime id, pid, version, start time; not a secret, not authority), and removes both
+// on a clean end. A host that dies leaves them describing a lifetime that is over.
 
 #include "../detail/json.hpp"
 
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
 #include <string>
 #include <system_error>
-
-#ifndef _WIN32
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#endif
 
 namespace loom::host {
 
@@ -40,58 +33,18 @@ struct SessionFileFacts {
 };
 
 /// Replace `path` with `text`, by way of a sibling temp file, so a reader sees the old file or
-/// the new one. `owner_only` creates the temp file with mode 0600 on POSIX from its first byte.
-inline bool write_session_text(const std::filesystem::path& path, const std::string& text,
-                               bool owner_only, std::string* why) {
-    const std::filesystem::path tmp = path.string() + ".tmp";
-    std::error_code ec;
-    std::filesystem::remove(tmp, ec);
-#ifndef _WIN32
-    if (owner_only) {
-        const int fd = ::open(tmp.c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0600);
-        if (fd < 0) {
-            *why = "cannot create " + tmp.string();
-            return false;
-        }
-        std::size_t off = 0;
-        while (off < text.size()) {
-            const ssize_t n = ::write(fd, text.data() + off, text.size() - off);
-            if (n <= 0) {
-                ::close(fd);
-                *why = "cannot write " + tmp.string();
-                return false;
-            }
-            off += static_cast<std::size_t>(n);
-        }
-        if (::close(fd) != 0) {
-            *why = "cannot finish " + tmp.string();
-            return false;
-        }
-    } else
-#endif
-    {
-        (void)owner_only;
-        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-        if (!out) {
-            *why = "cannot create " + tmp.string();
-            return false;
-        }
-        out.write(text.data(), static_cast<std::streamsize>(text.size()));
-        out.close();
-        if (out.fail()) {
-            *why = "cannot write " + tmp.string();
-            return false;
-        }
-    }
-    // One writer: the host holds the directory's session lock for its whole life.
-    std::filesystem::remove(path, ec);
-    std::filesystem::rename(tmp, path, ec);
-    if (ec) {
-        *why = "cannot put " + path.string() + " in place: " + ec.message();
-        return false;
-    }
-    return true;
-}
+/// the new one. `owner_only` creates the temp file readable and writable by this process's user
+/// alone from its first byte: mode 0600 on POSIX, a protected one-entry DACL on Windows. Then it
+/// reads the file back where it stands, and one that does not read as this user's alone is
+/// removed and refused, `why` naming the directory, the reason and where a session belongs.
+bool write_session_text(const std::filesystem::path& path, const std::string& text,
+                        bool owner_only, std::string* why);
+
+/// Whether `file` reads back as this process's user's alone. POSIX: a plain file owned by the
+/// effective user, mode 0600. Windows: on a volume that keeps permissions, owned by the process
+/// user, with a protected DACL of one entry allowing that user. Otherwise false, `why` the
+/// reason in a clause.
+bool reads_as_owner_only(const std::filesystem::path& file, std::string* why);
 
 inline std::string session_json(const SessionFileFacts& f) {
     std::string out = "{\n  \"lifetime\": ";
