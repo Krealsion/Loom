@@ -272,14 +272,32 @@ quit
     zen_check("neither over-long line ran in part: every command after them ran"
               text MATCHES "run +probe")
 
+    # The installed host has no fault command. Its help does not list one, and typing it
+    # does not end the host, so quit still runs.
+    message(STATUS "host_process/console: the installed host has no fault command")
+    zen_scenario_dir(installed-no-fault dir)
+    zen_run_host("${dir}" "help\nfault kettle-7f3a\nquit\n" "--no-boot" text code)
+    zen_check("the installed host's help does not list fault"
+              NOT text MATCHES "a native participant throws")
+    zen_check("fault is not a command of the installed host"
+              text MATCHES "unknown command: fault")
+    zen_check("fault does not end the installed host" code EQUAL 0)
+
     # 7. A native participant that throws ends the host in words and leaves no session file.
-    # `fault` mounts a native handler and sends it the text, so the exception leaves the pump
-    # (a loaded weave is caught at its ABI and would not). The line carries that text and the
-    # participant the tap names. The host said it was serving, so both session files existed,
-    # and neither remains. Exit 1 is this end; an abort is a different code and fails here.
+    # The test build's `fault` mounts a native handler and sends it the text, so the exception
+    # leaves the pump (a loaded weave is caught at its ABI and would not). The line carries that
+    # text and the roles the tap's target holds. The host said it was serving, so both session
+    # files existed, and neither remains. Exit 1 is this end; an abort fails here.
     message(STATUS "host_process/console: a native participant that throws ends the host in words")
+    if(NOT DEFINED ZEN_FAULT_HOST_EXE OR NOT EXISTS "${ZEN_FAULT_HOST_EXE}")
+        message(FATAL_ERROR
+            "host_process: ZEN_FAULT_HOST_EXE is required for the native-throw case")
+    endif()
     zen_scenario_dir(native-throw dir)
+    set(saved_host_exe "${ZEN_HOST_EXE}")
+    set(ZEN_HOST_EXE "${ZEN_FAULT_HOST_EXE}")
     zen_run_host("${dir}" "fault kettle-7f3a\n" "--serve;${dir}" text code)
+    set(ZEN_HOST_EXE "${saved_host_exe}")
     zen_check("the host had written the session files: it said it was serving"
               text MATCHES "session: serving")
     zen_check("it names the participant the tap names and the exception's text"

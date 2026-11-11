@@ -457,27 +457,31 @@ if(WIN32)
     target_link_libraries(zen-host-boot PRIVATE advapi32)
 endif()
 
-add_executable(loom-host src/host/host_main.cpp)
-# It links the history pair and the bridge: the host mounts Loom's own Recorder and Logger (from
-# the plan's `history` section) and holds a LinkWeave per `links` row (src/host/link.hpp), host
-# wiring over the exported client.
-target_link_libraries(loom-host
-    PRIVATE zen-host-boot zen-console zen-terminal zen-history zen-bridge zen-switchboard loom
-            zen-warnings zen-sanitize)
-if(TARGET zen-kernel)
-    target_link_libraries(loom-host PRIVATE zen-kernel)
-    target_compile_definitions(loom-host PRIVATE ZEN_HOST_HAS_KERNEL=1)
-    loom_wasm_runtime_beside(loom-host)
-else()
-    target_compile_definitions(loom-host PRIVATE ZEN_HOST_HAS_KERNEL=0)
-endif()
-# What the host says it is: the release number, and whether this build is a package.
-set(loom_host_packaged 1)
-if(LOOM_PACKAGE_VERSION STREQUAL "")
-    set(loom_host_packaged 0)
-endif()
-target_compile_definitions(loom-host PRIVATE "LOOM_HOST_RELEASE=\"${PROJECT_VERSION}\""
-                                             LOOM_HOST_PACKAGED=${loom_host_packaged})
+# Both builds of this host: one source, one link line, `ZEN_HOST_HAS_KERNEL` included. It links
+# the history pair and the bridge: the host mounts Loom's own Recorder and Logger (from the plan's
+# `history` section) and holds a LinkWeave per `links` row (src/host/link.hpp).
+function(loom_add_host_executable target)
+    add_executable(${target} src/host/host_main.cpp)
+    target_link_libraries(${target}
+        PRIVATE zen-host-boot zen-console zen-terminal zen-history zen-bridge zen-switchboard loom
+                zen-warnings zen-sanitize)
+    if(TARGET zen-kernel)
+        target_link_libraries(${target} PRIVATE zen-kernel)
+        target_compile_definitions(${target} PRIVATE ZEN_HOST_HAS_KERNEL=1)
+        loom_wasm_runtime_beside(${target})
+    else()
+        target_compile_definitions(${target} PRIVATE ZEN_HOST_HAS_KERNEL=0)
+    endif()
+    # What the host says it is: the release number, and whether this build is a package.
+    set(loom_host_packaged 1)
+    if(LOOM_PACKAGE_VERSION STREQUAL "")
+        set(loom_host_packaged 0)
+    endif()
+    target_compile_definitions(${target} PRIVATE
+        "LOOM_HOST_RELEASE=\"${PROJECT_VERSION}\""
+        "LOOM_HOST_PACKAGED=${loom_host_packaged}")
+endfunction()
+loom_add_host_executable(loom-host)
 
 # ---- loom-runs: the run manager a session host boots, and the Python session tooling ---------
 # Optional: `loom-host --serve` serves clients with or without it. `loom-runs` is an ordinary
@@ -597,6 +601,10 @@ set(LOOM_PACKAGE_LIBRARIES loom zen-switchboard zen-terminal zen-history zen-bri
 # ---- Tests ----------------------------------------------------------------
 
 if(ZEN_BUILD_TESTS)
+    # The test build of the same source. `ZEN_HOST_FAULT` compiles the throwing participant and
+    # the `fault` command; the installed `loom-host` has neither, and this target is not installed.
+    loom_add_host_executable(loom-host-fault)
+    target_compile_definitions(loom-host-fault PRIVATE ZEN_HOST_FAULT)
     enable_testing()
     add_subdirectory(tests)
 endif()

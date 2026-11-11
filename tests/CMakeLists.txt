@@ -830,6 +830,7 @@ add_test(NAME optional_member_types COMMAND ${CMAKE_COMMAND}
 # `host_process_weaves` rides the kernel gate. tests/host_process/run.cmake says what each holds.
 add_test(NAME host_console COMMAND ${CMAKE_COMMAND}
     -DZEN_HOST_EXE=$<TARGET_FILE:loom-host>
+    -DZEN_FAULT_HOST_EXE=$<TARGET_FILE:loom-host-fault>
     -DZEN_WORK=${CMAKE_BINARY_DIR}/host-process-work/console
     -DZEN_GROUP=console
     -P ${CMAKE_CURRENT_SOURCE_DIR}/host_process/run.cmake)

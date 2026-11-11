@@ -207,14 +207,15 @@ Options parse_options(int argc, char** argv) {
     return o;
 }
 
-// A native participant whose only act is to throw the text it is sent. `zen.host.` is this
-// host's own vocabulary, so an application's shape cannot collide with it. Not mounted at
-// boot: `fault` mounts it, so the host's ordinary participants and their ids stay as they are.
+#ifdef ZEN_HOST_FAULT
+// A native participant whose only act is to throw the text it is sent. Its shape is
+// `loom.fault.Throw` and its role is `loom.fault`. Not mounted at boot: `fault` mounts it, so
+// the host's ordinary participants and their ids stay as they are. This is the test build only.
 // The exception leaves the pump (MSG-10); main, below, is what reports it.
 struct HostThrow {
     std::string text;
     using ZenSelf = HostThrow;
-    static constexpr const char* zen_name = "zen.host.Throw";
+    static constexpr const char* zen_name = "loom.fault.Throw";
     static constexpr std::uint32_t zen_version = 1;
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(text)); }
 };
@@ -230,6 +231,7 @@ class HostThrowWeave final
 public:
     void on(const HostThrow& in, loom::Mail&) { throw std::runtime_error(in.text); }
 };
+#endif
 
 // ---- the session ------------------------------------------------------------
 
@@ -515,6 +517,7 @@ public:
 
     // ---- turning the world ---------------------------------------------------
 
+#ifdef ZEN_HOST_FAULT
     /// Mount `loom.fault` on first use and deliver `text` to it. Its handler throws, and that
     /// exception leaves this call through the pump (MSG-10). Nothing here catches it.
     void fail_native(const std::string& text) {
@@ -526,6 +529,7 @@ public:
         }
         (void)ask(fault_id_, HostThrow::zen_name, HostThrow::zen_version, {{"text", text}});
     }
+#endif
 
     /// One bounded host turn: `pump_pending` services exactly the backlog it found, so work
     /// a handler queues waits for the next turn, a self-re-arming producer cannot get around
@@ -786,7 +790,9 @@ private:
     loom::host::HistoryReader* reader_ = nullptr; ///< serve mode only; owned by the bus
     loom::WeaveId reader_id_{};
     loom::WeaveId warden_id_{};
+#ifdef ZEN_HOST_FAULT
     loom::WeaveId fault_id_{}; ///< `loom.fault`, mounted by `fault`; invalid until then
+#endif
     /// What the adoption seam installed, in the order it installed it. Written from
     /// inside the door's delivery, read by whichever command caused the load.
     std::vector<std::string> adoption_log_;
@@ -828,8 +834,12 @@ void print_help() {
   list                          what the steward says is loaded, and under which roles
 
 )" << loom::host::authority_help()
+#ifdef ZEN_HOST_FAULT
               << R"(
   fault <text>                  a native participant throws <text>; this host then ends
+)"
+#endif
+              << R"(
   quit                          shut this host down
 )";
 }
@@ -1290,6 +1300,7 @@ bool dispatch(const std::string& line, HostSession& session, const loom::host::B
     const std::string& cmd = tok[0].text;
     if (cmd == "quit" || cmd == "exit") {
         return false; // HOST shutdown; see the file header
+#ifdef ZEN_HOST_FAULT
     } else if (cmd == "fault") {
         if (tok.size() != 2 || tok[1].text.empty()) {
             std::cout << "  usage: fault <text>\n";
@@ -1298,6 +1309,7 @@ bool dispatch(const std::string& line, HostSession& session, const loom::host::B
         // Throws out of the pump. main reports it; this command does not catch it (MSG-10).
         session.fail_native(tok[1].text);
         return true;
+#endif
     } else if (cmd == "help") {
         print_help();
     } else if (cmd == "status") {
