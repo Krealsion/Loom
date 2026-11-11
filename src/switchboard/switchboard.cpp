@@ -106,6 +106,8 @@ const char* name_of(RefusalReason r) noexcept {
         return "SeamUnresolved";
     case RefusalReason::ApplicationFailed:
         return "ApplicationFailed";
+    case RefusalReason::PendingPerSender:
+        return "PendingPerSender";
     }
     return "?";
 }
@@ -271,6 +273,10 @@ std::string Refusal::message() const {
         // participant and which publication.
         return "the target is held behind a published claim it could not apply; "
                "nothing is delivered to it until it is reloaded or removed";
+    case RefusalReason::PendingPerSender:
+        // Names THIS SENDER'S waiting messages. The new send is not queued, and
+        // no other sender's waiting messages are touched.
+        return "this sender already has its bound of messages waiting; nothing was queued";
     }
     return "?";
 }
@@ -645,6 +651,9 @@ void Switchboard::notify_dispatch_refusal(const Envelope& env, const BusEvent& e
 
 Ticket Switchboard::enqueue_directed(WeaveId target, Message msg, bool gated,
                                      Provenance provenance, TxnId preparation) {
+    if (sender_at_pending_bound(msg.sender)) {
+        return refuse_pending_bound(target, msg.sender, msg);
+    }
     const std::uint64_t seq = allocate_sequence();
     journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}}; // Pending, owns seq
     msg.provenance = std::move(provenance);
@@ -661,12 +670,16 @@ Ticket Switchboard::enqueue_directed(WeaveId target, Message msg, bool gated,
     // when nothing was being dispatched.
     env.dispatch_parent = current_dispatch_seq_;
     env.fence = current_dispatch_fence_; // ...and which fence that delivery belongs to
+    env.sender_accounted = true;
     queue_back(std::move(env));
     return Ticket{seq};
 }
 
 Ticket Switchboard::enqueue_role(std::string role, Message msg, bool gated,
                                  Provenance provenance) {
+    if (sender_at_pending_bound(msg.sender)) {
+        return refuse_pending_bound(WeaveId{}, msg.sender, msg);
+    }
     const std::uint64_t seq = allocate_sequence();
     journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}}; // Pending, owns seq
     // The same single assignment that makes provenance unforgeable on the
@@ -679,6 +692,7 @@ Ticket Switchboard::enqueue_role(std::string role, Message msg, bool gated,
     capture_refusal_recipient(env);
     env.dispatch_parent = current_dispatch_seq_; // the delivery this was authored from
     env.fence = current_dispatch_fence_;
+    env.sender_accounted = true;
     queue_back(std::move(env));
     return Ticket{seq};
 }
@@ -1762,6 +1776,9 @@ Ticket Switchboard::enqueue_answer(WeaveId to, WeaveId as_sender, Message msg,
     msg.sender = as_sender;
     msg.reply_to = WeaveId{};
     msg.correlation = correlation;
+    if (sender_at_pending_bound(as_sender)) {
+        return refuse_pending_bound(to, as_sender, msg);
+    }
     const std::uint64_t seq = allocate_sequence();
     journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}};
     msg.provenance = Provenance::attested(Provenance::Kind::Answer, 0);
@@ -1776,6 +1793,7 @@ Ticket Switchboard::enqueue_answer(WeaveId to, WeaveId as_sender, Message msg,
     // An answer belongs to the fence of the delivery it is SPENT from, not the ask's: a
     // deferred answer spent from a later, unrelated delivery is that delivery's work.
     env.fence = current_dispatch_fence_;
+    env.sender_accounted = true;
     queue_back(std::move(env));
     return Ticket{seq};
 }
@@ -1792,6 +1810,10 @@ Ticket Switchboard::answer_as(WeaveId as_sender, Message msg) {
         // responder its answer had been sent.
         (void)refuse_now(authority_.requester, as_sender, msg, RefusalReason::CapabilityDenied);
         return Ticket{};
+    }
+    // Before the right is spent: a refusal here leaves the answer still available.
+    if (sender_at_pending_bound(as_sender)) {
+        return refuse_pending_bound(authority_.requester, as_sender, msg);
     }
     authority_.spent = true;
     // The requester's identity comes from the authority — captured when the
@@ -1952,6 +1974,10 @@ Ticket Switchboard::spend_deferred_as(WeaveId as_sender, const DeferredAnswer& a
         return Ticket{};
     }
 
+    // At the waiting bound the right stays: refusing after this wipe would lose the answer.
+    if (sender_at_pending_bound(as_sender)) {
+        return refuse_pending_bound(rec->requester, as_sender, msg);
+    }
     // CONSUMED BEFORE QUEUEING, so neither a replay nor a reentrant handler can
     // turn one right into two answers.
     const WeaveId to = rec->requester;
@@ -2110,6 +2136,10 @@ std::size_t Switchboard::fanout(Message msg, bool gated, Provenance provenance) 
         if (accept_match(rec, name, version) == nullptr) {
             continue;
         }
+        if (sender_at_pending_bound(msg.sender)) {
+            (void)refuse_pending_bound(rec.id, msg.sender, msg);
+            continue;
+        }
         const std::uint64_t seq = allocate_sequence();
         journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}}; // Pending, owns seq
         // Rebuilt field by field, so a published Message carries no provenance whatever the
@@ -2123,6 +2153,7 @@ std::size_t Switchboard::fanout(Message msg, bool gated, Provenance provenance) 
         // produced them all.
         env.dispatch_parent = current_dispatch_seq_;
         env.fence = current_dispatch_fence_; // ...and every one counts in that delivery's fence
+        env.sender_accounted = true;
         queue_back(std::move(env));
         ++recipients;
     }
@@ -2636,9 +2667,7 @@ void Switchboard::drain_until_idle() {
     const DispatchGuard dispatching(*this);
     stop_requested_ = false;
     while (!queue_.empty() && !stop_requested_) {
-        Envelope env = std::move(queue_.front());
-        queue_.pop_front();
-        deliver_one(std::move(env));
+        deliver_one(take_front());
     }
 }
 
@@ -2662,9 +2691,7 @@ std::size_t Switchboard::dispatch_at_most(std::size_t budget) {
     // already waiting. That is the whole point: the producer this exists to
     // contain is precisely the one that re-arms itself from inside its handler.
     while (dispatched < budget && !queue_.empty() && !stop_requested_) {
-        Envelope env = std::move(queue_.front());
-        queue_.pop_front();
-        deliver_one(std::move(env));
+        deliver_one(take_front());
         ++dispatched;
     }
     return dispatched;
@@ -2712,7 +2739,32 @@ void Switchboard::queue_back(Envelope env) {
     if (FenceRecord* f = find_fence(env.fence)) {
         ++f->queued;
     }
+    if (env.sender_accounted) {
+        ++pending_by_sender_[env.msg.sender.value];
+    }
     queue_.push_back(std::move(env));
+}
+
+Switchboard::Envelope Switchboard::take_front() {
+    Envelope env = std::move(queue_.front());
+    queue_.pop_front();
+    if (env.sender_accounted) {
+        const auto it = pending_by_sender_.find(env.msg.sender.value);
+        if (it != pending_by_sender_.end() && --it->second == 0) {
+            pending_by_sender_.erase(it);
+        }
+    }
+    return env;
+}
+
+bool Switchboard::sender_at_pending_bound(WeaveId sender) const noexcept {
+    const auto it = pending_by_sender_.find(sender.value);
+    return it != pending_by_sender_.end() && it->second >= kMaxPendingPerSender;
+}
+
+Ticket Switchboard::refuse_pending_bound(WeaveId target, WeaveId sender, const Message& msg) {
+    (void)refuse_now(target, sender, msg, RefusalReason::PendingPerSender);
+    return Ticket{};
 }
 
 void Switchboard::fence_dispatched(std::uint64_t id) noexcept {
@@ -3512,7 +3564,12 @@ TxnResult Switchboard::ask_candidate_to_prepare(TxnId id, Message ask) {
     ask.sender = t->coordinator.who;
     ask.reply_to = WeaveId{};
     ask.correlation = correlation;
-    (void)enqueue_directed(t->candidate.who, std::move(ask), /*gated=*/true, Provenance{}, id);
+    const Ticket queued =
+        enqueue_directed(t->candidate.who, std::move(ask), /*gated=*/true, Provenance{}, id);
+    if (!queued.valid()) {
+        // The tap already named PendingPerSender. The conversation stays unopened.
+        return {false, id, TxnReason::PreconditionFailed};
+    }
 
     t->preparation_correlation = correlation;
     t->conversation = Conversation::Open;

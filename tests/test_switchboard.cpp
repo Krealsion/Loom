@@ -280,6 +280,57 @@ TEST_CASE("two weaves declaring the same (name,version) with different shapes co
     CHECK_THROWS_AS(bus.register_weave(std::move(bad)), loom::SchemaConflict);
 }
 
+TEST_CASE("a weave that sends two messages for every delivery reaches its waiting bound, its next "
+          "send is refused by name, and another weave is still delivered") {
+    // Two sends per delivery is the growth: one send per delivery only replaces
+    // what was just taken, so the queue never reaches a bound and a refusal
+    // would not be observed. pump_pending, not drain_until_idle: at the bound
+    // the weave still has a full queue, so a drain would not return.
+    Switchboard bus;
+    Registered amp = reg(bus, {ping_schema()});
+    Registered other = reg(bus, {pong_schema()});
+    amp.weave->on_handle = [&](const Message&, Bus& b, ProbeWeave&) {
+        (void)b.send(amp.id, Message(ping(1)));
+        (void)b.send(amp.id, Message(ping(2)));
+    };
+    int other_got = 0;
+    other.weave->on_handle = [&](const Message&, Bus&, ProbeWeave&) { ++other_got; };
+
+    const std::size_t ceiling = Switchboard::kMaxPendingPerSender;
+    int bound_refusals = 0;
+    bus.add_observer([&](const BusEvent& e) {
+        if (e.kind == EventKind::Refused && e.sender == amp.id &&
+            e.refusal.reason == RefusalReason::PendingPerSender) {
+            ++bound_refusals;
+        }
+    });
+
+    (void)bus.send(amp.id, Message(ping(0)));
+    int turns = 0;
+    while (bound_refusals == 0 && bus.pending() <= ceiling && turns < 40) {
+        (void)bus.pump_pending();
+        ++turns;
+    }
+    INFO("turns " << turns << " pending " << bus.pending() << " refusals " << bound_refusals);
+    CHECK(bound_refusals > 0);
+    CHECK(std::string(name_of(RefusalReason::PendingPerSender)) == "PendingPerSender");
+    CHECK(bus.pending() == ceiling);
+
+    const Ticket over = bus.send_as(amp.id, amp.id, Message(ping(9)));
+    CHECK_FALSE(over.valid());
+    CHECK(bus.pending() == ceiling);
+
+    // The other weave's own send, not a host send aimed at it.
+    const Ticket kept = bus.send_as(other.id, other.id, Message(pong(7)));
+    CHECK(kept.valid());
+    int guard = 0;
+    while (other_got == 0 && guard < 4) {
+        (void)bus.pump_pending();
+        ++guard;
+    }
+    CHECK(other_got == 1);
+}
+
 // ---- event-loop composition (MSG-09) --------------------------------------
 //
 // A perpetual service (a repeating timer enqueues its next beat before returning) keeps the queue

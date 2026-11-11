@@ -5,21 +5,38 @@ Reference: [messaging](../reference/messaging.md).
 ## MSG-01 — Single-threaded, FIFO, non-reentrant
 
 LAW — Dispatch is single-threaded FIFO. A dispatch turn is non-reentrant; a
-handler's sends enqueue *later* deliveries, never nested ones.
+handler's sends enqueue *later* deliveries, never nested ones. What one sender
+may have waiting is at most `kMaxPendingPerSender`. A send past that is refused
+`PendingPerSender`, queues nothing, and leaves every other sender's waiting
+messages untouched.
 
 MEANS
 - ordering is deterministic;
 - "between two deliveries" is a real atomic boundary the substrate itself uses
   (admission executes whole inside one queue turn);
-- there are no locks because there is nothing to lock.
+- there are no locks because there is nothing to lock;
+- a weave that sends more messages than it is delivered cannot grow the queue
+  without limit: its own next send is refused, by that name, on the tap and in
+  the journal ([MSG-05](#msg-05--refusals-are-structured-and-observable));
+- messages already waiting stay waiting, in the order they were queued.
 
 DOES NOT MEAN
 - that concurrency is supported and merely untested — multi-threaded dispatch
-  is an explicit non-feature until a consumer forces it.
+  is an explicit non-feature until a consumer forces it;
+- that the bound is a turn quota, or a cap on `drain_until_idle()`
+  ([MSG-09](#msg-09--a-dispatch-turn-can-be-bounded-without-bending-fifo)). A
+  sender under the bound still enqueues behind what is already waiting, and a
+  producer that keeps replacing exactly what was delivered still never lets the
+  drain return;
+- that one sender at the bound refuses anyone else's send;
+- that a dispatch-refusal notice, a joint notice, or a scheduled admission is
+  that sender's speech. Those are the bus's own acts and are not counted.
 
 PROVEN BY — `Switchboard::drain_until_idle` / `pump_pending` (the shared
-`in_dispatch_` guard); suites `switchboard`
-(reentrancy cases), `kernel` (admission atomicity riding the queue turn).
+`in_dispatch_` guard); `kMaxPendingPerSender`; suites `switchboard`
+(reentrancy cases, and a weave that sends two messages for every delivery:
+the bound refuses its next send by name while another weave's send is still
+delivered), `kernel` (admission atomicity riding the queue turn).
 
 ## MSG-02 — The bus stamps the sender
 

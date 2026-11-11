@@ -89,6 +89,12 @@ enum class RefusalReason : std::uint8_t {
     /// SENSE-06; docs/laws/sense-laws.md
     /// docs/reference/joint-publication.md#the-hold-and-diagnostic-access
     ApplicationFailed,
+    /// This sender already has `kMaxPendingPerSender` of its own messages waiting. Nothing is
+    /// queued, and no other sender's waiting messages are touched. A dispatch-refusal notice, a
+    /// joint notice and a scheduled admission are the bus's own acts and are not this bound.
+    /// MSG-01; docs/laws/messaging-laws.md
+    /// docs/reference/bounds.md
+    PendingPerSender,
 };
 
 const char* name_of(RefusalReason r) noexcept;
@@ -447,12 +453,15 @@ public:
     WeaveId register_weave(std::unique_ptr<Weave> weave, Grant grant, AcceptMode accept_mode);
 
     /// Enqueue a directed delivery to `target`. Returns a Ticket whose outcome is
-    /// readable after the delivery is pumped.
+    /// readable after the delivery is pumped. At `kMaxPendingPerSender` already waiting for
+    /// this sender, nothing is queued and the Ticket is invalid; the tap says `PendingPerSender`.
     Ticket send(WeaveId target, Message msg) override;
 
     /// Enqueue a delivery to every alive Weave whose accept-set includes the
     /// payload's (name, version), in registration order. Returns the recipient
     /// count (0 is legal, not an error). Each delivery is independently gated.
+    /// A recipient that would put this sender past `kMaxPendingPerSender` is refused
+    /// `PendingPerSender` and is not counted.
     std::size_t publish(Message msg) override;
 
     /// Send as a specific Weave: `as_sender` is stamped as the sender and the message is
@@ -725,6 +734,17 @@ public:
     /// The journal is a ring of the last `kJournalCapacity` delivery outcomes, so a bus that runs
     /// for weeks keeps a bounded footprint.
     static constexpr std::size_t kJournalCapacity = 1024;
+
+    /// How many of one sender's own messages may wait on this bus at once. A send past it is
+    /// refused `PendingPerSender` and queues nothing; every other sender is left untouched. The
+    /// same number as `kJournalCapacity`: one sender's waiting speech is one journal window and
+    /// cannot by itself roll that record. Not a turn bound (MSG-09). A dispatch-refusal notice,
+    /// a joint notice and a scheduled admission are not a sender's speech and are not counted.
+    /// MSG-01; docs/laws/messaging-laws.md
+    /// docs/reference/bounds.md
+    static constexpr std::size_t kMaxPendingPerSender = 1024;
+    static_assert(kMaxPendingPerSender == kJournalCapacity,
+                  "one sender's waiting speech is one journal window");
 
     /// How many unfinished deferred conversations one Loom holds at once. A weave asks for this
     /// host-side state, so it is bounded; past it a deferral is refused visibly and the immediate
@@ -1029,6 +1049,9 @@ private:
         /// The fence this envelope belongs to (0 for none): the fence of the delivery it was
         /// queued from, or the one a fenced host send opened. Stamped by the bus.
         std::uint64_t fence = 0;
+        /// Counted against `msg.sender`'s `kMaxPendingPerSender`. Set only for a sender's own
+        /// speech; a bus notice or a scheduled admission leaves it false.
+        bool sender_accounted = false;
     };
 
     /// A fence the bus is counting for a host: how many envelopes it names are queued or being
@@ -1039,8 +1062,15 @@ private:
     };
     FenceRecord* find_fence(std::uint64_t id) noexcept;
     const FenceRecord* find_fence(std::uint64_t id) const noexcept;
-    /// Every enqueue funnels through here: the envelope's fence (already stamped) counts it.
+    /// Every enqueue funnels through here: the envelope's fence (already stamped) counts it,
+    /// and a sender's own speech counts against `kMaxPendingPerSender`.
     void queue_back(Envelope env);
+    /// Pop the front envelope and drop its sender count. It is no longer waiting.
+    Envelope take_front();
+    /// True when `sender` already has `kMaxPendingPerSender` of its own messages waiting.
+    bool sender_at_pending_bound(WeaveId sender) const noexcept;
+    /// `PendingPerSender` on the tap and in the journal; nothing queued; an invalid ticket.
+    Ticket refuse_pending_bound(WeaveId target, WeaveId sender, const Message& msg);
     /// The envelope a dispatch just finished with no longer counts toward its fence.
     void fence_dispatched(std::uint64_t id) noexcept;
     /// Open a record for a host's fenced send, or 0 at the bound.
@@ -1476,6 +1506,8 @@ private:
     std::uint64_t next_weave_id_ = 1;
 
     std::deque<Envelope> queue_;
+    /// Waiting envelopes of each sender's own speech, by `WeaveId::value`. Bus acts are absent.
+    std::map<std::uint64_t, std::size_t> pending_by_sender_;
 
     /// One retained outcome, tagged with the seq that owns it: a slot answers only while its
     /// `seq` matches, so an evicted or never-issued seq reads Pending.

@@ -57,16 +57,19 @@ class Bus {
 public:
     virtual ~Bus() = default;
 
-    /// Enqueue a directed delivery to `target`.
+    /// Enqueue a directed delivery to `target`. At `Switchboard::kMaxPendingPerSender` already
+    /// waiting for this sender, nothing is queued and the Ticket is invalid; the tap says
+    /// `PendingPerSender`.
     virtual Ticket send(WeaveId target, Message msg) = 0;
 
     /// Enqueue a delivery to every accepter of the payload's shape; returns the
-    /// recipient count.
+    /// recipient count. A recipient that would put this sender past
+    /// `Switchboard::kMaxPendingPerSender` is refused `PendingPerSender` and is not counted.
     virtual std::size_t publish(Message msg) = 0;
 
     /// Enqueue a directed delivery to whichever Weave holds `role`, resolved at delivery, so a
     /// "shape to role" grant survives the holder reloading. An unheld role is refused like an
-    /// unknown target.
+    /// unknown target. The same waiting bound as `send` applies, and refuses the same way.
     virtual Ticket send_to_role(std::string_view role, Message msg) = 0;
 
     /// Answer the message being handled, once, to its sender, with Loom's word that this is the
@@ -74,7 +77,9 @@ public:
     /// to answer comes with the delivery: Loom sets the recipient (the request's stamped sender)
     /// and the correlation (the request's own). It grants no reach: the answer is authorized
     /// against the answering weave's grant like any send. The default returns an invalid Ticket:
-    /// a Bus that is not a live delivery has no answer to give.
+    /// a Bus that is not a live delivery has no answer to give. At
+    /// `Switchboard::kMaxPendingPerSender` the answer is refused `PendingPerSender`, nothing is
+    /// queued, and the answer right is not spent.
     virtual Ticket answer(Message msg) {
         (void)msg;
         return Ticket{};
@@ -88,7 +93,9 @@ public:
 
     /// Spend a deferred answer. The bus checks it against the bound requester, respondent, both
     /// incarnations and correlation, and against the current speaker, which is why it is spent
-    /// through the Bus a handler was handed. Consumed before queueing.
+    /// through the Bus a handler was handed. When the send is queued the right is consumed
+    /// first, so it cannot be spent twice. At `Switchboard::kMaxPendingPerSender` the send is
+    /// refused `PendingPerSender`, nothing is queued, and the right remains.
     virtual Ticket spend_deferred(const DeferredAnswer& answer, Message msg) {
         (void)answer;
         (void)msg;
