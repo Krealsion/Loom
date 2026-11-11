@@ -1479,7 +1479,7 @@ void report_late_answers(HostSession& session, bool& prompt_shown) {
 }
 
 /// What escaped the pump: the exception's text, and the participant when the tap's latest
-/// HandlerFailed names one — its target, and that weave's role when it holds one.
+/// HandlerFailed names one — its target, and the roles it holds, in binding order.
 void report_native_failure(HostSession& session, const char* what) {
     std::string who;
     const std::vector<loom::TapEvent> ev = session.console().tap();
@@ -1488,8 +1488,7 @@ void report_native_failure(HostSession& session, const char* what) {
             continue;
         }
         who = "weave " + std::to_string(it->target.value);
-        const std::string role = session.bus().role_of(it->target);
-        if (!role.empty()) {
+        for (const std::string& role : session.bus().roles_of(it->target)) {
             who += " '" + role + "'";
         }
         break;
