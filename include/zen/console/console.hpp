@@ -278,6 +278,12 @@ public:
                      const std::map<std::string, FieldValue>& fields, ConsoleTracking tracking,
                      std::string* error = nullptr);
 
+    /// As above, with the whole message already made: for a host sending a field the line
+    /// grammar has no literal for, such as a list. Its shape must be registered here, and it is
+    /// sent as the registered definition, gated the same way.
+    Submitted submit(loom::WeaveId target, const loom::Value& value, ConsoleTracking tracking,
+                     std::string* error = nullptr);
+
     // ---- The ask book: which arrival is entitled to answer which question ----
     // Every correlation this console stamps comes from its one `loom::AskBook`, so no ordinary
     // send carries a number an open conversation is using. An arrival settles a conversation

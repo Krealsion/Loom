@@ -36,6 +36,20 @@ struct RolePublication {
     explicit operator bool() const noexcept { return authored; }
 };
 
+/// What a release of one role came to. A release is its holder leaving the role: traffic
+/// addressed to it is refused at its turn, as to any unheld role, and its role claims end
+/// (SENSE-05). The holder keeps every other role it holds.
+/// MSG-13; docs/laws/messaging-laws.md
+enum class RoleRelease : std::uint8_t {
+    Released = 0, ///< the role has no holder now
+    NotHeld,      ///< the asker does not hold the role now, or the name is empty; nothing changed
+    /// This bus offers no release: a loaded library has no release verb across the dynamic ABI,
+    /// and releases a role through the control door (`loom::ReleaseRole`). Nothing changed.
+    NotOffered,
+};
+
+const char* name_of(RoleRelease r) noexcept;
+
 /// The send and publish surface a Weave's handle() uses. The Switchboard implements it
 /// directly; a host adapter for a library Weave forwards across the C ABI. A Weave sees only
 /// this, so the same Weave works compiled in or loaded.
@@ -130,6 +144,14 @@ public:
         (void)as_role;
         (void)msg;
         return RolePublication{};
+    }
+
+    /// Leave `role`: this weave stops holding it, now, and keeps every other role it holds. The
+    /// default refuses: a bus with no release says `NotOffered` and changes nothing.
+    /// MSG-13; docs/laws/messaging-laws.md
+    virtual RoleRelease release_role(std::string_view role) {
+        (void)role;
+        return RoleRelease::NotOffered;
     }
 
     // ---- Senses (SENSE-01..05) -----------------------------------------------

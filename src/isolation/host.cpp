@@ -762,6 +762,13 @@ bool IsolationHost::reload(const std::string& name) {
 
 OutOfProcessResult IsolationHost::mount(const std::string& name, const std::string& so_path,
                                         loom::Grant grant, const std::string& role) {
+    return mount(name, so_path, std::move(grant),
+                 role.empty() ? std::vector<std::string>{} : std::vector<std::string>{role});
+}
+
+OutOfProcessResult IsolationHost::mount(const std::string& name, const std::string& so_path,
+                                        loom::Grant grant,
+                                        const std::vector<std::string>& roles) {
     if (links_.count(name) != 0) {
         return {false, {}, "already mounted: " + name};
     }
@@ -909,7 +916,7 @@ OutOfProcessResult IsolationHost::mount(const std::string& name, const std::stri
     OutOfProcessWeave* raw = proxy.get();
     loom::WeaveId id;
     try {
-        id = bus_.register_weave(std::move(proxy), std::move(grant), role);
+        id = bus_.register_weave(std::move(proxy), std::move(grant), roles);
     } catch (const std::exception& e) {
         teardown_child(*link);
         return {false, {}, std::string("register refused: ") + e.what()};

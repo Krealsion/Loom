@@ -7,13 +7,15 @@ ABI. Laws: [KERN-01..05](../laws/kernel-laws.md). ABI detail:
 
 ## Loading
 
-`Kernel::load(name, path[, role])` — open the library, fetch and version-check
+`Kernel::load(name, path[, role | roles])` — open the library, fetch and version-check
 the descriptor, construct the instance, reconstruct its manifest (`zen.Manifest`
 v5: the nested components it `referenced`, its accept-set, its state schema, its
 optional `requests`, `claims` and `emits`, all crossing as gated values and all
 claimed through the agreement wall — a divergent or self-contradictory
 declaration is a refused load, with the shape named), register a **host
-adapter** on the bus (optionally bound to a role). The adapter *is* a `Weave`;
+adapter** on the bus (bound to the roles named, all or none:
+[MSG-13](../laws/messaging-laws.md#msg-13--a-weave-answers-to-the-set-of-roles-it-was-bound-to)).
+The admission policy is asked about the whole set. The adapter *is* a `Weave`;
 on the bus a loaded weave is indistinguishable from a native one, declaring the
 same four lists a native one declares. Grants: the admission policy's verdict,
 or the grant a four-argument `load` named at its call site
@@ -27,8 +29,10 @@ and the artifact that prepared is the artifact that goes live
 
 ## Unloading and lifetime
 
-`unload(name)` / `unload_role(role)` (selects the **live** holder) /
-destruction of the Kernel unload everything it still holds. The lifetime chain
+`unload(name)` / `unload_role(role)` (selects the **live** holder, and so
+releases every role it holds) / destruction of the Kernel unload everything it
+still holds. `release_role(role)` lets the live holder leave that one role and
+keeps it loaded, with its other roles. The lifetime chain
 is exact-once by construction ([KERN-02](../laws/kernel-laws.md)): the record
 and the adapter share the `LoadedLibrary`; the adapter's destructor destroys
 the instance and releases its share — so a candidate discarded deep inside a
@@ -50,11 +54,14 @@ replacement's business, never reload's.
 
 ## Role truth
 
-`role_of` / `query_role` / `weave_id` derive from the Switchboard's live
+`roles_of` / `query_role` / `weave_id` derive from the Switchboard's live
 tables ([KERN-03](../laws/kernel-laws.md)) — there is no kernel-side role
-cache to drift, so a role moved by admission (no Kernel call anywhere) is
-reported correctly at once, including truthfully-unchanged during
-`AdmissionPending`.
+cache to drift, so a role moved by admission or released (no Kernel call
+anywhere) is reported correctly at once, including truthfully-unchanged during
+`AdmissionPending`. The control door says every role a library holds:
+`ListLibraries` answers `name@r1+r2`, and `QueryRole`'s `RoleInfo` carries the
+holder's `roles`. It reads the load of version 2, which names one role, as a
+set of one, as the Weave Manager reads `zen.LoadWeave` v1.
 
 ## Platforms
 

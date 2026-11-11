@@ -12,12 +12,17 @@ been told. Laws: [PR-01..09](../laws/replacement-laws.md). Authoring surface:
 |---|---|---|
 | initiator | begins/aborts/commits; owns the outcome | the decision-maker |
 | coordinator | the preparation conversation; offers the answer | talks the candidate through |
-| incumbent | the role, throughout preparation | never told anything |
+| incumbent | the role, throughout preparation, and no other | never told anything |
 | candidate | sealed to the exact coordinator | outside the world until admitted |
 
 Every participant is bound as an exact **(id, life, incarnation)** at `begin`;
 any drift aborts or refuses — a successor at the same address is a different
-participant.
+participant. A replacement moves one role, then seals the incumbent for
+retirement, so an incumbent holding several roles
+([MSG-13](../laws/messaging-laws.md#msg-13--a-weave-answers-to-the-set-of-roles-it-was-bound-to))
+is refused, changing nothing: `SeveralRoles` at `begin` and at an admission, and
+`false` from a direct `commit_candidate`. The incumbent releasing the role
+during preparation aborts the transaction, `RoleChanged`.
 
 ## States
 

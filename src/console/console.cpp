@@ -354,6 +354,28 @@ Submitted ConsoleEngine::submit(loom::WeaveId target, std::string_view name,
     return Submitted{t, last_ask_};
 }
 
+Submitted ConsoleEngine::submit(loom::WeaveId target, const loom::Value& value,
+                                ConsoleTracking tracking, std::string* error) {
+    const loom::Schema& made = value.schema();
+    std::shared_ptr<const loom::Schema> schema = bus_.resolve_schema(made.name(), made.version());
+    if (!schema) {
+        if (error != nullptr) {
+            *error = "no such registered shape: " + made.name() + " v" +
+                     std::to_string(made.version());
+        }
+        return Submitted{};
+    }
+    std::map<std::string, loom::Cell> cells;
+    for (const loom::Field& f : schema->fields()) {
+        if (const loom::Cell* c = value.get(f.name)) {
+            cells.insert_or_assign(f.name, *c);
+        }
+    }
+    const TrackingForOneSend scope(next_tracking_, tracking);
+    const loom::Ticket t = assemble_and_send(target, schema, cells);
+    return Submitted{t, last_ask_};
+}
+
 SendOutcome ConsoleEngine::outcome(loom::Ticket t) const {
     const loom::DeliveryOutcome o = bus_.outcome(t);
     SendOutcome s;

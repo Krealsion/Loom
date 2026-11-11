@@ -39,7 +39,9 @@ supplies the mechanism and no vocabulary of either.
   their contract and pay nothing: a weave that declares no `on_claim_published`
   hears nothing and is applied trivially.
 - **No role keys.** An operation binds personal keys; a claimant may be *named*
-  by the role it holds at `begin`, which resolves to the exact holder then.
+  by a role it holds at `begin`, which resolves to the exact holder then. A
+  claimant named by weave is told a failure in the first ceiling role it holds,
+  the one that admitted it, whatever other roles it holds.
 - **No loaded coordination.** A loaded weave can offer; the initiator's verbs are
   native ([what crosses the ABI](#what-crosses-the-abi)).
 - **No durability across a process**, and single-threaded, FIFO, non-reentrant

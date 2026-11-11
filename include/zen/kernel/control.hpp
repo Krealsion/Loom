@@ -5,17 +5,19 @@
 #define ZEN_KERNEL_CONTROL_HPP
 
 // The kernel's message door: a control Weave accepts LoadLibrary, ReloadLibrary, UnloadLibrary,
-// UnloadRole, ListLibraries and QueryRole and calls the Kernel's load, reload_from, unload,
-// unload_role, loaded and query_role. The right to send those shapes to it is the load
-// capability, the most dangerous grant; a Weave without it is `CapabilityDenied` at delivery.
+// UnloadRole, ReleaseRole, ListLibraries and QueryRole and calls the Kernel's load, reload_from,
+// unload, unload_role, release_role, loaded and query_role. The right to send those shapes to it
+// is the load capability, the most dangerous grant; a Weave without it is `CapabilityDenied` at
+// delivery.
 //
 // Every operation replies to the asker (reply_to if given, else the stamped sender):
 //   LoadLibrary    -> zen.Result{weave id}   | zen.Refused{why}
 //   ReloadLibrary  -> zen.Ack                | zen.Refused{why}
 //   UnloadLibrary  -> zen.Ack                | zen.Refused{why}
 //   UnloadRole     -> zen.Ack                | zen.Refused{why}
-//   ListLibraries  -> zen.Result{"a,b@role"} | (never refuses)
-//   QueryRole      -> RoleInfo{holder, converses}
+//   ReleaseRole    -> zen.Ack                | zen.Refused{why}
+//   ListLibraries  -> zen.Result{"a,b@role,c@r1+r2"} | (never refuses)
+//   QueryRole      -> RoleInfo{holder, converses, roles}
 // The door executes primitives only; composites such as a swap belong to an orchestrator (the
 // Weave Manager, kernel/manager.hpp), which another can replace.
 //
@@ -32,6 +34,7 @@
 #include <zen/kernel/kernel.hpp>
 #include <zen/switchboard.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <functional>
 #include <limits>
@@ -39,16 +42,31 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace loom {
 
-/// Load `path` under `name`; a non-empty `role` binds the loaded Weave to it, and load is the
-/// only moment a role can be bound.
+/// Load `path` under `name`, binding the loaded Weave to every role in `roles`, all or none
+/// (MSG-13); none binds no role. Load is the only moment a role can be bound.
 struct LoadLibrary {
     std::string name;
     std::string path;
+    std::vector<std::string> roles; ///< in binding order; empty = bind no role
+    ZEN_SHAPE(LoadLibrary, 3, ZEN_FIELD(name), ZEN_FIELD(path), ZEN_FIELD(roles));
+};
+
+/// The load of version 2, which names one role. The door answers it as the load of a set of one,
+/// and an empty `role` as a load that binds none.
+struct LoadLibraryV2 {
+    std::string name;
+    std::string path;
     std::string role; ///< empty = bind no role
-    ZEN_SHAPE(LoadLibrary, 2, ZEN_FIELD(name), ZEN_FIELD(path), ZEN_FIELD(role));
+    using ZenSelf = LoadLibraryV2;
+    static constexpr const char* zen_name = "LoadLibrary";
+    static constexpr std::uint32_t zen_version = 2;
+    static auto zen_fields() {
+        return std::make_tuple(ZEN_FIELD(name), ZEN_FIELD(path), ZEN_FIELD(role));
+    }
 };
 
 struct ReloadLibrary {
@@ -63,10 +81,18 @@ struct UnloadLibrary {
 };
 
 /// Unload whichever loaded library holds `role` now: the only thing it can unload is the role's
-/// holder.
+/// holder. The artifact goes, and every role it holds with it.
 struct UnloadRole {
     std::string role;
     ZEN_SHAPE(UnloadRole, 1, ZEN_FIELD(role));
+};
+
+/// Release `role` from the loaded library that holds it now: the holder leaves that role, keeps
+/// running and keeps its other roles (MSG-13). Answered `zen.Ack`, or `zen.Refused` when no
+/// loaded library holds it.
+struct ReleaseRole {
+    std::string role;
+    ZEN_SHAPE(ReleaseRole, 1, ZEN_FIELD(role));
 };
 
 /// Ask what is loaded, answered from the kernel's live map.
@@ -82,14 +108,15 @@ struct QueryRole {
     ZEN_SHAPE(QueryRole, 1, ZEN_FIELD(role));
 };
 
-/// The answer, bespoke because both fields are needed to act: a steward asking an incumbent for
-/// its letter must know whose stamped sender to require on the reply. `holder == 0` means no
-/// weave this Kernel loaded holds the role: unheld, or held natively. Either way, not a
-/// participant.
+/// The answer, bespoke because its fields are needed to act: a steward asking an incumbent for
+/// its letter must know whose stamped sender to require on the reply, and a swap must know every
+/// role the holder holds. `holder == 0` means no weave this Kernel loaded holds the role:
+/// unheld, or held natively. Either way, not a participant, and `roles` is empty.
 struct RoleInfo {
     std::int64_t holder;
     bool converses;
-    ZEN_SHAPE(RoleInfo, 1, ZEN_FIELD(holder), ZEN_FIELD(converses));
+    std::vector<std::string> roles; ///< every role the holder holds now, in binding order
+    ZEN_SHAPE(RoleInfo, 2, ZEN_FIELD(holder), ZEN_FIELD(converses), ZEN_FIELD(roles));
 };
 
 /// The control Weave's state: how many operations it has performed, and the activation sequence
@@ -138,8 +165,9 @@ struct LifecycleAdoption {
 /// answering takes only the ordinary Emit<...> grant.
 class ControlWeave
     : public loom::WeaveBase<ControlWeave, ControlState,
-                             loom::Accept<LoadLibrary, ReloadLibrary, UnloadLibrary, UnloadRole,
-                                          ListLibraries, QueryRole>,
+                             loom::Accept<LoadLibrary, LoadLibraryV2, ReloadLibrary,
+                                          UnloadLibrary, UnloadRole, ReleaseRole, ListLibraries,
+                                          QueryRole>,
                              loom::Emit<loom::Result, loom::Ack, loom::Refused, RoleInfo,
                                         loom::Activated>> {
 public:
@@ -153,22 +181,11 @@ public:
     /// A load that arrives as a message is one the host did not write, so it goes through the
     /// Kernel's policy-mediated `load` (`zen/kernel/admission.hpp`). A refusal carries the
     /// policy's own sentence back to the asker as `zen.Refused`, under its correlation.
-    void on(const LoadLibrary& m, loom::Mail& mail) {
-        ++state_.ops;
-        if (const char* blocked = activation_block()) {
-            answer(mail, loom::Refused{blocked});
-            return; // the Kernel is never called: nothing is opened, nothing bound
-        }
-        const LoadResult r = kernel_->load(m.name, m.path, m.role);
-        if (r.ok) {
-            // The incarnation is committed. The host adopts it first (LifecycleAdoption), then
-            // the activation is queued, then the asker hears "loaded".
-            adopt(mail, m.name, r.id);
-            announce_activation(mail, r.id);
-            answer(mail, loom::Result{std::to_string(r.id.value)});
-        } else {
-            answer(mail, loom::Refused{r.error});
-        }
+    void on(const LoadLibrary& m, loom::Mail& mail) { load(m.name, m.path, m.roles, mail); }
+
+    void on(const LoadLibraryV2& m, loom::Mail& mail) {
+        load(m.name, m.path,
+             m.role.empty() ? std::vector<std::string>{} : std::vector<std::string>{m.role}, mail);
     }
 
     void on(const ReloadLibrary& m, loom::Mail& mail) {
@@ -217,6 +234,15 @@ public:
         }
     }
 
+    void on(const ReleaseRole& m, loom::Mail& mail) {
+        ++state_.ops;
+        if (kernel_->release_role(m.role)) {
+            answer(mail, loom::Ack{});
+        } else {
+            answer(mail, loom::Refused{"no loaded library holds role '" + m.role + "'"});
+        }
+    }
+
     void on(const ListLibraries&, loom::Mail& mail) {
         ++state_.ops;
         std::string out;
@@ -225,10 +251,12 @@ public:
                 out += ',';
             }
             out += n;
-            const std::string role = kernel_->role_of(n);
-            if (!role.empty()) {
-                out += '@';
-                out += role;
+            // `name@r1+r2`: `+` is outside a role name's grammar, and `,` and `@` mean something
+            // here already.
+            const std::vector<std::string> roles = kernel_->roles_of(n);
+            for (std::size_t i = 0; i < roles.size(); ++i) {
+                out += i == 0 ? '@' : '+';
+                out += roles[i];
             }
         }
         answer(mail, loom::Result{out});
@@ -238,10 +266,29 @@ public:
         ++state_.ops;
         const Kernel::RoleQuery q =
             kernel_->query_role(m.role, PrepareShutdown::zen_name, PrepareShutdown::zen_version);
-        answer(mail, RoleInfo{static_cast<std::int64_t>(q.holder.value), q.accepts});
+        answer(mail, RoleInfo{static_cast<std::int64_t>(q.holder.value), q.accepts, q.roles});
     }
 
 private:
+    void load(const std::string& name, const std::string& path,
+              const std::vector<std::string>& roles, loom::Mail& mail) {
+        ++state_.ops;
+        if (const char* blocked = activation_block()) {
+            answer(mail, loom::Refused{blocked});
+            return; // the Kernel is never called: nothing is opened, nothing bound
+        }
+        const LoadResult r = kernel_->load(name, path, roles);
+        if (r.ok) {
+            // The incarnation is committed. The host adopts it first (LifecycleAdoption), then
+            // the activation is queued, then the asker hears "loaded".
+            adopt(mail, name, r.id);
+            announce_activation(mail, r.id);
+            answer(mail, loom::Result{std::to_string(r.id.value)});
+        } else {
+            answer(mail, loom::Refused{r.error});
+        }
+    }
+
     /// Why this lineage cannot name another activation, or nullptr. Checked before the Kernel is
     /// called, so an operation never commits and then owes an activation it cannot name. At the
     /// limit this also refuses a load that would not have participated, which cannot be known
@@ -306,7 +353,8 @@ private:
             return {};
         }
         for (const std::string& n : kernel_->loaded()) {
-            if (kernel_->role_of(n) == role) {
+            const std::vector<std::string> roles = kernel_->roles_of(n);
+            if (std::find(roles.begin(), roles.end(), role) != roles.end()) {
                 return n;
             }
         }
@@ -340,14 +388,17 @@ inline loom::WeaveId mount_control(Kernel& kernel, loom::Switchboard& bus,
                                      std::move(adoption));
 }
 
-/// The grant that lets a Weave drive the kernel: the six control shapes, to the control Weave
-/// and nowhere else. The dangerous grant, so it is target-scoped, never allow_to_any.
+/// The grant that lets a Weave drive the kernel: every control shape the door accepts, to the
+/// control Weave and nowhere else. The dangerous grant, so it is target-scoped, never
+/// allow_to_any.
 inline loom::Grant load_capability(loom::WeaveId control) {
     loom::Grant g;
     g.allow(LoadLibrary::zen_name, LoadLibrary::zen_version, control);
+    g.allow(LoadLibraryV2::zen_name, LoadLibraryV2::zen_version, control);
     g.allow(ReloadLibrary::zen_name, ReloadLibrary::zen_version, control);
     g.allow(UnloadLibrary::zen_name, UnloadLibrary::zen_version, control);
     g.allow(UnloadRole::zen_name, UnloadRole::zen_version, control);
+    g.allow(ReleaseRole::zen_name, ReleaseRole::zen_version, control);
     g.allow(ListLibraries::zen_name, ListLibraries::zen_version, control);
     g.allow(QueryRole::zen_name, QueryRole::zen_version, control);
     return g;

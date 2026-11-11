@@ -48,7 +48,7 @@ public:
     std::string lib_name;
     std::string lib_path;
     void on(const Go&, au::Mail& mail) {
-        mail.send(control, loom::LoadLibrary{lib_name, lib_path, /*role=*/""});
+        mail.send(control, loom::LoadLibrary{lib_name, lib_path, /*roles=*/{}});
     }
 };
 

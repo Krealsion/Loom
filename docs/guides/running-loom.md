@@ -217,7 +217,8 @@ Two things about the code, because they are the two a first weave gets wrong:
 ```
 
 A list, not a graph: the order is yours to state, and a host that inferred it would be
-making a decision you cannot see. Each row takes `name`, `path`, an optional `role`,
+making a decision you cannot see. Each row takes `name`, `path`, an optional `role` (or
+`roles`, a list, for a weave that answers to several names, bound all or none),
 an optional `"enabled": false`, and an optional `"on_failure": "stop"` — which leaves
 every later row *pending* and says so, instead of continuing past a row you needed.
 

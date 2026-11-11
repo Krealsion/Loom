@@ -125,6 +125,12 @@ incumbent nothing. Neither implies the other; applications that need both
 verification *and* continuity author the bridge
 ([known-seams](known-seams.md#continuity-is-authored)).
 
+Either swap first asks the control door who holds the role (`QueryRole`), and
+refuses, in a `zen.Refused` naming the holder's roles and before anything is
+unloaded, a holder of several roles: it loads its successor into one role, and
+the others would go unheld
+([MSG-13](../laws/messaging-laws.md#msg-13--a-weave-answers-to-the-set-of-roles-it-was-bound-to)).
+
 ## Tests
 
 Suites `switchboard` (kill/reload/swap), `provenance` (lives, incarnations,

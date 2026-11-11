@@ -281,9 +281,24 @@ TEST_CASE("the BARE form a person writes is admitted, without the envelope") {
     REQUIRE_MESSAGE(read_boot_plan(f.path, &plan, &why), why);
     REQUIRE(plan.entries.size() == 1);
     CHECK(plan.entries[0].name == "logbook");
-    CHECK(plan.entries[0].role == "logbook");
+    CHECK(plan.entries[0].roles == std::vector<std::string>{"logbook"});
     CHECK(plan.entries[0].enabled);
     CHECK(plan.entries[0].on_failure == OnFailure::Continue);
+}
+
+TEST_CASE("a boot row names a set of roles with `roles`, beside `role`, in the order written") {
+    Scratch f("roles");
+    f.write(R"({"boot":[{"name":"a","path":"/x/a.so","role":"one","roles":["two","three"]},)"
+            R"({"name":"b","path":"/x/b.so","roles":["four"]},{"name":"c","path":"/x/c.so"}]})");
+    BootPlan plan;
+    std::string why;
+    REQUIRE_MESSAGE(read_boot_plan(f.path, &plan, &why), why);
+    REQUIRE(plan.entries.size() == 3);
+    CHECK(plan.entries[0].roles == std::vector<std::string>{"one", "two", "three"});
+    CHECK(plan.entries[1].roles == std::vector<std::string>{"four"});
+    CHECK(plan.entries[2].roles.empty());
+    CHECK(roles_text(plan.entries[0].roles, " @") == " @one+two+three");
+    CHECK(roles_text(plan.entries[2].roles, " @").empty());
 }
 
 TEST_CASE("the ENVELOPED form the host writes is admitted too") {

@@ -17,6 +17,7 @@ and held by review alone.
 | `kMaxDeferredAnswers` | <!-- value kMaxDeferredAnswers -->64<!-- /value --> | `Exhausted` refusal on the tap; the immediate answer right survives. **Loom-wide, not per weave** |
 | `kJournalCapacity` | <!-- value kJournalCapacity -->1024<!-- /value --> | ring: older ticket outcomes read as `Pending`, exactly like unknown seqs |
 | `kMaxPreparedReplacements` | <!-- value kMaxPreparedReplacements -->8<!-- /value --> | `CapacityExhausted` before anything is inspected |
+| `kMaxRolesPerWeave` | <!-- value kMaxRolesPerWeave -->8<!-- /value --> | roles one weave is bound to at registration; a larger set throws `std::invalid_argument` and binds none of it (a load fails cleanly) |
 | `kMaxPreparationBudget` | <!-- value kMaxPreparationBudget -->1024<!-- /value --> | larger requests refused at `begin` |
 | `kMaxTerminalOutcomes` | <!-- value kMaxTerminalOutcomes -->16<!-- /value --> | oldest outcome dropped (evidence, not authority) |
 | `kMaxJointOperations` | <!-- value kMaxJointOperations -->8<!-- /value --> | joint-publication records **live or unreleased** per bus; `Exhausted` at `begin`, nothing reused — a record is kept until its initiator releases it, so an initiator that never releases meets this bound and never another initiator's outstanding outcome ([joint publication](joint-publication.md#the-records-lifetime-and-release)) |

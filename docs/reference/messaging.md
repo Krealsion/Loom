@@ -77,11 +77,37 @@ and is not refused for this, see [diagnostics](#diagnostics-and-the-seam)).
 ## Addressing
 
 - **Directed** — `send(WeaveId, msg)`.
-- **Role** — `send_to_role(role, msg)`: resolved to the singleton holder *at
+- **Role** — `send_to_role(role, msg)`: resolved to the role's one holder *at
   delivery* ([MSG-04](../laws/messaging-laws.md) — destination, not authorship).
   Unheld role → `NoSuchTarget`, indistinguishable from an unknown id.
 - **Publish** — every alive, unsealed, accept-matching weave at *enqueue*
   time, each delivery independently gated ([MSG-06](../laws/messaging-laws.md)).
+
+### A weave holding several roles
+
+Each role has one holder, and one weave may hold several
+([MSG-13](../laws/messaging-laws.md#msg-13--a-weave-answers-to-the-set-of-roles-it-was-bound-to)).
+They are bound when the weave is registered or loaded, as a set, all or none:
+`register_weave(weave, grant, roles)`, `Kernel::load(name, path, roles)`, a boot
+row's `roles`, the console's `start <name> <path> [role ...]`. An empty name, a
+name twice, a held name, or more than `kMaxRolesPerWeave`
+([bounds](bounds.md#switchboard)) refuses the registration and binds none of the
+names. `roles_of(id)` answers what a weave holds now, in binding order.
+
+A holder may leave one role at any time, `mail.release_role(R)`, and keeps the
+rest; a host does the same with `Switchboard::release_role`, and a loaded
+library's role is released through the control door (`ReleaseRole`), since the
+dynamic ABI has no release. Traffic addressed to a released role is refused at
+its turn, `NoSuchTarget`; its role claims end, as at removal; a prepared
+replacement over the holder aborts, `RoleChanged`.
+
+The weave's grant is one, whatever it holds: holding a second role lends it no
+reach, and each statement it speaks as a role names that role
+([role authorship](#role-authorship-role-authored-provenance)). Whether a
+second role is right for a weave is its application's judgement; Loom keeps
+the mechanism. A replacement moves one role, so it refuses an incumbent holding
+several, in words, before anything moves ([prepared
+replacement](prepared-replacement.md)).
 
 Grants authorize by shape→target or shape→role
 ([reference/capabilities](capabilities.md)); authorization-by-role happens

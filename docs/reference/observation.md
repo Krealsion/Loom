@@ -115,7 +115,8 @@ not as zero. No part of this is a sleep: the order above is the bus's own.
 publish it; the relay tells the subscriber only what the bus-stamped holder of the named role
 published at that delivery. The same shape from anyone else is counted (`foreign` in `Status`)
 and never told — a forged or wrong-source publication cannot reach a subscriber as the
-producer's.
+producer's. A holder may hold other roles too: what is told is what the holder of the named role
+published, whatever else it holds, and `role` says which role, if any, it spoke as.
 
 **Order** is the producer bus's delivery order to the listener: FIFO, one bus. It says nothing
 about any other bus, and nothing about when the producer's *other* consequences land.

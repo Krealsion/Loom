@@ -174,7 +174,7 @@ struct BusEvent {
     std::uint64_t requester_life_now = 0;
     std::uint64_t requester_incarnation_now = 0;
     /// The role this delivery was deliberately authored as, stamped on the envelope; empty
-    /// for personal speech. Not the sender's current role: `role_of(sender)` answers that, and
+    /// for personal speech. Not the sender's current roles: `roles_of(sender)` answers that, and
     /// may already differ.
     /// MSG-07; docs/laws/messaging-laws.md
     std::string authored_role{};
@@ -238,6 +238,10 @@ enum class AdmitRefusal : std::uint8_t {
     OwnerChanged,     ///< the exact coordinator life/incarnation that sealed it is gone
     IncumbentUnfit,   ///< missing, dead, or already sealed
     RoleNotHeld,      ///< the role is empty, or held by somebody other than the incumbent
+    /// The incumbent holds other roles beside this one, and an admission moves one role: it
+    /// would leave the rest on a weave sealed for retirement. Refused until a replacement can
+    /// move a set (MSG-13).
+    SeveralRoles,
     /// The candidate cannot receive the committed activation: it does not accept
     /// `zen.Activated`, or this admission's activation does not pass its gate. Asked before
     /// anything moves, so a candidate is never admitted without being told.
@@ -329,6 +333,10 @@ enum class TxnReason : std::uint8_t {
     /// This transaction's one preparation conversation has already been opened. There is one,
     /// so an answer can never be ambiguous about which ask it answers.
     PreparationAlreadyAsked,
+    /// The incumbent holds other roles beside the one named, and a replacement moves one role:
+    /// the rest would be left on a weave sealed for retirement. Refused, changing nothing, until
+    /// a replacement can move a set (MSG-13).
+    SeveralRoles,
 };
 
 /// What an authentically answering candidate said. One door takes both: readiness and refusal
@@ -406,10 +414,33 @@ public:
     WeaveId register_weave(std::unique_ptr<Weave> weave); ///< empty grant
 
     /// As register_weave(weave, grant), and bind the Weave to `role`, a named slot a send may
-    /// target instead of a WeaveId (send_to_role, Grant::allow_to_role). A role has one holder:
-    /// binding a held role throws std::invalid_argument. The binding survives the holder
-    /// reloading and is cleared by unregister_weave.
+    /// target instead of a WeaveId (send_to_role, Grant::allow_to_role): the set overload with
+    /// a set of one, and an empty `role` binds none.
     WeaveId register_weave(std::unique_ptr<Weave> weave, Grant grant, std::string role);
+
+    /// The most roles one weave may be bound to at registration.
+    /// docs/reference/bounds.md
+    static constexpr std::size_t kMaxRolesPerWeave = 8;
+
+    /// As register_weave(weave, grant), and bind the Weave to every role in `roles`, in that
+    /// order. Each role has one holder; a weave may hold several. The set is judged whole before
+    /// anything is recorded: an empty name, a name twice, a held name, or more than
+    /// `kMaxRolesPerWeave` throws std::invalid_argument and binds none of them. Registration is
+    /// the only moment a role is bound. The bindings survive the holder reloading; each ends at
+    /// `release_role` or `unregister_weave`.
+    /// MSG-13; docs/laws/messaging-laws.md
+    WeaveId register_weave(std::unique_ptr<Weave> weave, Grant grant,
+                           std::vector<std::string> roles);
+
+    /// Release `role` from `holder`, the host's door to what a holder does with
+    /// `mail.release_role`: the holder leaves that role and keeps the rest. Traffic addressed to
+    /// the role is refused at its turn (`NoSuchTarget`), its role claims end (SENSE-05), and a
+    /// prepared replacement over the holder aborts (`RoleChanged`). `NotHeld`, changing nothing,
+    /// if `holder` does not hold `role` now.
+    /// MSG-13; docs/laws/messaging-laws.md
+    RoleRelease release_role(WeaveId holder, std::string_view role);
+    /// The root's own release: a host holds no role, so it is the Bus default, `NotOffered`.
+    using Bus::release_role;
 
     /// Register with an accept-mode: `AnyRegistered` accepts any registered shape, gated against
     /// the registry's schema at delivery. A capability distinct from the grant.
@@ -734,9 +765,10 @@ public:
     /// resolves roles itself at delivery.
     WeaveId role_holder(std::string_view role) const;
 
-    /// The role this weave holds now; empty if none or no such weave. An admission moves a role
-    /// with no host call, so read this rather than remembering what was bound at registration.
-    std::string role_of(WeaveId id) const;
+    /// The roles this weave holds now, in binding order; empty if none or no such weave. An
+    /// admission moves a role, and a release ends one, with no host call, so read this rather
+    /// than remembering what was bound at registration.
+    std::vector<std::string> roles_of(WeaveId id) const;
 
     /// This participant as it is now: id, life and incarnation (`who` invalid for no such weave).
     /// A snapshot, never a reservation: the weave may die or be reloaded next turn.
@@ -753,8 +785,8 @@ public:
 
     /// The commit: unseal `candidate` and move `role` from `incumbent` to it, between two
     /// deliveries, so no turn can observe it half-done (MSG-01). Refuses, changing nothing, if the
-    /// candidate is not sealed, either weave is missing or dead, or the role is held by anyone
-    /// but the incumbent.
+    /// candidate is not sealed, either weave is missing or dead, the role is held by anyone but
+    /// the incumbent, or the incumbent holds another role too (a commit moves one role).
     bool commit_candidate(WeaveId candidate, WeaveId incumbent, const std::string& role);
 
     /// The admission: the commit above, accounting for the incumbent and for activation, and
@@ -921,7 +953,9 @@ private:
         /// an ordinary weave. A candidate receives no publication, ordinary send or role traffic
         /// and speaks only to its coordinator; the routing paths refuse on this field.
         CandidateOwner sealed_by{};
-        std::string role{}; ///< the role this Weave holds (empty if none); see roles_
+        /// The roles this Weave holds, in binding order (empty if none); each one maps here in
+        /// roles_.
+        std::vector<std::string> roles{};
         bool accepts_any = false; ///< AcceptMode::AnyRegistered — accept any registered shape (gated)
         /// Authority a host-minted administrator has installed; empty until a `GrantAuthority`
         /// names this weave. An overlay beside `grant`, never an edit of it: `grant` keeps what
@@ -1072,6 +1106,9 @@ private:
         }
         SenseClaimResult role_claim(std::string_view as_role, Value value) override {
             return sb_.role_claim_as(self_, as_role, std::move(value));
+        }
+        RoleRelease release_role(std::string_view role) override {
+            return sb_.release_role(self_, role);
         }
         SenseReading observe(WeaveId author, std::shared_ptr<const Schema> shape) override {
             return sb_.observe_as(self_, author, shape->name(), shape->version());
@@ -1434,7 +1471,8 @@ private:
 
     Registry registry_;
     std::map<std::uint64_t, WeaveRecord> weaves_;
-    std::map<std::string, WeaveId> roles_; ///< role name -> its singleton holder's id
+    /// Role name -> its one holder's id; a holder may hold several.
+    std::map<std::string, WeaveId> roles_;
     std::uint64_t next_weave_id_ = 1;
 
     std::deque<Envelope> queue_;

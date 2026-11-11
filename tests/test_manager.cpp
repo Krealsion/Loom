@@ -230,6 +230,136 @@ struct Rig {
 
 TEST_SUITE("manager") {
 
+// ---- a weave loaded into a set of roles (MSG-13) ------------------------------
+
+/// A participant that asks the control door directly and keeps each answer's name and text.
+struct DoorAsker {
+    Registered probe;
+    std::vector<std::string> names;
+    std::vector<std::string> texts;
+    std::vector<std::vector<std::string>> roles; ///< RoleInfo's, in order
+
+    explicit DoorAsker(Switchboard& bus)
+        : probe(register_probe(bus, {schema_of<Result>(), schema_of<Ack>(), schema_of<Refused>(),
+                                     schema_of<RoleInfo>()})) {
+        probe.weave->on_handle = [this](const Message& in, Bus&, ProbeWeave&) {
+            names.push_back(in.payload.schema().name());
+            std::string t;
+            if (const Cell* v = in.payload.get("value")) {
+                t = v->as_text();
+            } else if (const Cell* why = in.payload.get("reason")) {
+                t = why->as_text();
+            }
+            texts.push_back(t);
+            if (in.payload.schema().name() == RoleInfo::zen_name) {
+                roles.push_back(from_value<RoleInfo>(in.payload).roles);
+            }
+        };
+    }
+
+    template <class T>
+    void ask(Switchboard& bus, WeaveId door, const T& shape) {
+        bus.send_as(probe.id, door, Message(to_value(shape), WeaveId{}, probe.id, 1));
+        bus.drain_until_idle();
+    }
+};
+
+using Roles = std::vector<std::string>;
+
+TEST_CASE("a library loaded into a set holds each role; the door lists them, reads the older "
+          "load, and releases one") {
+    Rig r;
+    DoorAsker asker(r.bus);
+    REQUIRE(r.kernel.load("pair", ZEN_SO_WEAVE, Roles{"pair.one", "pair.two"}).ok);
+    const WeaveId pair = r.kernel.weave_id("pair");
+    CHECK(r.kernel.roles_of("pair") == Roles{"pair.one", "pair.two"});
+    CHECK(r.bus.role_holder("pair.one") == pair);
+    CHECK(r.bus.role_holder("pair.two") == pair);
+
+    // The load of version 2, one role, read as a set of one.
+    asker.ask(r.bus, r.control, LoadLibraryV2{"solo", ZEN_SO_WEAVE_B, "solo.role"});
+    REQUIRE(asker.names.back() == "zen.Result");
+    CHECK(r.kernel.roles_of("solo") == Roles{"solo.role"});
+
+    // The list says every role: `name@r1+r2`.
+    asker.ask(r.bus, r.control, ListLibraries{});
+    CHECK(asker.texts.back() == "pair@pair.one+pair.two,solo@solo.role");
+
+    // The door tells a swap every role the holder holds.
+    asker.ask(r.bus, r.control, QueryRole{"pair.two"});
+    REQUIRE_FALSE(asker.roles.empty());
+    CHECK(asker.roles.back() == Roles{"pair.one", "pair.two"});
+
+    // A release lets one go; the artifact keeps running and keeps the other.
+    asker.ask(r.bus, r.control, ReleaseRole{"pair.one"});
+    CHECK(asker.names.back() == "zen.Ack");
+    CHECK(r.kernel.roles_of("pair") == Roles{"pair.two"});
+    CHECK(r.kernel.is_loaded("pair"));
+    CHECK(r.kernel.weave_id("pair") == pair);
+    asker.ask(r.bus, r.control, ReleaseRole{"pair.one"});
+    CHECK(asker.names.back() == "zen.Refused"); // nobody holds it now
+    asker.ask(r.bus, r.control, ListLibraries{});
+    CHECK(asker.texts.back() == "pair@pair.two,solo@solo.role");
+
+    // A set overlapping a held role loads nothing and binds none of it.
+    CHECK_FALSE(r.kernel.load("dup", ZEN_SO_WEAVE_B, Roles{"dup.new", "pair.two"}).ok);
+    CHECK_FALSE(r.kernel.is_loaded("dup"));
+    CHECK_FALSE(r.bus.role_holder("dup.new").valid());
+
+    // A native holder is not the Kernel's to change.
+    Registered native = register_probe(r.bus, {ping_schema()});
+    (void)native;
+    auto owned = std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{});
+    const WeaveId held = r.bus.register_weave(std::move(owned), Grant{}, std::string("native.r"));
+    CHECK_FALSE(r.kernel.release_role("native.r"));
+    CHECK(r.bus.role_holder("native.r") == held);
+
+    // An unload by one role takes the artifact, and so every role it holds.
+    asker.ask(r.bus, r.control, UnloadRole{"pair.two"});
+    CHECK(asker.names.back() == "zen.Ack");
+    CHECK_FALSE(r.kernel.is_loaded("pair"));
+    CHECK_FALSE(r.bus.role_holder("pair.two").valid());
+}
+
+TEST_CASE("a swap of a holder of several roles is refused in words, and nothing is unloaded") {
+    Rig r;
+    REQUIRE(r.kernel.load("pair", ZEN_SO_WEAVE, Roles{"spawner", "extra"}).ok);
+    const WeaveId pair = r.kernel.weave_id("pair");
+    for (const bool graceful : {false, true}) {
+        CAPTURE(graceful);
+        Answer a = drive(r.engine, r.manager, "zen.SwapWeave",
+                         {lit("spawner"), lit("next"), lit(ZEN_SO_V2), litb(graceful)}, 2);
+        CHECK(a.name == "zen.Refused");
+        const std::string why = text_field(a.value, "reason");
+        CHECK(why.find("several roles (spawner+extra)") != std::string::npos);
+        CHECK(why.find("nothing was unloaded") != std::string::npos);
+        CHECK(r.kernel.is_loaded("pair"));
+        CHECK(r.kernel.weave_id("pair") == pair);
+        CHECK_FALSE(r.kernel.is_loaded("next"));
+        CHECK(r.kernel.roles_of("pair") == Roles{"spawner", "extra"});
+    }
+}
+
+TEST_CASE("the Manager loads into a set by the newer load and a set of one by the older") {
+    Rig r;
+    const std::size_t before = r.engine.buffer_size();
+    const Submitted sent = r.engine.submit(
+        r.manager, to_value(LoadWeave{"pair", ZEN_SO_WEAVE, Roles{"pair.one", "pair.two"}}),
+        ConsoleTracking::Untracked);
+    REQUIRE(sent.ticket.valid());
+    r.engine.pump();
+    REQUIRE(r.engine.buffer_size() == before + 1);
+    CHECK(r.engine.buffer_at(before + 1)->name == "zen.Result");
+    CHECK(r.kernel.roles_of("pair") == Roles{"pair.one", "pair.two"});
+
+    Answer one = drive(r.engine, r.manager, "zen.LoadWeave",
+                       {lit("solo"), lit(ZEN_SO_WEAVE_B), lit("solo.role")});
+    CHECK(one.name == "zen.Result");
+    CHECK(r.kernel.roles_of("solo") == Roles{"solo.role"});
+    Answer list = drive(r.engine, r.manager, "zen.ListLoaded", {});
+    CHECK(text_field(list.value, "value") == "pair@pair.one+pair.two,solo@solo.role");
+}
+
 // ---- the kernel door answers, and the Manager relays it ---------------------
 
 TEST_CASE("driven from the existing console: load, list, and every outcome comes back") {
@@ -390,8 +520,8 @@ TEST_CASE("one request, one answer: the swap's unload reply is unsolicited and i
     CHECK(r.engine.buffer_size() == settled);
 }
 
-TEST_CASE("a swap takes effect behind queued traffic — and the incumbent's in-flight replies die "
-          "with it") {
+TEST_CASE("a swap takes effect behind queued traffic — and the replies that traffic earned land "
+          "before the unload") {
     Rig r;
     std::vector<WeaveId> answered_by;
     Registered recorder = register_probe(r.bus, {pong_schema()});
@@ -406,8 +536,8 @@ TEST_CASE("a swap takes effect behind queued traffic — and the incumbent's in-
     r.bus.add_observer([&tap](const BusEvent& e) { tap.push_back(to_record(e)); });
 
     // Queue a role-send, THEN the swap command, THEN another role-send — and
-    // drain once. The swap's own two messages go to the TAIL of the queue, so
-    // both role-sends resolve while the incumbent is still the holder.
+    // drain once. The swap's question to the door, and then its own two messages, go to the
+    // TAIL of the queue, so both role-sends resolve while the incumbent is still the holder.
     r.bus.send_to_role("spawner", Message(ping(1), WeaveId{}, recorder.id));
     Composed c = r.engine.compose(r.manager, "zen.SwapWeave", 2,
                                   {lit("spawner"), lit("spawn_v2"), lit(ZEN_SO_V2), litb(false)});
@@ -419,14 +549,15 @@ TEST_CASE("a swap takes effect behind queued traffic — and the incumbent's in-
     // traffic that was already addressed to the role before it landed.
     CHECK(delivered_count(tap, "Ping", incumbent) == 2);
 
-    // OUTBOUND, the honest half: the incumbent replied to both, but only the FIRST Pong was
-    // delivered before the unload. The second was still queued when the incumbent was
-    // unregistered, and a queued message belongs to the LIFE that authored it (MSG-03), so it
-    // is refused as `SenderLifeEnded`, not the `CapabilityDenied` that would send a weaver to
-    // a grant. Unregistering ANY weave mid-queue does this; a swap makes it routine.
-    REQUIRE(answered_by.size() == 1);
+    // OUTBOUND: the incumbent replied to both, and both replies were delivered before the
+    // unload, because the swap asks the door who holds the role first and that question is
+    // queued behind them. A reply still queued when a weave is unregistered belongs to the
+    // LIFE that authored it and is refused `SenderLifeEnded` (MSG-03; the provenance suite);
+    // none is here, and none is refused for a grant.
+    REQUIRE(answered_by.size() == 2);
     CHECK(answered_by[0] == incumbent);
-    CHECK(refused_count(tap, "Pong", RefusalReason::SenderLifeEnded) == 1);
+    CHECK(answered_by[1] == incumbent);
+    CHECK(refused_count(tap, "Pong", RefusalReason::SenderLifeEnded) == 0);
     CHECK(refused_count(tap, "Pong", RefusalReason::CapabilityDenied) == 0);
 
     // The replacement did happen, and a send issued after the drain reaches the
@@ -435,8 +566,8 @@ TEST_CASE("a swap takes effect behind queued traffic — and the incumbent's in-
     CHECK_FALSE(successor == incumbent);
     r.bus.send_to_role("spawner", Message(ping(3), WeaveId{}, recorder.id));
     r.bus.drain_until_idle();
-    REQUIRE(answered_by.size() == 2);
-    CHECK(answered_by[1] == successor);
+    REQUIRE(answered_by.size() == 3);
+    CHECK(answered_by[2] == successor);
 }
 
 TEST_CASE("a failed swap leaves the role unheld: the asker hears why, and the slot refuses "
@@ -477,7 +608,7 @@ TEST_CASE("swapping a role nobody holds is a plain load — the unload's 'failur
                      {lit("spawner"), lit("spawn_v1"), lit(ZEN_SO_WEAVE), litb(false)}, 2);
     CHECK(a.name == "zen.Result");
     CHECK(r.kernel.is_loaded("spawn_v1"));
-    CHECK(r.kernel.role_of("spawn_v1") == "spawner");
+    CHECK(r.kernel.roles_of("spawn_v1") == std::vector<std::string>{"spawner"});
 }
 
 TEST_CASE("a swap cannot destroy a weave the asker did not name: the unload is role-addressed") {
@@ -608,7 +739,7 @@ TEST_CASE("the Manager holds no privilege: a second granted participant drives t
     struct Driver : WeaveBase<Driver, GoState, Accept<Go>, Emit<LoadLibrary>> {
         WeaveId control{};
         void on(const Go&, Mail& mail) {
-            mail.send(control, LoadLibrary{"direct", ZEN_SO_WEAVE, "spawner"});
+            mail.send(control, LoadLibrary{"direct", ZEN_SO_WEAVE, {"spawner"}});
         }
     };
     WeaveId driver = mount_granted<Driver>(r.bus, load_capability(r.control));
@@ -618,14 +749,14 @@ TEST_CASE("the Manager holds no privilege: a second granted participant drives t
     r.bus.drain_until_idle();
 
     CHECK(r.kernel.is_loaded("direct"));
-    CHECK(r.kernel.role_of("direct") == "spawner");
+    CHECK(r.kernel.roles_of("direct") == std::vector<std::string>{"spawner"});
 
     // And the same door refuses a participant that was granted nothing — the
     // authority is the grant, never the identity of who is asking.
     struct Sneak : WeaveBase<Sneak, GoState, Accept<Go>, Emit<LoadLibrary>> {
         WeaveId control{};
         void on(const Go&, Mail& mail) {
-            mail.send(control, LoadLibrary{"sneaked", ZEN_SO_WEAVE_B, ""});
+            mail.send(control, LoadLibrary{"sneaked", ZEN_SO_WEAVE_B, {}});
         }
     };
     WeaveId sneak = mount_granted<Sneak>(r.bus, Grant::nothing());
@@ -792,7 +923,7 @@ TEST_CASE("a forged RoleInfo cannot redirect the ceremony at an arbitrary weave"
     const WeaveId mgr = r.manager;
     impostor.weave->on_handle = [mgr](const Message&, Bus& b, ProbeWeave&) {
         // correlation 1 is the live chain's first sequence — a correct guess.
-        b.send(mgr, Message(to_value(RoleInfo{99, true}), WeaveId{}, WeaveId{}, 1));
+        b.send(mgr, Message(to_value(RoleInfo{99, true, {}}), WeaveId{}, WeaveId{}, 1));
     };
 
     std::vector<TapRecord> tap;
@@ -1063,7 +1194,7 @@ TEST_CASE("the direct control door activates too — the fact is not the Manager
         WeaveId control{};
         std::vector<std::string> results;
         void on(const Go&, Mail& mail) {
-            mail.send(control, LoadLibrary{"direct", ZEN_SO_ACTIVATES, ""});
+            mail.send(control, LoadLibrary{"direct", ZEN_SO_ACTIVATES, {}});
         }
         void on(const Result& res, Mail&) { results.push_back(res.value); }
     };
@@ -1271,7 +1402,7 @@ TEST_CASE("the activation sequence lives in the control state and survives reviv
     struct Driver : WeaveBase<Driver, GoState, Accept<Go>, Emit<LoadLibrary>> {
         WeaveId control{};
         void on(const Go&, Mail& mail) {
-            mail.send(control, LoadLibrary{"c", ZEN_SO_ACTIVATES, ""});
+            mail.send(control, LoadLibrary{"c", ZEN_SO_ACTIVATES, {}});
         }
     };
     WeaveId driver = mount_granted<Driver>(r.bus, load_capability(control2));
@@ -1312,7 +1443,7 @@ TEST_CASE("an exhausted lineage refuses a load before the Kernel is called") {
     // The Kernel was never called: nothing opened, nothing registered, no role
     // bound — the slot still refuses like an unmounted provider.
     CHECK_FALSE(r.kernel.is_loaded("live"));
-    CHECK(r.kernel.role_of("live").empty());
+    CHECK(r.kernel.roles_of("live").empty());
     Ticket t = r.bus.send_to_role("spawner", Message(ping(1)));
     r.bus.drain_until_idle();
     CHECK(r.bus.outcome(t).refusal.reason == RefusalReason::NoSuchTarget);

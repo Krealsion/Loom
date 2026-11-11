@@ -522,13 +522,26 @@ public:
     /// this conversation (the correlation it minted, the bus's stamp of who spoke).
     Answer ask(loom::WeaveId target, const char* shape, std::uint32_t version,
                const std::map<std::string, loom::FieldValue>& fields, int turns = kSettleTurns) {
-        Answer a;
         std::string error;
         // TRACKED, AND THEREFORE OWED: this host holds a slot for every conversation it opens
         // and returns it by taking the answer here, by taking it in `report_late_answers`
         // when it lands later, or by forgetting it at the person's word.
         const loom::Submitted sent = console_->submit(target, shape, version, fields,
                                                       loom::ConsoleTracking::Tracked, &error);
+        return settle(sent, shape, error, turns);
+    }
+
+    /// As above, with the whole message made: a shape with a field a line cannot spell.
+    Answer ask(loom::WeaveId target, const loom::Value& value, int turns = kSettleTurns) {
+        std::string error;
+        const loom::Submitted sent =
+            console_->submit(target, value, loom::ConsoleTracking::Tracked, &error);
+        return settle(sent, value.schema().name().c_str(), error, turns);
+    }
+
+    Answer settle(const loom::Submitted& sent, const char* shape, const std::string& error,
+                  int turns) {
+        Answer a;
         if (!error.empty()) {
             // A shape this console could not compose and a weave that chose not to answer
             // are different problems.
@@ -629,8 +642,7 @@ public:
     /// One boot row, through the steward, with its outcome attributed.
     void start_row(const loom::host::BootEntry& e, loom::host::BootOutcome* row) {
 #if ZEN_HOST_HAS_KERNEL
-        const Answer a = ask(manager_, loom::LoadWeave::zen_name, loom::LoadWeave::zen_version,
-                             {{"name", e.name}, {"path", e.path}, {"role", e.role}});
+        const Answer a = ask(manager_, loom::to_value(loom::LoadWeave{e.name, e.path, e.roles}));
         if (a.state == Answer::State::Pending) {
             // A ROW MAY LEGITIMATELY NOT BE DONE YET, and saying so beats both waiting
             // forever and calling it started. The conversation stays open; the console
@@ -766,7 +778,8 @@ void print_help() {
   links                         the links this host holds to other hosts, and their state
   links connect <name>          connect a link again (a new session; open asks were lost)
 
-  start <name> <path> [role]    load an artifact (through the steward — policy decides)
+  start <name> <path> [role ...]  load an artifact into its roles (through the steward —
+                                policy decides)
   reload <name> <path>          reload it in place, same id, state carried
   stop <name>                   unload it: that application ends, this host does not
   list                          what the steward says is loaded, and under which roles
@@ -1147,14 +1160,16 @@ void cmd_lifecycle(HostSession& s, const std::vector<Token>& tok) {
     };
     if (cmd == "start") {
         if (tok.size() < 3) {
-            std::cout << "  usage: start <name> <path> [role]\n";
+            std::cout << "  usage: start <name> <path> [role ...]\n";
             return;
         }
         const std::string name = tok[1].text;
-        const Answer a = s.ask(s.manager(), loom::LoadWeave::zen_name, loom::LoadWeave::zen_version,
-                               {{"name", name},
-                                {"path", tok[2].text},
-                                {"role", tok.size() > 3 ? tok[3].text : std::string{}}});
+        std::vector<std::string> roles;
+        for (std::size_t i = 3; i < tok.size(); ++i) {
+            roles.push_back(tok[i].text);
+        }
+        const Answer a =
+            s.ask(s.manager(), loom::to_value(loom::LoadWeave{name, tok[2].text, roles}));
         if (!a.settled()) {
             std::cout << "  " << a.trouble << '\n';
             print_adoption();
@@ -1534,7 +1549,7 @@ int main(int argc, char** argv) {
         std::cout << "boot plan: " << (plan.source.empty() ? "(none found)" : plan.source) << '\n';
         for (const loom::host::BootEntry& e : plan.entries) {
             std::cout << "  " << e.name << "  " << e.path
-                      << (e.role.empty() ? "" : ("  @" + e.role))
+                      << loom::host::roles_text(e.roles, "  @")
                       << (e.enabled ? "" : "  (disabled)") << '\n';
         }
         std::cout << "authority: " << (store.path().empty() ? "(none)" : store.path()) << '\n';

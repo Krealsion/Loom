@@ -35,6 +35,7 @@
 #include <functional>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace loom {
 
@@ -68,8 +69,10 @@ struct AdmissionRequest {
     /// canonicalizes this itself.
     std::string path;
 
-    /// The role it would bind, or empty; load is the only moment a role can be bound.
-    std::string role;
+    /// The roles it would bind, in order, or none; load is the only moment a role can be bound.
+    /// A policy judges the set whole: one that allows a weave one role does not by that allow it
+    /// a second (MSG-13).
+    std::vector<std::string> roles;
 
     /// Which build this is, by its bytes, computed only if the policy asks. `build.content_id()`
     /// is SHA-256 of the file truncated to 128 bits, lowercase hex, the identity

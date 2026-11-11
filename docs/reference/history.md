@@ -242,7 +242,7 @@ rather than invented — two categories that are rare *by construction*:
 
 | Category | Shapes |
 |---|---|
-| what code is loaded | `LoadLibrary`, `ReloadLibrary`, `UnloadLibrary`, `UnloadRole`, `zen.LoadWeave`, `zen.SwapWeave`, `zen.ReloadWeave` |
+| what code is loaded, and under which roles | `LoadLibrary`, `ReloadLibrary`, `UnloadLibrary`, `UnloadRole`, `ReleaseRole`, `zen.LoadWeave`, `zen.SwapWeave`, `zen.ReloadWeave` |
 | who may speak | `zen.RequestAuthority`, `zen.AuthorityPrompt`, `zen.ApproveAuthority`, `zen.RefuseAuthority`, `zen.RevokeAuthority`, `zen.AuthorityGranted` |
 
 A Weaver's decision carries only the name of the prompt it answers

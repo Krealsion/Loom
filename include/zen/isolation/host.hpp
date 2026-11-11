@@ -70,6 +70,12 @@ public:
     OutOfProcessResult mount(const std::string& name, const std::string& so_path,
                              loom::Grant grant, const std::string& role = "");
 
+    /// As above, the proxy bound to every role in `roles`, all or none (MSG-13): a refused set
+    /// refuses the mount, and the child is torn down. The child speaks as none of them across
+    /// the pipe, as for one.
+    OutOfProcessResult mount(const std::string& name, const std::string& so_path,
+                             loom::Grant grant, const std::vector<std::string>& roles);
+
     /// Mount the StorageBroker out of process with host-granted FsAccess::WriteScoped to
     /// `storage_root` only (created if absent), permission to reply StorageValue to any mod, and
     /// the role "storage", so floored mods reach it by role. Its storage is keyed by the
