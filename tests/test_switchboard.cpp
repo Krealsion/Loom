@@ -18,6 +18,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -32,6 +33,15 @@ Registered reg(Switchboard& bus, std::vector<std::shared_ptr<const Schema>> acce
                Grant grant = Grant{}.allow_any()) {
     return register_probe(bus, std::move(accept), max_reloads, revive_from_last_good,
                           std::move(grant));
+}
+
+// The write is compiled only when the handed pointer allows it. A const nested
+// value discards the write; a mutable one changes every recipient that shares it.
+template <class Nested>
+void write_nested_if_mutable(Nested& nested) {
+    if constexpr (requires { nested->set("n", Cell::integer(9)); }) {
+        nested->set("n", Cell::integer(9));
+    }
 }
 } // namespace
 
@@ -119,6 +129,57 @@ TEST_CASE("publish reaches every accepter in registration order; non-accepters g
     CHECK(a.weave->handled_values.size() == 1);
     CHECK(b.weave->handled_values.size() == 1);
     CHECK(c.weave->handled_values.empty());
+}
+
+TEST_CASE("a recipient cannot change the nested value another receives") {
+    // One publication shares one nested value. The first raw weave is handed that
+    // value and writes it when the type allows the write; the second weave and the
+    // tap then read it. Pointer equality is the sharing, so a per-recipient copy
+    // cannot make this pass by giving the second weave a private value.
+    using Handed = std::remove_reference_t<decltype(*std::declval<const Cell&>().as_message())>;
+    static_assert(std::is_const_v<Handed>);
+    const auto piece = SchemaBuilder("Piece", 1).field("n", Kind::Int).build();
+    const auto bundle = SchemaBuilder("Bundle", 1).message("piece", piece).build();
+
+    Switchboard bus;
+    Registered first = reg(bus, {bundle});
+    Registered second = reg(bus, {bundle});
+
+    const Value* first_piece = nullptr;
+    const Value* second_piece = nullptr;
+    std::int64_t seen_by_second = -1;
+    std::vector<std::int64_t> tapped;
+
+    first.weave->on_handle = [&](const Message& in, Bus&, ProbeWeave&) {
+        const auto& nested = in.payload.get("piece")->as_message();
+        first_piece = nested.get();
+        write_nested_if_mutable(nested);
+    };
+    second.weave->on_handle = [&](const Message& in, Bus&, ProbeWeave&) {
+        const auto& nested = in.payload.get("piece")->as_message();
+        second_piece = nested.get();
+        seen_by_second = nested->get("n")->as_int();
+    };
+    bus.add_observer([&](const BusEvent& e) {
+        if (e.kind == EventKind::Delivered && e.payload != nullptr) {
+            tapped.push_back(e.payload->get("piece")->as_message()->get("n")->as_int());
+        }
+    });
+
+    Value inner(piece);
+    inner.set("n", Cell::integer(4));
+    Value outer(bundle);
+    outer.set("piece", Cell::message(std::move(inner)));
+
+    CHECK(bus.publish(Message(std::move(outer))) == 2);
+    bus.drain_until_idle();
+
+    CHECK(seen_by_second == 4);
+    REQUIRE(tapped.size() == 2);
+    CHECK(tapped[0] == 4);
+    CHECK(tapped[1] == 4);
+    CHECK(first_piece == second_piece);
+    CHECK(first_piece != nullptr);
 }
 
 TEST_CASE("publish with zero accepters is legal: recipient count 0, no delivery") {

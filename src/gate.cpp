@@ -164,7 +164,7 @@ void validate_cell(const Cell& c, const TypeRef& t, Ctx& ctx, const std::string&
             ctx.emit(Error{ErrorKind::TypeMismatch, path, type_label(t), name_of(c.kind()), ""});
             return;
         }
-        const std::shared_ptr<Value>& nested = c.as_message();
+        const std::shared_ptr<const Value>& nested = c.as_message();
         if (!nested) {
             ctx.emit(Error{ErrorKind::NullMessage, path, type_label(t), "null", ""});
             return;

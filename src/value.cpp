@@ -15,12 +15,12 @@ Cell Cell::boolean(bool v) { return Cell(Storage{std::in_place_type<bool>, v}); 
 Cell Cell::bytes(Bytes v) { return Cell(Storage{std::in_place_type<Bytes>, std::move(v)}); }
 
 Cell Cell::message(Value v) {
-    return Cell(Storage{std::in_place_type<std::shared_ptr<Value>>,
-                        std::make_shared<Value>(std::move(v))});
+    return Cell(Storage{std::in_place_type<std::shared_ptr<const Value>>,
+                        std::make_shared<const Value>(std::move(v))});
 }
 
-Cell Cell::message(std::shared_ptr<Value> v) {
-    return Cell(Storage{std::in_place_type<std::shared_ptr<Value>>, std::move(v)});
+Cell Cell::message(std::shared_ptr<const Value> v) {
+    return Cell(Storage{std::in_place_type<std::shared_ptr<const Value>>, std::move(v)});
 }
 
 Cell Cell::list(Array v) { return Cell(Storage{std::in_place_type<Array>, std::move(v)}); }
@@ -49,8 +49,8 @@ double Cell::as_float() const { return std::get<double>(data_); }
 const std::string& Cell::as_text() const { return std::get<std::string>(data_); }
 bool Cell::as_bool() const { return std::get<bool>(data_); }
 const Bytes& Cell::as_bytes() const { return std::get<Bytes>(data_); }
-const std::shared_ptr<Value>& Cell::as_message() const {
-    return std::get<std::shared_ptr<Value>>(data_);
+const std::shared_ptr<const Value>& Cell::as_message() const {
+    return std::get<std::shared_ptr<const Value>>(data_);
 }
 const Cell::Array& Cell::as_list() const { return std::get<Array>(data_); }
 

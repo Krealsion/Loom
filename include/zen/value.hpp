@@ -28,14 +28,14 @@ using Bytes = std::vector<std::uint8_t>;
 /// message can carry a message, a list can carry lists or messages, and the one
 /// boundary rule recurses to any depth.
 ///
-/// Nested messages are held by shared_ptr; copying a Value therefore shares its
-/// sub-values. Values are intended to be treated as immutable after they pass
-/// the gate — do not mutate a sub-value that may be shared.
+/// Nested messages are held by shared_ptr<const Value>. Copying a Value therefore
+/// shares those sub-values, and the nested value cannot be changed through the
+/// cell. A Value is mutable until it is placed in a cell.
 class Cell {
 public:
     using Array = std::vector<Cell>;
     using Storage = std::variant<std::int64_t, double, std::string, bool, Bytes,
-                                 std::shared_ptr<Value>, Array>;
+                                 std::shared_ptr<const Value>, Array>;
 
     static Cell integer(std::int64_t v);
     static Cell real(double v);
@@ -43,7 +43,7 @@ public:
     static Cell boolean(bool v);
     static Cell bytes(Bytes v);
     static Cell message(Value v);
-    static Cell message(std::shared_ptr<Value> v);
+    static Cell message(std::shared_ptr<const Value> v);
     static Cell list(Array v);
 
     /// The kind of value this cell actually holds.
@@ -58,7 +58,7 @@ public:
     const std::string& as_text() const;
     bool as_bool() const;
     const Bytes& as_bytes() const;
-    const std::shared_ptr<Value>& as_message() const;
+    const std::shared_ptr<const Value>& as_message() const;
     const Array& as_list() const;
 
     const Storage& storage() const noexcept { return data_; }
