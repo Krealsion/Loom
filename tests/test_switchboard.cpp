@@ -1009,7 +1009,7 @@ struct RemovalSurface {
 
         // 2. an unfinished conversation svc is a party to: svc asks, the helper
         //    keeps the answer right instead of answering.
-        helper.weave->on_handle = [this](const Message&, Bus& b, ProbeWeave& self) {
+        helper.weave->on_handle = [](const Message&, Bus& b, ProbeWeave& self) {
             if (!self.pending.valid()) {
                 self.pending = b.make_deferred_answer();
             }
@@ -1049,7 +1049,7 @@ struct RemovalSurface {
     /// The unfinished conversation, proven live by spending it — there is no
     /// count to read, and an arriving answer is the honest observable.
     void expect_conversation_alive() {
-        helper.weave->on_handle = [this](const Message&, Bus& b, ProbeWeave& self) {
+        helper.weave->on_handle = [](const Message&, Bus& b, ProbeWeave& self) {
             (void)b.spend_deferred(self.pending, Message(pong(5)));
         };
         const std::size_t before = svc.weave->handled_names.size();

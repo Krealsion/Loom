@@ -44,11 +44,11 @@ if(NOT DEFINED ZEN_LOOM_INCLUDE OR NOT EXISTS "${ZEN_LOOM_INCLUDE}/zen/weave.hpp
         "contain zen/weave.hpp (got '${ZEN_LOOM_INCLUDE}')")
 endif()
 
-set(zen_hook_flags "")
+# The outer build's flags, so a compiler that needs one to find its standard
+# library still can. MSVC's public macros need the conforming preprocessor.
+set(zen_hook_flags "${CMAKE_CXX_FLAGS}")
 if(MSVC)
-    # Loom's public macros use __VA_OPT__, which MSVC supports only under the
-    # conforming preprocessor -- the same requirement loom::core carries.
-    set(zen_hook_flags "/Zc:preprocessor /EHsc")
+    string(APPEND zen_hook_flags " /Zc:preprocessor /EHsc")
 endif()
 
 function(zen_hook_try name out_ok out_text)

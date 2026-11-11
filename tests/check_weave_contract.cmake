@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (c) 2026 Joshua DeMoss
 #
-# The `weave_contract` entry (KERN-05) reads the built artifacts. ELF: (1) no contracted artifact
-# carries an STB_GNU_UNIQUE symbol; (2) the uncontracted twin still does; (3) the host binary caught
-# no contracted target's options. PE-COFF: (4) the ELF-only option reached nothing; (5) no
-# contracted image imports a C++ runtime; (6) the twin does; (7) under MinGW-w64 the host imports
-# its own, and (8) each contracted image carries the slots that return its indexes, the twin none.
+# The `weave_contract` entry (KERN-05) reads the built artifacts. ELF/GNU: no contracted artifact
+# carries an STB_GNU_UNIQUE symbol, the uncontracted twin still does, and the host binary caught
+# none of the weave option. Clang on ELF emits no such symbol, so the twin and the host carry
+# none and no unique-binding option is applied. PE-COFF: that option reached nothing, no contracted
+# image imports a C++ runtime, the twin does, and under MinGW-w64 each image returns its indexes.
 
-foreach(v ZEN_MANIFEST ZEN_HOST_EXE ZEN_HOST_OPTIONS ZEN_BYPASS_LIB ZEN_PLATFORM)
+foreach(v ZEN_MANIFEST ZEN_HOST_EXE ZEN_HOST_OPTIONS ZEN_BYPASS_LIB ZEN_PLATFORM ZEN_CXX_COMPILER_ID)
     if(NOT DEFINED ${v})
         message(FATAL_ERROR "weave_contract: -D${v}=... is required")
     endif()
@@ -21,6 +21,12 @@ set(mitigation "fno-gnu-unique")
 set(elf_platform FALSE)
 if(NOT ZEN_PLATFORM STREQUAL "Windows" AND NOT ZEN_PLATFORM STREQUAL "Darwin")
     set(elf_platform TRUE)
+endif()
+# Clang on ELF emits no STB_GNU_UNIQUE and rejects the GNU option. The claims below
+# read that record; every other ELF compiler still has to apply the option.
+set(clang_elf FALSE)
+if(elf_platform AND ZEN_CXX_COMPILER_ID STREQUAL "Clang")
+    set(clang_elf TRUE)
 endif()
 
 # ---- the reader ------------------------------------------------------------------
@@ -176,6 +182,11 @@ foreach(row IN LISTS rows)
     if(row STREQUAL "")
         continue()
     endif()
+    # No compile option leaves the final field empty, and a list drops that element,
+    # so the row would read as four fields. A placeholder keeps the field.
+    if(row MATCHES "\\|$")
+        string(APPEND row "-")
+    endif()
     string(REPLACE "|" ";" f "${row}")
     list(LENGTH f nf)
     if(NOT nf EQUAL 5)
@@ -190,7 +201,18 @@ foreach(row IN LISTS rows)
     math(EXPR checked "${checked} + 1")
 
     if(elf_platform)
-        if(NOT options MATCHES "${mitigation}")
+        if(clang_elf)
+            if(options MATCHES "${mitigation}")
+                list(APPEND failures
+                     "${name}: a unique-binding option was injected, and Clang rejects it "
+                     "(verdict was '${verdict}', options were '${options}')")
+            endif()
+            if(NOT verdict MATCHES "emits no STB_GNU_UNIQUE")
+                list(APPEND failures
+                     "${name}: Clang on ELF records that it emits no STB_GNU_UNIQUE "
+                     "(verdict was '${verdict}')")
+            endif()
+        elseif(NOT options MATCHES "${mitigation}")
             list(APPEND failures
                  "${name}: took the contract but its compile options do not carry the "
                  "mitigation (verdict was '${verdict}', options were '${options}')")
@@ -265,18 +287,27 @@ endif()
 
 if(elf_platform)
     zen_unique_symbols("${ZEN_BYPASS_LIB}" SHARED_LIBRARY bypass_n bypass_syms)
-    set(sentinel_seen FALSE)
-    foreach(s IN LISTS bypass_syms)
-        if(s MATCHES "reload_sentinel")
-            set(sentinel_seen TRUE)
+    if(clang_elf)
+        if(NOT bypass_n EQUAL 0)
+            string(REPLACE ";" ", " bypass_syms "${bypass_syms}")
+            list(APPEND failures
+                 "the BYPASS control carries ${bypass_n} STB_GNU_UNIQUE symbol(s) (${bypass_syms}) "
+                 "but the contract recorded that Clang emits none, so that record is false")
         endif()
-    endforeach()
-    if(NOT sentinel_seen)
-        list(APPEND failures
-             "the BYPASS control has no unique reload_sentinel symbol (${bypass_n} unique "
-             "symbols in total). The negative control no longer reproduces the binding, so "
-             "the contracted artifacts above prove nothing: same source, same compiler, "
-             "and the difference is supposed to be the contract alone.")
+    else()
+        set(sentinel_seen FALSE)
+        foreach(s IN LISTS bypass_syms)
+            if(s MATCHES "reload_sentinel")
+                set(sentinel_seen TRUE)
+            endif()
+        endforeach()
+        if(NOT sentinel_seen)
+            list(APPEND failures
+                 "the BYPASS control has no unique reload_sentinel symbol (${bypass_n} unique "
+                 "symbols in total). The negative control no longer reproduces the binding, so "
+                 "the contracted artifacts above prove nothing: same source, same compiler, "
+                 "and the difference is supposed to be the contract alone.")
+        endif()
     endif()
 endif()
 set(bypass_runtime "")
@@ -310,7 +341,14 @@ if(ZEN_HOST_OPTIONS MATCHES "${mitigation}")
 endif()
 if(elf_platform)
     zen_unique_symbols("${ZEN_HOST_EXE}" EXECUTABLE host_n host_syms)
-    if(host_n EQUAL 0)
+    if(clang_elf)
+        if(NOT host_n EQUAL 0)
+            list(APPEND failures
+                 "the host test binary carries ${host_n} STB_GNU_UNIQUE symbol(s), but Clang "
+                 "was recorded as emitting none. The record is false, or the binding reaches "
+                 "an image the contract does not cover.")
+        endif()
+    elseif(host_n EQUAL 0)
         list(APPEND failures
              "the host test binary carries no unique symbols at all, so 'the contract did "
              "not leak onto it' is unfalsifiable here -- this control has gone vacuous.")
@@ -336,7 +374,12 @@ if(NOT failures STREQUAL "")
     message(FATAL_ERROR "weave_contract FAILED:\n  - ${pretty}")
 endif()
 
-if(elf_platform)
+if(elf_platform AND clang_elf)
+    message(STATUS
+        "weave_contract: ${checked} contracted artifacts carry 0 STB_GNU_UNIQUE symbols; "
+        "Clang emits none, so no unique-binding option is applied; the bypass control and "
+        "the host binary carry none either.")
+elseif(elf_platform)
     message(STATUS
         "weave_contract: ${checked} contracted artifacts carry 0 STB_GNU_UNIQUE symbols; "
         "the bypass control still reproduces the binding; the host binary kept its "

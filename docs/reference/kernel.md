@@ -192,7 +192,11 @@ exactly the target handed to it, records the verdict on that target's
 `LOOM_WEAVE_BUILD_CONTRACT` property, and refuses a target type that is never
 `dlopen`'ed. ELF/GNU is the combination with unique symbol binding; PE-COFF and
 Mach-O have none, and the function says so rather than injecting an option a
-compiler merely tolerates. It is present in kernel-less packages too — what you
+compiler merely tolerates. Clang on ELF emits no `STB_GNU_UNIQUE` and rejects
+`-fno-gnu-unique`. The function compiles a probe whose static is a function
+template's local, reads the object with `nm`, applies no flag when that symbol
+is not unique, and refuses the target when it is. It is present in kernel-less
+packages too — what you
 can *author* is not gated on what an install can *host*, which stays
 `if(TARGET loom::kernel)`. See [guides/dynamic-weaves](../guides/dynamic-weaves.md)
 for the authoring shape.

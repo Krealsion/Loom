@@ -45,6 +45,9 @@ struct OtherWork {
     std::int64_t n = 0;
     ZEN_SHAPE(OtherWork, 1, ZEN_FIELD(n));
 };
+// The cases name this shape as text. Its constants are that text, so they are read.
+static_assert(OtherWork::zen_version == 1);
+static_assert(OtherWork::zen_name[0] == 'O');
 /// The host's nudge — an ungated root send, the way a test makes a weave act.
 struct Go {
     std::int64_t step = 0;
