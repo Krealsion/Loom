@@ -15,5 +15,3 @@ MINIMUM_PYTHON = (3, 8)
 if sys.version_info[:2] < MINIMUM_PYTHON:  # pragma: no cover - a clear refusal, not a crash
     raise ImportError("loom_session needs Python %d.%d or newer; this is %d.%d"
                       % (MINIMUM_PYTHON + tuple(sys.version_info[:2])))
-
-__version__ = "0.1.0"

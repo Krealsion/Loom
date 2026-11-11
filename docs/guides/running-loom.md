@@ -42,8 +42,9 @@ mkdir ~/work && cd ~/work
 ~/loom/bin/loom-host
 ```
 
+<!-- value LOOM_SERIES in "loom-host {}" -->
 ```text
-loom-host 0.1.0   containment: in-process; trusted; no OS sandbox (out-of-process isolation is the isolation host's job)
+loom-host 0.2   containment: in-process; trusted; no OS sandbox (out-of-process isolation is the isolation host's job)
   boot plan: nothing requested
 type 'help' for commands, 'quit' to shut this host down.
 loom>
@@ -51,6 +52,10 @@ loom>
 
 An empty host, and it says so. It found no boot plan and no standing decisions, which is
 where everyone starts. `help` lists the commands; `quit` shuts the host down.
+
+The word after `loom-host` is its release number: the series alone for a host you built, which
+`loom-host --version` says is no package, and the series with the package's own number after it
+for a package, built with `LOOM_PACKAGE_VERSION` (the top-level `CMakeLists.txt`).
 
 Two files live in whatever directory you run it from, and **both are yours**:
 
@@ -224,8 +229,9 @@ every later row *pending* and says so, instead of continuing past a row you need
 
 Run it again:
 
+<!-- value LOOM_SERIES in "loom-host {}" -->
 ```text
-loom-host 0.1.0   containment: in-process; trusted; no OS sandbox (…)
+loom-host 0.2   containment: in-process; trusted; no OS sandbox (…)
   refused    logbook @logbook
               admission refused at open: no standing decision for 'logbook' (build da352f71, …); approve it at the console with:  authority trust logbook
   refused    counter
@@ -791,9 +797,10 @@ reason above: it was refused before it could say.
 If a boot plan is what is broken, **`loom-host --no-boot` comes up with the console and
 starts nothing — including when the file does not parse at all**:
 
+<!-- value LOOM_SERIES in "loom-host {}" -->
 ```text
 $ loom-host --no-boot
-loom-host 0.1.0   containment: in-process; …
+loom-host 0.2   containment: in-process; …
 the boot plan was NOT run: boot plan 'loom-boot.json' refused: <value>: MalformedBytes — not valid JSON: expected string key in object
   nothing from it was started. Fix loom-boot.json and restart, or start things by hand here.
 loom> status
