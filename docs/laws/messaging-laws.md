@@ -30,7 +30,10 @@ DOES NOT MEAN
   drain return;
 - that one sender at the bound refuses anyone else's send;
 - that a dispatch-refusal notice, a joint notice, or a scheduled admission is
-  that sender's speech. Those are the bus's own acts and are not counted.
+  that sender's speech. Those are the bus's own acts and are not counted;
+- that an answer, immediate or deferred, is this speech. Each spends a right one
+  delivery created, so answers cannot outgrow what was delivered. The bound
+  neither counts an answer nor refuses one.
 
 PROVEN BY — `Switchboard::drain_until_idle` / `pump_pending` (the shared
 `in_dispatch_` guard); `kMaxPendingPerSender`; suites `switchboard`

@@ -208,6 +208,8 @@ const char* name_of(TxnReason r) noexcept {
         return "PreparationAlreadyAsked";
     case TxnReason::SeveralRoles:
         return "SeveralRoles";
+    case TxnReason::PendingPerSender:
+        return "PendingPerSender";
     }
     return "?";
 }
@@ -1776,9 +1778,6 @@ Ticket Switchboard::enqueue_answer(WeaveId to, WeaveId as_sender, Message msg,
     msg.sender = as_sender;
     msg.reply_to = WeaveId{};
     msg.correlation = correlation;
-    if (sender_at_pending_bound(as_sender)) {
-        return refuse_pending_bound(to, as_sender, msg);
-    }
     const std::uint64_t seq = allocate_sequence();
     journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}};
     msg.provenance = Provenance::attested(Provenance::Kind::Answer, 0);
@@ -1793,7 +1792,6 @@ Ticket Switchboard::enqueue_answer(WeaveId to, WeaveId as_sender, Message msg,
     // An answer belongs to the fence of the delivery it is SPENT from, not the ask's: a
     // deferred answer spent from a later, unrelated delivery is that delivery's work.
     env.fence = current_dispatch_fence_;
-    env.sender_accounted = true;
     queue_back(std::move(env));
     return Ticket{seq};
 }
@@ -1810,10 +1808,6 @@ Ticket Switchboard::answer_as(WeaveId as_sender, Message msg) {
         // responder its answer had been sent.
         (void)refuse_now(authority_.requester, as_sender, msg, RefusalReason::CapabilityDenied);
         return Ticket{};
-    }
-    // Before the right is spent: a refusal here leaves the answer still available.
-    if (sender_at_pending_bound(as_sender)) {
-        return refuse_pending_bound(authority_.requester, as_sender, msg);
     }
     authority_.spent = true;
     // The requester's identity comes from the authority — captured when the
@@ -1974,10 +1968,6 @@ Ticket Switchboard::spend_deferred_as(WeaveId as_sender, const DeferredAnswer& a
         return Ticket{};
     }
 
-    // At the waiting bound the right stays: refusing after this wipe would lose the answer.
-    if (sender_at_pending_bound(as_sender)) {
-        return refuse_pending_bound(rec->requester, as_sender, msg);
-    }
     // CONSUMED BEFORE QUEUEING, so neither a replay nor a reentrant handler can
     // turn one right into two answers.
     const WeaveId to = rec->requester;
@@ -2119,12 +2109,12 @@ AuthorityView Switchboard::describe_authority_as(WeaveId caller,
     return view;
 }
 
-std::size_t Switchboard::fanout(Message msg, bool gated, Provenance provenance) {
+Switchboard::Fanout Switchboard::fanout(Message msg, bool gated, Provenance provenance) {
     const std::string name(msg.payload.schema().name());
     const std::uint32_t version = msg.payload.schema().version();
     const std::uint64_t sender_life = gated ? life_of(msg.sender) : 0;
 
-    std::size_t recipients = 0;
+    Fanout out;
     for (auto& entry : weaves_) { // std::map: ascending id == registration order
         WeaveRecord& rec = entry.second;
         if (!rec.alive) {
@@ -2138,6 +2128,7 @@ std::size_t Switchboard::fanout(Message msg, bool gated, Provenance provenance) 
         }
         if (sender_at_pending_bound(msg.sender)) {
             (void)refuse_pending_bound(rec.id, msg.sender, msg);
+            out.pending_bound = true;
             continue;
         }
         const std::uint64_t seq = allocate_sequence();
@@ -2155,9 +2146,10 @@ std::size_t Switchboard::fanout(Message msg, bool gated, Provenance provenance) 
         env.fence = current_dispatch_fence_; // ...and every one counts in that delivery's fence
         env.sender_accounted = true;
         queue_back(std::move(env));
-        ++recipients;
+        ++out.recipients;
     }
-    return recipients;
+    publication_pending_bound_ = out.pending_bound;
+    return out;
 }
 
 // Host root authority: held only by the host program, these enqueue ungated.
@@ -2165,7 +2157,9 @@ Ticket Switchboard::send(WeaveId target, Message msg) {
     return enqueue_directed(target, std::move(msg), /*gated=*/false);
 }
 
-std::size_t Switchboard::publish(Message msg) { return fanout(std::move(msg), /*gated=*/false); }
+std::size_t Switchboard::publish(Message msg) {
+    return fanout(std::move(msg), /*gated=*/false).recipients;
+}
 
 // The gated path a Weave's WeaveBus uses, and the host uses to re-enter a
 // child's output: stamp the authoritative sender (a Weave cannot send as anyone
@@ -2182,11 +2176,12 @@ std::size_t Switchboard::publish_as(WeaveId as_sender, Message msg) {
     // "to the coordinator only" version of it. Refused visibly, because a candidate
     // trying to publish is exactly what the weaver wants to know about.
     if (sealed(as_sender)) {
+        publication_pending_bound_ = false;
         (void)refuse_now(WeaveId{}, as_sender, msg, RefusalReason::SealedSpeech);
         return 0;
     }
     msg.sender = as_sender;
-    return fanout(std::move(msg), /*gated=*/true);
+    return fanout(std::move(msg), /*gated=*/true).recipients;
 }
 
 // Role-addressed sends. send_to_role is the host's ungated root authority; the
@@ -2223,7 +2218,7 @@ Ticket Switchboard::refuse_role(WeaveId target, WeaveId as_sender, const Message
     // would downgrade unauthorized role speech into a mystery. Neither is
     // this: the attempt is named, the statement went nowhere.
     (void)refuse_now(target, as_sender, msg, RefusalReason::RoleAuthorshipDenied);
-    return Ticket{};
+    return Ticket{0, RefusalReason::RoleAuthorshipDenied};
 }
 
 Ticket Switchboard::role_send_as(WeaveId as_sender, std::string_view as_role, WeaveId target,
@@ -2262,10 +2257,13 @@ RolePublication Switchboard::role_publish_as(WeaveId as_sender, std::string_view
     // holders, and admission unseals before it binds — so a candidate already
     // failed the membership question above, with the precise reason.
     msg.sender = as_sender;
-    const std::size_t recipients =
-        fanout(std::move(msg), /*gated=*/true,
-               Provenance{}.with_authored_role(std::string(as_role)));
-    return RolePublication{true, recipients};
+    const Fanout sent = fanout(std::move(msg), /*gated=*/true,
+                               Provenance{}.with_authored_role(std::string(as_role)));
+    RolePublication published{true, sent.recipients};
+    if (sent.pending_bound) {
+        published.refusal = RefusalReason::PendingPerSender;
+    }
+    return published;
 }
 
 Ticket Switchboard::role_send(std::string_view as_role, WeaveId target, Message msg) {
@@ -2764,7 +2762,7 @@ bool Switchboard::sender_at_pending_bound(WeaveId sender) const noexcept {
 
 Ticket Switchboard::refuse_pending_bound(WeaveId target, WeaveId sender, const Message& msg) {
     (void)refuse_now(target, sender, msg, RefusalReason::PendingPerSender);
-    return Ticket{};
+    return Ticket{0, RefusalReason::PendingPerSender};
 }
 
 void Switchboard::fence_dispatched(std::uint64_t id) noexcept {
@@ -3560,15 +3558,20 @@ TxnResult Switchboard::ask_candidate_to_prepare(TxnId id, Message ask) {
     // gated against its grant, and through the seal only because the sender is the owner. It
     // adds a fact the transaction will recognise, not a right. The correlation is Loom's: the
     // caller's is written over, as `enqueue_answer` writes over an answerer's.
-    const std::uint64_t correlation = next_preparation_correlation_++;
     ask.sender = t->coordinator.who;
     ask.reply_to = WeaveId{};
+    if (sender_at_pending_bound(ask.sender)) {
+        (void)refuse_pending_bound(t->candidate.who, ask.sender, ask);
+        return {false, id, TxnReason::PendingPerSender};
+    }
+    const std::uint64_t correlation = next_preparation_correlation_++;
     ask.correlation = correlation;
     const Ticket queued =
         enqueue_directed(t->candidate.who, std::move(ask), /*gated=*/true, Provenance{}, id);
     if (!queued.valid()) {
-        // The tap already named PendingPerSender. The conversation stays unopened.
-        return {false, id, TxnReason::PreconditionFailed};
+        return {false, id, queued.refusal == RefusalReason::PendingPerSender
+                               ? TxnReason::PendingPerSender
+                               : TxnReason::PreconditionFailed};
     }
 
     t->preparation_correlation = correlation;

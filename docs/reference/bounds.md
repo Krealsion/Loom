@@ -24,7 +24,7 @@ and held by review alone.
 | `kMaxJointKeys` | <!-- value kMaxJointKeys -->4<!-- /value --> | keys one operation binds; `Exhausted` at `begin` |
 | `kMaxJointOfferBytes` | <!-- value kMaxJointOfferBytes KiB -->64<!-- /value --> KiB | one offered value's serialized size; `TooLarge` at `offer` — a joint publication carries facts, not documents |
 | `kMaxFences` | <!-- value kMaxFences -->64<!-- /value --> | fences held (open or settled, not yet released) per bus; a fenced send past it queues **nothing** and returns an invalid ticket — never an unfenced send in its place ([fences](messaging.md#fences-when-what-one-send-set-in-motion-has-been-dispatched)). Ids are monotonic and never reused |
-| `kMaxPendingPerSender` | <!-- value kMaxPendingPerSender -->1024<!-- /value --> | one sender's own messages waiting on the bus. A further send is refused `PendingPerSender` on the tap and queues nothing; every other sender's waiting messages stay, in order ([MSG-01](../laws/messaging-laws.md#msg-01--single-threaded-fifo-non-reentrant)) |
+| `kMaxPendingPerSender` | <!-- value kMaxPendingPerSender -->1024<!-- /value --> | one sender's own messages waiting on the bus. A further send is refused `PendingPerSender` on the tap and queues nothing; every other sender's waiting messages stay, in order. An answer is not counted ([MSG-01](../laws/messaging-laws.md#msg-01--single-threaded-fifo-non-reentrant)) |
 | activation sequence | `INT64_MAX` | the door refuses further activations, naming the boundary; it does not brick |
 | deferred-answer tokens | 2^64, monotonic | deliberately unguarded: process-local, never persisted, +1 per deferral |
 
@@ -42,10 +42,11 @@ more. What is already waiting stays, in order — dropping the oldest would
 discard a message somebody is owed — and the new send is what is refused.
 
 The count is that sender's own speech: a directed send, a role send, a
-publication's envelopes, an answer. A dispatch-refusal notice, a joint notice
-and a scheduled admission are the bus's own acts. They are not counted, and
-this bound does not refuse them. An unset sender is one sender, the host's,
-with a cap of its own.
+publication's envelopes. An answer is not counted and is never refused here:
+each one spends a right a delivery created, so answers cannot outgrow what was
+delivered. A dispatch-refusal notice, a joint notice and a scheduled admission
+are the bus's own acts. They are not counted, and this bound does not refuse
+them. An unset sender is one sender, the host's, with a cap of its own.
 
 ## Recorder (host working memory)
 

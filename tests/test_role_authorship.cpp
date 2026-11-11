@@ -965,4 +965,38 @@ TEST_CASE("a replacement of an incumbent holding two roles is refused in words, 
     CHECK_FALSE(bus.sealed(incumbent.id));
 }
 
+TEST_CASE("a role-authored send at the sender's waiting bound is refused as that bound, not as "
+          "authorship") {
+    Switchboard bus;
+    Registered holder = register_role_probe(bus, "matchmaker", {ping_schema()});
+    Registered sink = register_probe(bus, {ping_schema()});
+    for (std::size_t i = 0; i < Switchboard::kMaxPendingPerSender; ++i) {
+        REQUIRE(bus.send_as(holder.id, sink.id, Message(ping(1))).valid());
+    }
+    int bound = 0;
+    int authorship = 0;
+    bus.add_observer([&](const BusEvent& e) {
+        if (e.kind != EventKind::Refused || e.sender != holder.id) {
+            return;
+        }
+        if (e.refusal.reason == RefusalReason::PendingPerSender) {
+            ++bound;
+        }
+        if (e.refusal.reason == RefusalReason::RoleAuthorshipDenied) {
+            ++authorship;
+        }
+    });
+    const Ticket direct = bus.role_send_as(holder.id, "matchmaker", sink.id, Message(ping(2)));
+    const Ticket to_role =
+        bus.role_send_to_role_as(holder.id, "matchmaker", "nobody", Message(ping(3)));
+    CHECK_FALSE(direct.valid());
+    CHECK(direct.refusal == RefusalReason::PendingPerSender);
+    CHECK_FALSE(to_role.valid());
+    CHECK(to_role.refusal == RefusalReason::PendingPerSender);
+    CHECK(bound == 2);
+    CHECK(authorship == 0);
+    Registered other = register_role_probe(bus, "clerk", {greet_schema()});
+    CHECK(bus.send_as(other.id, sink.id, Message(ping(4))).valid());
+}
+
 } // TEST_SUITE

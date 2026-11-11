@@ -44,6 +44,21 @@ inline std::string_view as_view(const std::uint8_t* data, std::size_t len) {
 // serialized payload bytes; the host stamps the sender and admits the bytes before routing.
 // Ordinary and role sends return the real queued attempt; answer tickets are status markers,
 // and publication counts do not cross.
+
+/// The host status, back onto the ticket a native weave would have been handed.
+inline loom::Ticket ticket_from(ZenStatus status, std::uint64_t attempt) {
+    if (status == ZEN_OK) {
+        return loom::Ticket{attempt};
+    }
+    if (status == ZEN_ERR_PENDING_PER_SENDER) {
+        return loom::Ticket{0, loom::RefusalReason::PendingPerSender};
+    }
+    if (status == ZEN_ERR_ROLE_AUTHORSHIP_DENIED) {
+        return loom::Ticket{0, loom::RefusalReason::RoleAuthorshipDenied};
+    }
+    return loom::Ticket{};
+}
+
 class HostApiBus final : public loom::Bus {
 public:
     explicit HostApiBus(const ZenHostApi* host) : host_(host) {}
@@ -54,7 +69,7 @@ public:
         if (host_ != nullptr && host_->send != nullptr) {
             const ZenStatus status = host_->send(host_->ctx, target.value, msg.reply_to.value, msg.correlation,
                         reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), &attempt);
-            if (status == ZEN_OK) { return loom::Ticket{attempt}; }
+            return ticket_from(status, attempt);
         }
         return loom::Ticket{};
     }
@@ -77,7 +92,7 @@ public:
         if (host_ != nullptr && host_->send_to_role != nullptr) {
             const ZenStatus status = host_->send_to_role(host_->ctx, role_z.c_str(), msg.reply_to.value, msg.correlation,
                                 reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), &attempt);
-            if (status == ZEN_OK) { return loom::Ticket{attempt}; }
+            return ticket_from(status, attempt);
         }
         return loom::Ticket{};
     }
@@ -141,7 +156,7 @@ public:
         const ZenStatus st = host_->role_send(
             host_->ctx, role_z.c_str(), target.value, msg.reply_to.value, msg.correlation,
             reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), &attempt);
-        return st == ZEN_OK ? loom::Ticket{attempt} : loom::Ticket{};
+        return ticket_from(st, attempt);
     }
 
     loom::Ticket role_send_to_role(std::string_view as_role, std::string_view to_role,
@@ -156,7 +171,7 @@ public:
         const ZenStatus st = host_->role_send_to_role(
             host_->ctx, as_z.c_str(), to_z.c_str(), msg.reply_to.value, msg.correlation,
             reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), &attempt);
-        return st == ZEN_OK ? loom::Ticket{attempt} : loom::Ticket{};
+        return ticket_from(st, attempt);
     }
 
     loom::RolePublication role_publish(std::string_view as_role,
@@ -170,6 +185,11 @@ public:
         const ZenStatus st = host_->role_publish(
             host_->ctx, role_z.c_str(), msg.reply_to.value, msg.correlation,
             reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), &recipients);
+        if (st == ZEN_ERR_PENDING_PER_SENDER) {
+            loom::RolePublication published{true, static_cast<std::size_t>(recipients)};
+            published.refusal = loom::RefusalReason::PendingPerSender;
+            return published;
+        }
         if (st != ZEN_OK) {
             return loom::RolePublication{};
         }

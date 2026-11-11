@@ -110,7 +110,10 @@ MEANS
 DOES NOT MEAN
 - that a dynamic answer's success sentinel is a queued attempt. Since ABI v7,
   ordinary addressed sends return actual queued identities for dispatch-refusal
-  matching; neither kind of return is proof of delivery or semantic success.
+  matching; neither kind of return is proof of delivery or semantic success;
+- that `kMaxPendingPerSender` refuses an answer. An answer spends a right one
+  delivery created, so it is not that bound, and `ZEN_ERR_REFUSED` on these
+  doors still means there was no answer to spend.
 
 PROVEN BY — `abi.h`'s answer doors (`answer` / `defer_answer` /
 `answer_deferred` / `release_deferred`); suite `kernel` (dynamic parity cases);

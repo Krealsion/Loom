@@ -6800,6 +6800,56 @@ TEST_CASE("inbound role provenance crosses the seam — authored_from_role answe
           "on both sides") {
     role_provenance_inbound(ZEN_SO_ROLE_WORKER);
 }
+
+TEST_CASE("a loaded weave at its waiting bound is told that bound, not that it lost its role") {
+    RoleStage s(ZEN_SO_ROLE_WORKER);
+    Registered sink = sbfx::register_probe(s.bus, {sbfx::ping_schema()});
+    int authorship = 0;
+    s.bus.add_observer([&](const BusEvent& ev) {
+        if (ev.kind == EventKind::Refused && ev.sender == s.worker &&
+            ev.refusal.reason == RefusalReason::RoleAuthorshipDenied) {
+            ++authorship;
+        }
+    });
+    auto at_bound = [&](const char* mode) {
+        role_speech::RoleCommand c;
+        c.mode = mode;
+        c.target = static_cast<std::int64_t>(s.commander.value);
+        REQUIRE(s.bus.send_as(s.commander, s.worker, Message(to_value(c))).valid());
+        for (std::size_t i = 0; i < Switchboard::kMaxPendingPerSender; ++i) {
+            REQUIRE(s.bus.send_as(s.worker, sink.id, Message(sbfx::ping(1))).valid());
+        }
+        s.bus.drain_until_idle();
+    };
+    at_bound("bound-direct");
+    at_bound("bound-to-role");
+    const auto direct = reports_named(*s.commander_log, "bound-direct");
+    const auto to_role = reports_named(*s.commander_log, "bound-to-role");
+    REQUIRE(direct.size() == 1);
+    REQUIRE(to_role.size() == 1);
+    CHECK_FALSE(direct[0].authored);
+    CHECK(direct[0].seen_role == "PendingPerSender");
+    CHECK_FALSE(to_role[0].authored);
+    CHECK(to_role[0].seen_role == "PendingPerSender");
+    CHECK(authorship == 0);
+}
+
+TEST_CASE("a loaded weave's answer at its waiting bound is delivered") {
+    Switchboard bus;
+    Kernel kernel(bus, sbfx::fixture_admission());
+    Registered asker = sbfx::register_probe(bus, {sbfx::pong_schema()});
+    LoadResult lr = kernel.load("ans", ZEN_SO_ANSWERS);
+    REQUIRE(lr.ok);
+    Registered sink = sbfx::register_probe(bus, {sbfx::ping_schema()});
+    REQUIRE(bus.send_as(asker.id, lr.id, Message(sbfx::ping(4))).valid());
+    for (std::size_t i = 0; i < Switchboard::kMaxPendingPerSender; ++i) {
+        REQUIRE(bus.send_as(lr.id, sink.id, Message(sbfx::ping(1))).valid());
+    }
+    bus.pump_pending();
+    bus.pump_pending();
+    REQUIRE(asker.weave->handled_values.size() == 1);
+    CHECK(asker.weave->handled_values[0] == 4);
+}
 ZEN_BOXED_TWIN("inbound role provenance reaches a boxed weave: authored_from_role answers "
                "identically on both sides",
                role_provenance_inbound, ZEN_BOX_ROLE_WORKER)

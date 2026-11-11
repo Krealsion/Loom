@@ -22,7 +22,7 @@ extern "C" {
  * and refuses any other version before calling into the image, at load and as a replacement for
  * a live participant, naming both; there is no old-image bridge. Rebuild hosts, libraries and
  * images together. What each version carried: docs/reference/dynamic-abi.md */
-#define ZEN_ABI_VERSION 11u
+#define ZEN_ABI_VERSION 12u
 
 /* Delivery provenance (ZEN_PROV_*), one value per delivery. Zero is an ordinary message. Set
  * by the host from bus-owned state; no payload a weave composes produces one. */
@@ -58,6 +58,9 @@ enum {
     ZEN_ERR_SENSE_NOT_AUTHORIZED = -7,
     ZEN_ERR_SENSE_UNDECLARED = -8,
     ZEN_ERR_SENSE_ROLE_NOT_HELD = -9,
+    /* This sender already has its bound of messages waiting. Nothing was queued. Not role
+     * authorship, and not "there was no answer to spend". Answers are not this bound. */
+    ZEN_ERR_PENDING_PER_SENDER = -10,
     /* A refused joint offer: ZEN_ERR_JOINT_BASE minus the loom::JointRefusal enumerator. A
      * status below the base naming no enumerator reads as NoLiveDelivery, never as accepted. */
     ZEN_ERR_JOINT_BASE = -100,
@@ -121,8 +124,10 @@ typedef struct ZenHostApi {
     ZenStatus (*answer)(void* ctx, const uint8_t* payload, size_t len);
     /* Role authorship: what a native weave reaches through `mail.as_role(...)`. The library
      * requests "speak as as_role"; the host verifies the weave bound to this context holds it
-     * now and stamps the provenance. ZEN_ERR_ROLE_AUTHORSHIP_DENIED means nothing was queued.
-     * In role_send_to_role, as_role is the role spoken for and to_role the destination,
+     * now and stamps the provenance. ZEN_ERR_ROLE_AUTHORSHIP_DENIED means the sender does not
+     * hold the role and nothing was queued. ZEN_ERR_PENDING_PER_SENDER means the sender is at
+     * its waiting bound. In role_send_to_role, as_role is the role spoken for and to_role the
+     * destination,
      * resolved at delivery. role_publish writes the recipient count to `recipients_out` (may
      * be NULL), so "zero listeners" and "denied" stay distinct. Strings are NUL-terminated and
      * valid for the call. */

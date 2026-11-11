@@ -1,12 +1,19 @@
 # Dynamic ABI — reference
 
-The C seam a weave library and the host agree on. Current version: **v11**
+The C seam a weave library and the host agree on. Current version: **v<!-- value ZEN_ABI_VERSION -->12<!-- /value -->**
 (`ZEN_ABI_VERSION` in `include/zen/kernel/abi.h`). Laws:
 [KERN-01, KERN-04](../laws/kernel-laws.md),
 [GATE-04](../laws/admission-laws.md#gate-04--immutable-published-schemas),
 [ANS-06](../laws/answer-authority-laws.md),
 [MSG-07](../laws/messaging-laws.md#msg-07--role-authorship-is-explicit),
 [SENSE-01..07](../laws/sense-laws.md).
+
+**v12 names the per-sender waiting bound.** No slot changes. A send that bound refuses
+returns `ZEN_ERR_PENDING_PER_SENDER` on `send`, `send_to_role`, `publish`, `role_send`,
+`role_send_to_role` and `role_publish`. It is not `ZEN_ERR_ROLE_AUTHORSHIP_DENIED` and not
+`ZEN_ERR_REFUSED`. An answer is not this bound: `answer` and `answer_deferred` still return
+`ZEN_ERR_REFUSED` only when there was no answer to spend. A v11 image is refused at load and
+at reload, both versions named, before any callback into it.
 
 **v11 names the role doors by role.** The slots a library calls to speak or claim as a role it
 holds are `role_send`, `role_send_to_role`, `role_publish`, `sense_role_claim` and
@@ -297,8 +304,10 @@ doors**: `role_send`, `role_send_to_role`, `role_publish`. The library
 REQUESTS "speak as R"; the host knows the exact weave bound to the context,
 verifies membership at that moment, and stamps. A refused authorship crosses
 back as the precise `ZEN_ERR_ROLE_AUTHORSHIP_DENIED` (never downgraded to a
-personal send), and `role_publish` carries its recipient count out-of-band
-so "authorized, zero listeners" and "denied" stay distinct.
+personal send). A holder at its waiting bound is `ZEN_ERR_PENDING_PER_SENDER`
+instead, on those doors and on an ordinary send. `role_publish` carries its
+recipient count out-of-band so "authorized, zero listeners" and "denied" stay
+distinct.
 
 **No exception crosses a door, in either direction.** A loaded image may carry
 its own C++ runtime ([KERN-05](../laws/kernel-laws.md)), under which an

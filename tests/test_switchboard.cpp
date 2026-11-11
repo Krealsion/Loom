@@ -641,7 +641,63 @@ struct ReadinessStage {
 
     void ask() { REQUIRE(bus.ask_candidate_to_prepare(txn, Message(ping(7))).ok); }
 };
+
+/// Queue `kMaxPendingPerSender` gated messages from `sender`, so the next one meets the bound.
+/// `target` accepts Ping and sends nothing.
+void fill_sender_pending(Switchboard& bus, WeaveId sender, WeaveId target) {
+    for (std::size_t i = 0; i < Switchboard::kMaxPendingPerSender; ++i) {
+        REQUIRE(bus.send_as(sender, target, Message(ping(1))).valid());
+    }
+}
 } // namespace
+
+TEST_CASE("an immediate answer from a sender at its waiting bound is delivered") {
+    // The ask is queued first, then the sender's own cap is filled behind it, so the
+    // handler runs while those messages are still waiting. One answer spends the right
+    // this delivery created.
+    Switchboard bus;
+    Registered asker = reg(bus, {pong_schema()});
+    Registered responder = reg(bus, {ping_schema()});
+    Registered sink = reg(bus, {ping_schema()});
+    responder.weave->on_handle = [](const Message& in, Bus& b, ProbeWeave&) {
+        (void)b.answer(Message(pong(in.payload.get("seq")->as_int())));
+    };
+    REQUIRE(bus.send_as(asker.id, responder.id, Message(ping(4))).valid());
+    fill_sender_pending(bus, responder.id, sink.id);
+    bus.pump_pending();
+    bus.pump_pending();
+    REQUIRE(asker.weave->handled_values.size() == 1);
+    CHECK(asker.weave->handled_values[0] == 4);
+}
+
+TEST_CASE("a deferred answer from a sender at its waiting bound is delivered") {
+    Switchboard bus;
+    Registered asker = reg(bus, {pong_schema()});
+    Registered responder = reg(bus, {ping_schema()});
+    Registered sink = reg(bus, {ping_schema()});
+    responder.weave->on_handle = [](const Message&, Bus& b, ProbeWeave&) {
+        const DeferredAnswer held = b.make_deferred_answer();
+        (void)b.spend_deferred(held, Message(pong(9)));
+    };
+    REQUIRE(bus.send_as(asker.id, responder.id, Message(ping(1))).valid());
+    fill_sender_pending(bus, responder.id, sink.id);
+    bus.pump_pending();
+    bus.pump_pending();
+    REQUIRE(asker.weave->handled_values.size() == 1);
+    CHECK(asker.weave->handled_values[0] == 9);
+}
+
+TEST_CASE("a preparation ask from a coordinator at its waiting bound names that bound and stays unopened") {
+    ReadinessStage s;
+    Registered quiet = reg(s.bus, {ping_schema()});
+    fill_sender_pending(s.bus, s.coordinator.id, quiet.id);
+    const TxnResult first = s.bus.ask_candidate_to_prepare(s.txn, Message(ping(7)));
+    CHECK_FALSE(first.ok);
+    CHECK(first.why == TxnReason::PendingPerSender);
+    const TxnResult second = s.bus.ask_candidate_to_prepare(s.txn, Message(ping(8)));
+    CHECK(second.why == TxnReason::PendingPerSender);
+    CHECK(second.why != TxnReason::PreparationAlreadyAsked);
+}
 
 TEST_CASE("a callback that throws leaves no delivery-scoped authority behind") {
     ReadinessStage s;

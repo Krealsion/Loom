@@ -15,12 +15,9 @@
 
 namespace role_speech {
 
-/// Tell the worker which act to perform. `mode` is one of:
-///   "direct", "to-role"  a send as the role worker.a, to `target` or to the dispatcher role
-///   "publish"            a role publication as worker.a
-///   "personal"           an ordinary personal publication of the same shape
-///   "forge-direct"       an attempt to author as a role it does NOT hold
-///   "forge-publish"      the same attempt, as a publication
+/// Tell the worker which act to perform. `mode` is direct, to-role, publish, personal,
+/// forge-direct, forge-publish, bound-direct or bound-to-role. The bound modes answer
+/// their report, and `seen_role` is the ticket's refusal name.
 struct RoleCommand {
     std::string mode;
     std::int64_t target = 0;
