@@ -121,7 +121,7 @@ the key back before it listens, and serves only when it is that user's alone; ot
 the key, serves nothing, and exits `5`, naming the directory and why. FAT and exFAT keep no
 permissions, so a session directory there is always refused: keep session directories on NTFS,
 or on a file system that keeps POSIX permissions. Both files are removed when the host ends
-cleanly.
+cleanly, and when a native participant's exception ends the host too.
 
 ## 3. Attach, look, leave
 
