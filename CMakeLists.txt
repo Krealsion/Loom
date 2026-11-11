@@ -1,7 +1,28 @@
 cmake_minimum_required(VERSION 3.16)
 
+# ---- the release number ---------------------------------------------------
+# One number names a build everywhere: X.Y.N, the same in Loom and Zengine. X.Y is the release
+# series, kept here alone and equal to Zengine's; a person moves it, in both repositories. N is
+# the package's, read from the tag the package is published as, and given as LOOM_PACKAGE_VERSION.
+# A build given none is no package: its version is the series alone, and `loom-host --version`
+# says it is no package.
+set(LOOM_SERIES 0.2)
+set(LOOM_PACKAGE_VERSION "" CACHE STRING
+    "The package's release number, X.Y.N in the series LOOM_SERIES; empty when it is no package")
+if(LOOM_PACKAGE_VERSION STREQUAL "")
+    set(loom_release_number ${LOOM_SERIES})
+else()
+    string(REPLACE "." "[.]" loom_series_pattern "${LOOM_SERIES}")
+    if(NOT LOOM_PACKAGE_VERSION MATCHES "^${loom_series_pattern}[.](0|[1-9][0-9]*)$")
+        message(FATAL_ERROR "loom: LOOM_PACKAGE_VERSION names the package's release number, "
+                            "${LOOM_SERIES}.N in this series (LOOM_SERIES, CMakeLists.txt); it is "
+                            "'${LOOM_PACKAGE_VERSION}'")
+    endif()
+    set(loom_release_number ${LOOM_PACKAGE_VERSION})
+endif()
+
 project(loom
-    VERSION 0.1.0
+    VERSION ${loom_release_number}
     DESCRIPTION "Self-describing-value-and-gate core for Zen"
     LANGUAGES CXX)
 
@@ -451,6 +472,13 @@ if(TARGET zen-kernel)
 else()
     target_compile_definitions(loom-host PRIVATE ZEN_HOST_HAS_KERNEL=0)
 endif()
+# What the host says it is: the release number, and whether this build is a package.
+set(loom_host_packaged 1)
+if(LOOM_PACKAGE_VERSION STREQUAL "")
+    set(loom_host_packaged 0)
+endif()
+target_compile_definitions(loom-host PRIVATE "LOOM_HOST_RELEASE=\"${PROJECT_VERSION}\""
+                                             LOOM_HOST_PACKAGED=${loom_host_packaged})
 
 # ---- loom-runs: the run manager a session host boots, and the Python session tooling ---------
 # Optional: `loom-host --serve` serves clients with or without it. `loom-runs` is an ordinary

@@ -64,7 +64,10 @@ using loom::parse_u64;
 using loom::Token;
 using loom::tokenize;
 
-constexpr const char* kVersion = "loom-host 0.1.0";
+/// The release number this build was made as (CMakeLists.txt, "the release number"): X.Y.N for
+/// a package, the series X.Y for a build that is no package, which `--version` says.
+constexpr const char* kVersion = "loom-host " LOOM_HOST_RELEASE;
+constexpr bool kPackaged = LOOM_HOST_PACKAGED != 0;
 
 /// How long the host waits before calling a conversation pending, in bounded turns: each is
 /// one `pump_pending()`, so a weave that re-arms itself cannot extend it. A load is four turns
@@ -167,7 +170,8 @@ Options parse_options(int argc, char** argv) {
             o.done = true;
             return o;
         } else if (a == "--version") {
-            std::cout << kVersion << "  (weave ABI v" << ZEN_ABI_VERSION << ")\n";
+            std::cout << kVersion << (kPackaged ? "" : ", a build that is no package")
+                      << "  (weave ABI v" << ZEN_ABI_VERSION << ")\n";
             o.done = true;
             return o;
         } else if (a == "--boot") {

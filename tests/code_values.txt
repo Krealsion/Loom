@@ -14,6 +14,9 @@
 # When review finds a value copied that this file does not know, it is registered here then.
 
 # ---- versions
+# The release series, X.Y: a build that is no package says it, and a package says X.Y.N.
+LOOM_SERIES                     CMakeLists.txt                            LOOM_SERIES
+claim   LOOM_SERIES  loom-host {}
 ZEN_ABI_VERSION                 include/zen/kernel/abi.h                  ZEN_ABI_VERSION
 claim   ZEN_ABI_VERSION  C ABI (version **{}**)
 claim   ZEN_ABI_VERSION  current: **v{}**

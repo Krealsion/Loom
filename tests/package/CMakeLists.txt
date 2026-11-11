@@ -47,6 +47,26 @@ else()
                    "session tooling, and says so")
 endif()
 
+# ...and the host says the package's release number (the top-level CMakeLists.txt, "the release
+# number"): X.Y.N for a package, or the series X.Y and that it is no package.
+execute_process(COMMAND "${LOOM_HOST_PROGRAM}" --version RESULT_VARIABLE version_rc
+                OUTPUT_VARIABLE version_said ERROR_VARIABLE version_said)
+string(STRIP "${version_said}" version_said)
+if(loom_VERSION MATCHES "^[0-9]+[.][0-9]+[.][0-9]+$")
+    set(version_want "loom-host ${loom_VERSION}  (weave ABI v")
+elseif(loom_VERSION MATCHES "^[0-9]+[.][0-9]+$")
+    set(version_want "loom-host ${loom_VERSION}, a build that is no package  (weave ABI v")
+else()
+    message(FATAL_ERROR "package witness: the package's version '${loom_VERSION}' is neither a "
+                        "release number X.Y.N nor a series X.Y")
+endif()
+string(FIND "${version_said}" "${version_want}" version_at)
+if(NOT version_rc EQUAL 0 OR NOT version_at EQUAL 0)
+    message(FATAL_ERROR "package witness: the package is ${loom_VERSION}, and `loom-host --version` "
+                        "says (exit ${version_rc}): ${version_said}")
+endif()
+message(STATUS "package witness: the package and `loom-host --version` say ${loom_VERSION}")
+
 # ---- 1. the public macro surface -------------------------------------------------
 #
 # Links loom::core ONLY. That is the narrowest claim: the shape macros must work for a
