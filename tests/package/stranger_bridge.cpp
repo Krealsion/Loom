@@ -189,7 +189,7 @@ int main() {
         ok(ask.role == "echo" && !ask.payload.empty() && ask.settle,
            "the link envelope composes from a shape, asking for settlement");
         loom::link::Crossed crossed;
-        crossed.kind = loom::link::kCrossedSettled;
+        crossed.what.is = loom::link::Settled{1};
         ok(!loom::serialize(loom::to_value(crossed)).empty(), "the link's crossing record composes");
     }
 

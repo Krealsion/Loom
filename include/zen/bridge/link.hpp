@@ -73,10 +73,12 @@
 #include <zen/weave/shape.hpp>
 #include <zen/serialize.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <variant>
 
 namespace loom::link {
 
@@ -152,6 +154,66 @@ struct Status {
     }
 };
 
+/// A far delivery, as it arrived: an answer the far bus attested, a far dispatch refusal, or
+/// ordinary far speech (which of them is the `Crossed` case holding it).
+struct FarWord {
+    std::int64_t attempt = 0;    ///< the far correlation: the crossing it names
+    std::int64_t far_sender = 0; ///< the far bus's stamp on the delivery
+    std::string far_role;        ///< the role the far sender spoke as, by the far bus's word
+    std::string shape;           ///< the far payload's claimed shape
+    std::int64_t version = 0;
+    loom::Bytes payload;         ///< the far payload, as it crossed
+    using ZenSelf = FarWord;
+    static constexpr const char* zen_name = "loom.link.FarWord";
+    static constexpr std::uint32_t zen_version = 1;
+    static auto zen_fields() {
+        return std::make_tuple(ZEN_FIELD(attempt), ZEN_FIELD(far_sender), ZEN_FIELD(far_role),
+                               ZEN_FIELD(shape), ZEN_FIELD(version), ZEN_FIELD(payload));
+    }
+};
+
+/// The far host refused to send a crossing, in its own sentence.
+struct SendRefused {
+    std::int64_t attempt = 0;
+    std::string reason;
+    using ZenSelf = SendRefused;
+    static constexpr const char* zen_name = "loom.link.SendRefused";
+    static constexpr std::uint32_t zen_version = 1;
+    static auto zen_fields() { return std::make_tuple(ZEN_FIELD(attempt), ZEN_FIELD(reason)); }
+};
+
+/// The far host said what a crossing set in motion has settled.
+struct Settled {
+    std::int64_t attempt = 0;
+    using ZenSelf = Settled;
+    static constexpr const char* zen_name = "loom.link.Settled";
+    static constexpr std::uint32_t zen_version = 1;
+    static auto zen_fields() { return std::make_tuple(ZEN_FIELD(attempt)); }
+};
+
+/// The session is over, and why.
+struct SessionEnded {
+    std::string reason;
+    using ZenSelf = SessionEnded;
+    static constexpr const char* zen_name = "loom.link.SessionEnded";
+    static constexpr std::uint32_t zen_version = 1;
+    static auto zen_fields() { return std::make_tuple(ZEN_FIELD(reason)); }
+};
+
+/// The one frame a `Crossed` says arrived: exactly one of these six.
+struct Frame {
+    std::variant<FarWord, FarWord, FarWord, SendRefused, Settled, SessionEnded> is;
+    ZEN_UNION(Frame, 1, is, "answer", "dispatch-refused", "message", "send-refused", "settled",
+              "ended");
+};
+/// The cases of a `Frame`, by index, as the variant holds them.
+inline constexpr std::size_t kFrameAnswer = 0;          ///< the far bus attested it
+inline constexpr std::size_t kFrameDispatchRefused = 1; ///< the far bus refused its dispatch
+inline constexpr std::size_t kFrameMessage = 2;         ///< ordinary far speech
+inline constexpr std::size_t kFrameSendRefused = 3;
+inline constexpr std::size_t kFrameSettled = 4;
+inline constexpr std::size_t kFrameEnded = 5; ///< the session is over
+
 /// WHAT ARRIVED ON THE LINK'S SESSION, AS THE LINK READ IT: one far frame, said by the link to
 /// itself so this host's history keeps it (see the header). Every number in it is the FAR
 /// host's, or the link's own -- none is an identity on this bus -- and every name is the far
@@ -161,31 +223,43 @@ struct Crossed {
     std::int64_t epoch = 0;    ///< the link's own count of sessions: which connection this came on
     std::int64_t session = 0;  ///< the far host's session id for that connection
     std::string established;   ///< the name the far host established for that connection
-    std::string kind;          ///< one of the spellings below
-    std::int64_t attempt = 0;  ///< the crossing this names (the far correlation); 0 for `ended`
-    std::int64_t far_sender = 0; ///< the far bus's stamp on a delivery
-    std::string far_role;      ///< the role the far sender spoke as, by the far bus's word
-    std::string shape;         ///< the far payload's claimed shape, when there is one
-    std::int64_t version = 0;
-    std::string reason;        ///< the far host's sentence, or why the session ended
-    loom::Bytes payload;       ///< the far payload, as it crossed
+    Frame what;                ///< what arrived
     using ZenSelf = Crossed;
     static constexpr const char* zen_name = "loom.link.Crossed";
-    static constexpr std::uint32_t zen_version = 1;
+    static constexpr std::uint32_t zen_version = 2;
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(link), ZEN_FIELD(epoch), ZEN_FIELD(session),
-                               ZEN_FIELD(established), ZEN_FIELD(kind), ZEN_FIELD(attempt),
-                               ZEN_FIELD(far_sender), ZEN_FIELD(far_role), ZEN_FIELD(shape),
-                               ZEN_FIELD(version), ZEN_FIELD(reason), ZEN_FIELD(payload));
+                               ZEN_FIELD(established), ZEN_FIELD(what));
+    }
+
+    std::size_t frame() const noexcept { return what.is.index(); }
+    /// The far word an answer, a dispatch refusal or a message carries; nullptr for the others.
+    const FarWord* word() const noexcept {
+        switch (what.is.index()) {
+        case kFrameAnswer:
+            return &std::get<kFrameAnswer>(what.is);
+        case kFrameDispatchRefused:
+            return &std::get<kFrameDispatchRefused>(what.is);
+        case kFrameMessage:
+            return &std::get<kFrameMessage>(what.is);
+        default:
+            return nullptr;
+        }
+    }
+    /// The crossing a frame names; 0 for the session's end.
+    std::int64_t attempt() const noexcept {
+        if (const FarWord* w = word()) {
+            return w->attempt;
+        }
+        if (const auto* r = std::get_if<SendRefused>(&what.is)) {
+            return r->attempt;
+        }
+        if (const auto* s = std::get_if<Settled>(&what.is)) {
+            return s->attempt;
+        }
+        return 0;
     }
 };
-
-inline constexpr const char* kCrossedAnswer = "answer";          ///< the far bus attested it
-inline constexpr const char* kCrossedDispatchRefused = "dispatch-refused";
-inline constexpr const char* kCrossedMessage = "message";        ///< ordinary far speech
-inline constexpr const char* kCrossedSendRefused = "send-refused";
-inline constexpr const char* kCrossedSettled = "settled";
-inline constexpr const char* kCrossedEnded = "ended";            ///< the session is over
 
 /// The role a link holds, from its name: `loom.link.<name>`.
 inline std::string role_of(std::string_view link_name) {

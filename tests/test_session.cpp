@@ -492,7 +492,8 @@ class FakeLink final
 public:
     WeaveId deliver_to{};
     void on(const link::Crossed& x, Mail& mail) {
-        (void)mail.send(deliver_to, Result{"far said " + x.shape});
+        (void)mail.send(deliver_to, Result{"far said " + (x.word() != nullptr ? x.word()->shape
+                                                                              : std::string())});
     }
 };
 
@@ -546,11 +547,12 @@ struct ReaderHost {
         x.epoch = 2;
         x.session = 20;
         x.established = "agent";
-        x.kind = link::kCrossedAnswer;
-        x.attempt = attempt;
-        x.far_sender = 16;
-        x.shape = "SurfaceCaptured";
-        x.version = 1;
+        link::FarWord w;
+        w.attempt = attempt;
+        w.far_sender = 16;
+        w.shape = "SurfaceCaptured";
+        w.version = 1;
+        x.what.is.emplace<link::kFrameAnswer>(std::move(w));
         (void)bus.send_as(link_id, link_id, Message(to_value(x), link_id));
         bus.drain_until_idle();
     }
@@ -567,17 +569,17 @@ TEST_CASE("reader: a delivery descending from a MOUNTED link's own crossing reco
     const session::Records r = h.query(session::DeliveriesTo{static_cast<std::int64_t>(h.sink_id.value), "zen.Result", 0});
     REQUIRE(r.rows.size() == 1);
     const session::Record& row = r.rows[0];
-    CHECK(row.crossing);
     CHECK(row.parent_horizon == "retained");
-    CHECK(row.crossing_payload == "retained");
-    CHECK(row.link == "far");
-    CHECK(row.epoch == 2);
-    CHECK(row.far_session == 20);
-    CHECK(row.established == "agent");
-    CHECK(row.attempt == 287);
-    CHECK(row.far_sender == 16);
-    CHECK(row.kind == "answer");
-    CHECK(row.far_shape == "SurfaceCaptured");
+    const auto* read = std::get_if<session::CrossingRead>(&row.crossing.is);
+    REQUIRE(read != nullptr);
+    CHECK(read->link == "far");
+    CHECK(read->epoch == 2);
+    CHECK(read->far_session == 20);
+    CHECK(read->established == "agent");
+    CHECK(read->attempt == 287);
+    CHECK(read->far_sender == 16);
+    CHECK(read->kind == "answer");
+    CHECK(read->far_shape == "SurfaceCaptured");
 }
 
 TEST_CASE("reader: the same record said by a participant that is not a mounted link is no crossing") {
@@ -588,9 +590,9 @@ TEST_CASE("reader: the same record said by a participant that is not a mounted l
     h.crossed(impostor, 5);
     const session::Records r = h.query(session::DeliveriesTo{static_cast<std::int64_t>(h.sink_id.value), "zen.Result", 0});
     REQUIRE(r.rows.size() == 1);
-    CHECK_FALSE(r.rows[0].crossing);
+    // No crossing field is read from a record that is not one: the row holds none.
+    CHECK(std::holds_alternative<std::monostate>(r.rows[0].crossing.is));
     CHECK(r.rows[0].parent_shape == link::Crossed::zen_name);
-    CHECK(r.rows[0].attempt == 0); // no crossing field is read from a record that is not one
 }
 
 TEST_CASE("reader: forgotten, unobserved and retained keep their own words; reading never writes history") {
@@ -616,7 +618,7 @@ TEST_CASE("reader: forgotten, unobserved and retained keep their own words; read
     const session::Record& oldest = r.rows.back();
     CHECK(oldest.parent != 0);
     CHECK(oldest.parent_horizon == "forgotten"); // never "none", never "nothing happened"
-    CHECK_FALSE(oldest.crossing);
+    CHECK(std::holds_alternative<std::monostate>(oldest.crossing.is)); // its parent is forgotten
     const session::Records u = h.query(session::Delivery{1000000});
     CHECK(u.asked_horizon == "unobserved");
     // The reader's own questions and answers are machinery, not facts about the bus: the

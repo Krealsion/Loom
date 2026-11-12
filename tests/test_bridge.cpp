@@ -3348,11 +3348,12 @@ TEST_CASE("link: only the link's own account of a crossing acts") {
     const loom::WeaveId teller_id = near.bus.register_weave(std::move(teller), may_tell);
     raw->zen_set_self(teller_id);
     raw->link = near.link_id;
-    raw->story.kind = loom::link::kCrossedAnswer;
     raw->story.epoch = static_cast<std::int64_t>(near.link->epoch());
-    raw->story.attempt = static_cast<std::int64_t>(far.sends[0].correlation);
+    loom::link::FarWord told;
+    told.attempt = static_cast<std::int64_t>(far.sends[0].correlation);
     const std::string forged = serialize(to_value(loom::Result{"forged"}));
-    raw->story.payload.assign(forged.begin(), forged.end());
+    told.payload.assign(forged.begin(), forged.end());
+    raw->story.what.is.emplace<loom::link::kFrameAnswer>(std::move(told));
     (void)near.bus.send(teller_id, loom::Message(loom::to_value(Echo{"tell"})));
     (void)turn_until(far, near, [] { return false; }, 200);
     CHECK(a->heard_.empty());

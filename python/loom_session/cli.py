@@ -400,8 +400,12 @@ def cmd_crossings(args):
         r, rows, truncated = s.crossings(args.name)
 
     def human(_):
-        mine = [(rec, ask) for rec, ask in rows if ask or rec["crossing"]]
-        rest = [rec for rec, ask in rows if not (ask or rec["crossing"])]
+        def crossed(rec):
+            # `loom.history.Record`'s crossing: "none", {"unread": {...}} or {"read": {...}}.
+            return rec["crossing"] != "none"
+
+        mine = [(rec, ask) for rec, ask in rows if ask or crossed(rec)]
+        rest = [rec for rec, ask in rows if not (ask or crossed(rec))]
         print("run %s: worker session %d; %d remembered deliveries to it%s -- %d answered its "
               "asks or crossed a link" % (r["name"], r["session"], len(rows),
                                           " (the newest; the reader had more)" if truncated
@@ -409,15 +413,17 @@ def cmd_crossings(args):
         for rec, ask in mine:
             line = "  seq %d %s v%d corr %d from #%d" % (rec["seq"], rec["shape"], rec["version"],
                                                         rec["correlation"], rec["sender"])
-            if rec["crossing"]:
-                if rec["crossing_payload"] == "retained":
+            if crossed(rec):
+                if "read" in rec["crossing"]:
+                    x = rec["crossing"]["read"]
                     line += (" <- crossing: link %s epoch %d, far session %d as '%s', attempt %d,"
                              " far sender #%d%s, %s"
-                             % (rec["link"], rec["epoch"], rec["far_session"], rec["established"],
-                                rec["attempt"], rec["far_sender"],
-                                " as " + rec["far_role"] if rec["far_role"] else "", rec["kind"]))
+                             % (x["link"], x["epoch"], x["far_session"], x["established"],
+                                x["attempt"], x["far_sender"],
+                                " as " + x["far_role"] if x["far_role"] else "", x["kind"]))
                 else:
-                    line += " <- a link crossing whose record's bytes are %s" % rec["crossing_payload"]
+                    line += (" <- a link crossing whose record's bytes are %s"
+                             % rec["crossing"]["unread"]["payload"])
             elif rec["parent"]:
                 line += " <- parent seq %d: %s" % (rec["parent"], rec["parent_horizon"])
             if ask:

@@ -43,6 +43,7 @@
 #include <cstdint>
 #include <string>
 #include <tuple>
+#include <variant>
 #include <vector>
 
 namespace loom::session {
@@ -227,8 +228,48 @@ struct Delivery {
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(seq)); }
 };
 
-/// One remembered delivery, and -- flattened beside it -- what the reader could say about its
-/// dispatch parent. `parent_horizon` is "none" when the delivery has no parent.
+/// A link's own account of the crossing a delivery descends from, as its record said it.
+struct CrossingRead {
+    std::string link;
+    std::int64_t epoch = 0;
+    std::int64_t far_session = 0;
+    std::string established;
+    std::string kind;              ///< the frame's case: answer / dispatch-refused / message / ...
+    std::int64_t attempt = 0;
+    std::int64_t far_sender = 0;   ///< 0 for a frame that is no far delivery
+    std::string far_role;
+    std::string far_shape;
+    std::int64_t far_version = 0;
+    using ZenSelf = CrossingRead;
+    static constexpr const char* zen_name = "loom.history.CrossingRead";
+    static constexpr std::uint32_t zen_version = 1;
+    static auto zen_fields() {
+        return std::make_tuple(ZEN_FIELD(link), ZEN_FIELD(epoch), ZEN_FIELD(far_session),
+                               ZEN_FIELD(established), ZEN_FIELD(kind), ZEN_FIELD(attempt),
+                               ZEN_FIELD(far_sender), ZEN_FIELD(far_role), ZEN_FIELD(far_shape),
+                               ZEN_FIELD(far_version));
+    }
+};
+
+/// The crossing's record was found and its bytes could not be read: their payload state
+/// (evicted / declined / absent / unreadable).
+struct CrossingUnread {
+    std::string payload;
+    using ZenSelf = CrossingUnread;
+    static constexpr const char* zen_name = "loom.history.CrossingUnread";
+    static constexpr std::uint32_t zen_version = 1;
+    static auto zen_fields() { return std::make_tuple(ZEN_FIELD(payload)); }
+};
+
+/// What the reader could say of a link crossing a delivery descends from: none (its parent is
+/// none, or no link's own `loom.link.Crossed`), its record unread, or read.
+struct Crossing {
+    std::variant<std::monostate, CrossingUnread, CrossingRead> is;
+    ZEN_UNION(Crossing, 1, is, "none", "unread", "read");
+};
+
+/// One remembered delivery, and what the reader could say about its dispatch parent.
+/// `parent_horizon` is "none" when the delivery has no parent.
 struct Record {
     std::int64_t record = 0;       ///< the Recorder's own number for the record
     std::int64_t seq = 0;          ///< the bus delivery seq
@@ -243,30 +284,16 @@ struct Record {
     std::string payload;           ///< the payload's state: retained / evicted / declined / absent
     std::string parent_horizon;    ///< none / retained / forgotten / not-recorded / unobserved
     std::string parent_shape;
-    bool crossing = false;         ///< the parent is a link's own `loom.link.Crossed` record
-    std::string crossing_payload;  ///< that record's payload state; its fields need `retained`
-    std::string link;
-    std::int64_t epoch = 0;
-    std::int64_t far_session = 0;
-    std::string established;
-    std::string kind;              ///< the link's word for the frame: answer / dispatch-refused / ...
-    std::int64_t attempt = 0;
-    std::int64_t far_sender = 0;
-    std::string far_role;
-    std::string far_shape;
-    std::int64_t far_version = 0;
+    Crossing crossing;             ///< the link crossing the delivery descends from, if any
     using ZenSelf = Record;
     static constexpr const char* zen_name = "loom.history.Record";
-    static constexpr std::uint32_t zen_version = 1;
+    static constexpr std::uint32_t zen_version = 2;
     static auto zen_fields() {
         return std::make_tuple(
             ZEN_FIELD(record), ZEN_FIELD(seq), ZEN_FIELD(sender), ZEN_FIELD(target),
             ZEN_FIELD(shape), ZEN_FIELD(version), ZEN_FIELD(correlation), ZEN_FIELD(parent),
             ZEN_FIELD(outcome), ZEN_FIELD(refusal), ZEN_FIELD(payload), ZEN_FIELD(parent_horizon),
-            ZEN_FIELD(parent_shape), ZEN_FIELD(crossing), ZEN_FIELD(crossing_payload),
-            ZEN_FIELD(link), ZEN_FIELD(epoch), ZEN_FIELD(far_session), ZEN_FIELD(established),
-            ZEN_FIELD(kind), ZEN_FIELD(attempt), ZEN_FIELD(far_sender), ZEN_FIELD(far_role),
-            ZEN_FIELD(far_shape), ZEN_FIELD(far_version));
+            ZEN_FIELD(parent_shape), ZEN_FIELD(crossing));
     }
 };
 
