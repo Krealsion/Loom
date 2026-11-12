@@ -1143,18 +1143,18 @@ Kernel::Manifest Kernel::reconstruct(const ZenWeaveAbi* abi, void* instance) {
     decode_referenced(manifest, registry_, result.schemas);
     std::vector<std::shared_ptr<const Schema>> vocabulary;
     for (const loom::Cell& c : manifest.get("accepted")->as_list()) {
-        auto s = decode_schema(*c.as_message(), registry_);
+        auto s = decode_shape(*c.as_message(), registry_);
         vocabulary.push_back(s);
         result.accepted.push_back(std::move(s));
     }
-    result.state = decode_schema(*manifest.get("state")->as_message(), registry_);
+    result.state = decode_shape(*manifest.get("state")->as_message(), registry_);
     vocabulary.push_back(result.state);
     // The declared claim-set. Optional: a weave that claims nothing emits no section, which
     // is a declaration rather than an absence. Claimed through the same agreement wall, so a
     // Sense shape two libraries disagree about refuses the load as a message shape does.
     if (const loom::Cell* claims = manifest.get("claims")) {
         for (const loom::Cell& c : claims->as_list()) {
-            auto s = decode_schema(*c.as_message(), registry_);
+            auto s = decode_shape(*c.as_message(), registry_);
             vocabulary.push_back(s);
             result.claims.push_back(std::move(s));
         }
@@ -1165,7 +1165,7 @@ Kernel::Manifest Kernel::reconstruct(const ZenWeaveAbi* abi, void* instance) {
     // discovery; no grant is read from it.
     if (const loom::Cell* emits = manifest.get("emits")) {
         for (const loom::Cell& c : emits->as_list()) {
-            auto s = decode_schema(*c.as_message(), registry_);
+            auto s = decode_shape(*c.as_message(), registry_);
             vocabulary.push_back(s);
             result.emits.push_back(std::move(s));
         }

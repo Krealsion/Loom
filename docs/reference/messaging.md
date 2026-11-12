@@ -450,7 +450,7 @@ acceptance list that could drift from the enforced one.
 | `accepted` | the ROOTS — the `(name, version)` shapes that may actually be SENT to this target, in the target's own declaration order | filtered, categorised, or ranked. It is the raw accept-set, so it mixes commands, replies a relay accepts, notifications and the substrate doors; Loom encodes no direction metadata and this invents none |
 | `referenced` | the transitive structural CLOSURE the roots nest, in post-order (a schema's own references first), deduplicated by (name, version). Optional; absent means nothing nested | sendable. A dependency is present only so a root can be understood |
 
-The closure is not decoration. `zen.SchemaDesc` names a nested shape by
+The closure is not decoration. `zen.ShapeDesc` names a nested shape by
 `(name, version)` and `decode_schema` resolves that against a dependency
 `Registry`, so a consumer handed only the roots **cannot decode a root that
 nests anything** — measured, not assumed. Shipping the closure in post-order is
@@ -458,7 +458,7 @@ what makes one round trip self-sufficient for a stranger that never compiled
 against any of these shapes. A shape that is genuinely both a root and a
 dependency appears in both lists; re-registering it is identical and therefore a
 no-op. Consumer side: `decode_accepted_referenced` then `decode_accepted_roots`
-(`zen/weave/describe.hpp`), over `zen.SchemaDesc` as the manifest uses it — no second
+(`zen/weave/describe.hpp`), over `zen.ShapeDesc` as the manifest uses it — no second
 descriptor format, and `zen.Manifest` is untouched.
 
 **The answer includes the question.** A target genuinely accepts

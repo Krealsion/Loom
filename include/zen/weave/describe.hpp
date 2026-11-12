@@ -16,7 +16,7 @@
 //
 // Two lists: `accepted`, the roots that may be sent, and `referenced`, their structural closure
 // in post-order, without which a consumer cannot decode a root that nests anything. It reuses
-// the manifest's collect_referenced and zen.SchemaDesc rather than zen.Manifest itself,
+// the manifest's collect_referenced and zen.ShapeDesc rather than zen.Manifest itself,
 // which is the load contract and carries facts for a host, not a peer.
 
 #include <zen/kernel/schema_codec.hpp>
@@ -45,15 +45,15 @@ struct DescribeAccepted {
     static auto zen_fields() { return std::make_tuple(); }
 };
 
-/// The answer's grammar, hand-built because its fields are lists of `zen.SchemaDesc`, as
+/// The answer's grammar, hand-built because its fields are lists of `zen.ShapeDesc`, as
 /// zen.Manifest's are. `referenced` is optional; absent and empty mean the same. `accepted` is
 /// never empty for a woven weave, which has at least the five substrate doors; a weave that
 /// declines to describe itself sends no answer.
 inline std::shared_ptr<const Schema> accepted_shapes_schema() {
     static const auto s = SchemaBuilder(kAcceptedShapesShapeName, 2)
-                              .list("referenced", type_message(schema_desc_schema()),
+                              .list("referenced", type_message(shape_desc_schema()),
                                     /*required=*/false)
-                              .list("accepted", type_message(schema_desc_schema()))
+                              .list("accepted", type_message(shape_desc_schema()))
                               .build();
     return s;
 }
@@ -96,7 +96,7 @@ inline Value encode_accepted_shapes(
         std::vector<Cell> refs;
         refs.reserve(referenced.size());
         for (const auto& s : referenced) {
-            refs.push_back(Cell::message(encode_schema(*s)));
+            refs.push_back(Cell::message(encode_shape(*s)));
         }
         v.set("referenced", Cell::list(std::move(refs)));
     }
@@ -104,7 +104,7 @@ inline Value encode_accepted_shapes(
     std::vector<Cell> roots;
     roots.reserve(accepted.size());
     for (const auto& s : accepted) {
-        roots.push_back(Cell::message(encode_schema(*s)));
+        roots.push_back(Cell::message(encode_shape(*s)));
     }
     v.set("accepted", Cell::list(std::move(roots)));
     return v;
@@ -112,7 +112,7 @@ inline Value encode_accepted_shapes(
 
 // ---- decode (the answer Value -> Schemas a stranger can inspect) -------------
 // Precondition: `answer` passed the gate against accepted_shapes_schema(). A mis-ordered closure
-// or a type nested past the codec's depth cap still throws, as decode_schema does.
+// or a type nested past the codec's depth cap still throws, as decode_shape does.
 
 /// Register the answer's closure into `deps`, in order: one forward pass, as for
 /// decode_referenced (schema_codec.hpp).
@@ -122,7 +122,7 @@ inline void decode_accepted_referenced(const Value& answer, Registry& deps) {
         return; // nothing nested, nothing to do
     }
     for (const Cell& c : refs->as_list()) {
-        deps.register_schema(decode_schema(*c.as_message(), deps));
+        deps.register_schema(decode_shape(*c.as_message(), deps));
     }
 }
 
@@ -135,7 +135,7 @@ inline std::vector<std::shared_ptr<const Schema>> decode_accepted_roots(const Va
     const Cell::Array& roots = answer.get("accepted")->as_list();
     out.reserve(roots.size());
     for (const Cell& c : roots) {
-        out.push_back(decode_schema(*c.as_message(), deps));
+        out.push_back(decode_shape(*c.as_message(), deps));
     }
     return out;
 }

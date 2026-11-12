@@ -461,20 +461,20 @@ def main():
           again == {"key": "width", "number": "80"}, again)
 
     # ---- unions and the open field, read from the host's descriptors ---------------------------
-    moved = values.schema_from_desc({"name": "Moved", "version": "1", "union": False, "fields": [
-        {"name": "x", "required": True, "carries": True, "type": [{"kind": "0"}]}]})
-    moment = values.schema_from_desc({"name": "Moment", "version": "1", "union": True, "fields": [
-        {"name": "moved", "required": True, "carries": True,
+    moved = values.schema_from_desc({"record": {"name": "Moved", "version": "1", "fields": [
+        {"name": "x", "required": True, "type": [{"kind": "0"}]}]}})
+    moment = values.schema_from_desc({"name": "Moment", "version": "1", "cases": [
+        {"name": "moved", "carries": True,
          "type": [{"kind": "5", "ref_name": "Moved", "ref_version": "1"}]},
-        {"name": "idle", "required": True, "carries": False, "type": [{"kind": "3"}]}]})
+        {"name": "idle", "carries": False, "type": []}]})
     carry = values.Schema("Carry", 1, [values.Field("item", True, values.TypeRef(values.ANY)),
                                        values.Field("now", True,
                                                     values.TypeRef(values.UNION,
                                                                    ref=("Moment", 1)))])
     shapes_by = {("Moved", 1): moved, ("Moment", 1): moment}
     ucodec = values.Codec(lambda name, version: shapes_by[(name, version)])
-    check("U1 a union's descriptor says its form and its bare cases",
-          moment.is_union and not moment.fields[1].carries
+    check("U1 a union's descriptor says its form and its bare cases, and a ShapeDesc either form",
+          moment.is_union and not moved.is_union and not moment.fields[1].carries
           and moment.describe()[1] == ("idle", "nothing", True), moment.describe())
     said = ucodec.encode(carry, {"item": {"schema": "Moved", "version": 1, "fields": {"x": 4}},
                                  "now": {"moved": {"x": 2}}})
@@ -526,7 +526,7 @@ def main():
 
     probe_desc = {"name": "Probe", "version": "1",
                   "fields": [{"name": "n", "required": True, "type": [{"kind": "0"}]}]}
-    described = values.envelope("loom.observe.Shapes", 2, {"shapes": [probe_desc]})
+    described = values.envelope("loom.observe.Shapes", 2, {"shapes": [{"record": probe_desc}]})
     LINK = 41
 
     def watching_context():
@@ -666,7 +666,7 @@ def main():
         def describe(self, name, version):
             self.described += 1
             e = wire.Event("schema")
-            e.payload = values.envelope("zen.SchemaDesc", 2, desc_of(watched[(name, version)]))
+            e.payload = values.envelope("zen.SchemaDesc", 1, desc_of(watched[(name, version)]))
             self.batches.append([e])
 
         def read(self, timeout):

@@ -16,8 +16,9 @@
 //   List                          -> one token {kind} then the element's tokens
 // Message and Union fields and List elements reference their nested schema by (name, version),
 // resolved against a dependency Registry — so a manifest lists referenced
-// schemas before the schemas that reference them. A shape's description says whether it is a
-// union (its fields are then its cases) and, for each case, whether it carries a value.
+// schemas before the schemas that reference them. A record is described by `zen.SchemaDesc`, a
+// union by `zen.UnionDesc` (its cases, each carrying a type or nothing), and a list that may hold
+// either holds `zen.ShapeDesc`, the union of the two.
 
 #include <zen/registry.hpp>
 #include <zen/schema.hpp>
@@ -52,22 +53,50 @@ inline std::shared_ptr<const Schema> type_token_schema() {
 }
 
 inline std::shared_ptr<const Schema> field_desc_schema() {
-    static const auto s = SchemaBuilder("zen.Field", 2)
+    static const auto s = SchemaBuilder("zen.Field", 1)
                               .field("name", Kind::Text)
                               .field("required", Kind::Bool)
+                              .list("type", type_message(type_token_schema()))
+                              .build();
+    return s;
+}
+
+/// A record's description.
+inline std::shared_ptr<const Schema> schema_desc_schema() {
+    static const auto s = SchemaBuilder("zen.SchemaDesc", 1)
+                              .field("name", Kind::Text)
+                              .field("version", Kind::Int)
+                              .list("fields", type_message(field_desc_schema()))
+                              .build();
+    return s;
+}
+
+/// A union's case: its name, whether it carries a value, and the type it carries (its tokens,
+/// empty when it carries nothing).
+inline std::shared_ptr<const Schema> case_desc_schema() {
+    static const auto s = SchemaBuilder("zen.Case", 1)
+                              .field("name", Kind::Text)
                               .field("carries", Kind::Bool)
                               .list("type", type_message(type_token_schema()))
                               .build();
     return s;
 }
 
-inline std::shared_ptr<const Schema> schema_desc_schema() {
-    static const auto s = SchemaBuilder("zen.SchemaDesc", 2)
+/// A union's description: its cases in declared order.
+inline std::shared_ptr<const Schema> union_desc_schema() {
+    static const auto s = SchemaBuilder("zen.UnionDesc", 1)
                               .field("name", Kind::Text)
                               .field("version", Kind::Int)
-                              .field("union", Kind::Bool)
-                              .list("fields", type_message(field_desc_schema()))
+                              .list("cases", type_message(case_desc_schema()))
                               .build();
+    return s;
+}
+
+/// A description of either form: the union of a record's and a union's.
+inline std::shared_ptr<const Schema> shape_desc_schema() {
+    static const auto s = make_union("zen.ShapeDesc", 1,
+                                     {case_of("record", type_message(schema_desc_schema())),
+                                      case_of("union", type_message(union_desc_schema()))});
     return s;
 }
 
@@ -88,14 +117,14 @@ inline std::shared_ptr<const Schema> manifest_schema() {
     // manifest is an older ABI, refused by the version gate before its manifest is read.
     // docs/decisions/declared-vocabulary-is-agreed-at-admission.md
     static const auto s = SchemaBuilder("zen.Manifest", 6)
-                              .list("referenced", type_message(schema_desc_schema()),
+                              .list("referenced", type_message(shape_desc_schema()),
                                     /*required=*/false)
-                              .list("accepted", type_message(schema_desc_schema()))
-                              .message("state", schema_desc_schema())
+                              .list("accepted", type_message(shape_desc_schema()))
+                              .message("state", shape_desc_schema())
                               .message("requests", capability_ask_schema(), /*required=*/false)
-                              .list("claims", type_message(schema_desc_schema()),
+                              .list("claims", type_message(shape_desc_schema()),
                                     /*required=*/false)
-                              .list("emits", type_message(schema_desc_schema()),
+                              .list("emits", type_message(shape_desc_schema()),
                                     /*required=*/false)
                               .build();
     return s;
@@ -129,11 +158,16 @@ inline void encode_type(const TypeRef& t, std::vector<Cell>& tokens) {
     }
 }
 
+/// A record's description (`zen.SchemaDesc`). Throws std::invalid_argument for a union, whose
+/// description is `encode_union`'s; `encode_shape` describes either.
 inline Value encode_schema(const Schema& s) {
+    if (s.is_union()) {
+        throw std::invalid_argument("encode_schema: '" + s.name() +
+                                    "' is a union, described by encode_union or encode_shape");
+    }
     Value desc(schema_desc_schema());
     desc.set("name", Cell::text(s.name()));
     desc.set("version", Cell::integer(static_cast<std::int64_t>(s.version())));
-    desc.set("union", Cell::boolean(s.is_union()));
 
     std::vector<Cell> fields;
     fields.reserve(s.fields().size());
@@ -141,14 +175,49 @@ inline Value encode_schema(const Schema& s) {
         Value fd(field_desc_schema());
         fd.set("name", Cell::text(f.name));
         fd.set("required", Cell::boolean(f.required));
-        fd.set("carries", Cell::boolean(f.carries));
         std::vector<Cell> tokens;
-        encode_type(f.carries ? f.type : type_of(Kind::Bool), tokens);
+        encode_type(f.type, tokens);
         fd.set("type", Cell::list(std::move(tokens)));
         fields.push_back(Cell::message(std::move(fd)));
     }
     desc.set("fields", Cell::list(std::move(fields)));
     return desc;
+}
+
+/// A union's description (`zen.UnionDesc`). Throws std::invalid_argument for a record.
+inline Value encode_union(const Schema& s) {
+    if (!s.is_union()) {
+        throw std::invalid_argument("encode_union: '" + s.name() + "' is a record");
+    }
+    Value desc(union_desc_schema());
+    desc.set("name", Cell::text(s.name()));
+    desc.set("version", Cell::integer(static_cast<std::int64_t>(s.version())));
+    std::vector<Cell> cases;
+    cases.reserve(s.fields().size());
+    for (const Field& f : s.fields()) {
+        Value cd(case_desc_schema());
+        cd.set("name", Cell::text(f.name));
+        cd.set("carries", Cell::boolean(f.carries));
+        std::vector<Cell> tokens;
+        if (f.carries) {
+            encode_type(f.type, tokens);
+        }
+        cd.set("type", Cell::list(std::move(tokens)));
+        cases.push_back(Cell::message(std::move(cd)));
+    }
+    desc.set("cases", Cell::list(std::move(cases)));
+    return desc;
+}
+
+/// A description of either form (`zen.ShapeDesc`).
+inline Value encode_shape(const Schema& s) {
+    Value v(shape_desc_schema());
+    if (s.is_union()) {
+        v.set("union", Cell::message(encode_union(s)));
+    } else {
+        v.set("record", Cell::message(encode_schema(s)));
+    }
+    return v;
 }
 
 inline Value encode_capability_ask(const CapabilityAsk& ask) {
@@ -194,17 +263,17 @@ inline Value encode_manifest(const std::vector<std::shared_ptr<const Schema>>& a
         std::vector<Cell> refs;
         refs.reserve(referenced.size());
         for (const auto& s : referenced) {
-            refs.push_back(Cell::message(encode_schema(*s)));
+            refs.push_back(Cell::message(encode_shape(*s)));
         }
         m.set("referenced", Cell::list(std::move(refs)));
     }
     std::vector<Cell> acc;
     acc.reserve(accepted.size());
     for (const auto& s : accepted) {
-        acc.push_back(Cell::message(encode_schema(*s)));
+        acc.push_back(Cell::message(encode_shape(*s)));
     }
     m.set("accepted", Cell::list(std::move(acc)));
-    m.set("state", Cell::message(encode_schema(state)));
+    m.set("state", Cell::message(encode_shape(state)));
     if (ask != nullptr) {
         m.set("requests", Cell::message(encode_capability_ask(*ask)));
     }
@@ -212,7 +281,7 @@ inline Value encode_manifest(const std::vector<std::shared_ptr<const Schema>>& a
         std::vector<Cell> cl;
         cl.reserve(claims->size());
         for (const auto& s : *claims) {
-            cl.push_back(Cell::message(encode_schema(*s)));
+            cl.push_back(Cell::message(encode_shape(*s)));
         }
         m.set("claims", Cell::list(std::move(cl)));
     }
@@ -220,7 +289,7 @@ inline Value encode_manifest(const std::vector<std::shared_ptr<const Schema>>& a
         std::vector<Cell> em;
         em.reserve(emits->size());
         for (const auto& s : *emits) {
-            em.push_back(Cell::message(encode_schema(*s)));
+            em.push_back(Cell::message(encode_shape(*s)));
         }
         m.set("emits", Cell::list(std::move(em)));
     }
@@ -283,11 +352,11 @@ inline TypeRef decode_type(const Cell::Array& tokens, std::size_t& i, const Regi
     }
 }
 
+/// A record from its admitted description (`zen.SchemaDesc`).
 inline std::shared_ptr<const Schema> decode_schema(const Value& desc, const Registry& deps) {
     std::string name = desc.get("name")->as_text();
     const auto version = static_cast<std::uint32_t>(desc.get("version")->as_int());
 
-    const Form form = desc.get("union")->as_bool() ? Form::Union : Form::Record;
     const Cell::Array& fields = desc.get("fields")->as_list();
     std::vector<Field> rebuilt;
     rebuilt.reserve(fields.size());
@@ -295,18 +364,53 @@ inline std::shared_ptr<const Schema> decode_schema(const Value& desc, const Regi
         const Value& fd = *field_cell.as_message();
         std::string fname = fd.get("name")->as_text();
         const bool required = fd.get("required")->as_bool();
-        const bool carries = fd.get("carries")->as_bool();
         const Cell::Array& tokens = fd.get("type")->as_list();
         std::size_t i = 0;
         TypeRef type = decode_type(tokens, i, deps);
         if (i != tokens.size()) {
             throw std::runtime_error("schema descriptor: trailing type tokens");
         }
-        rebuilt.push_back(Field{std::move(fname), std::move(type), required, carries});
+        rebuilt.push_back(Field{std::move(fname), std::move(type), required, /*carries=*/true});
     }
-    // The Schema refuses what no shape may be: a record's field that carries nothing, an optional
-    // case, a union with no case; std::invalid_argument, which the loader reports.
-    return std::make_shared<const Schema>(form, std::move(name), version, std::move(rebuilt));
+    return make_schema(std::move(name), version, std::move(rebuilt));
+}
+
+/// A union from its admitted description (`zen.UnionDesc`). A case that carries nothing has no
+/// type tokens; one that carries a value has exactly one type's.
+inline std::shared_ptr<const Schema> decode_union(const Value& desc, const Registry& deps) {
+    std::string name = desc.get("name")->as_text();
+    const auto version = static_cast<std::uint32_t>(desc.get("version")->as_int());
+    const Cell::Array& cases = desc.get("cases")->as_list();
+    std::vector<Field> rebuilt;
+    rebuilt.reserve(cases.size());
+    for (const Cell& case_cell : cases) {
+        const Value& cd = *case_cell.as_message();
+        std::string cname = cd.get("name")->as_text();
+        const Cell::Array& tokens = cd.get("type")->as_list();
+        if (!cd.get("carries")->as_bool()) {
+            if (!tokens.empty()) {
+                throw std::runtime_error("schema descriptor: a case that carries nothing has a type");
+            }
+            rebuilt.push_back(case_bare(std::move(cname)));
+            continue;
+        }
+        std::size_t i = 0;
+        TypeRef type = decode_type(tokens, i, deps);
+        if (i != tokens.size()) {
+            throw std::runtime_error("schema descriptor: trailing type tokens");
+        }
+        rebuilt.push_back(case_of(std::move(cname), std::move(type)));
+    }
+    // A union with no case is refused by the Schema itself (std::invalid_argument).
+    return make_union(std::move(name), version, std::move(rebuilt));
+}
+
+/// A shape of either form from its admitted description (`zen.ShapeDesc`).
+inline std::shared_ptr<const Schema> decode_shape(const Value& desc, const Registry& deps) {
+    if (const Cell* u = desc.get("union")) {
+        return decode_union(*u->as_message(), deps);
+    }
+    return decode_schema(*desc.get("record")->as_message(), deps);
 }
 
 /// Decode an admitted manifest's optional `referenced` section into `deps`, in order; the
@@ -320,7 +424,7 @@ inline void decode_referenced(const Value& manifest, Registry& deps) {
         return; // flat manifest: nothing nested, nothing to do
     }
     for (const Cell& c : refs->as_list()) {
-        deps.register_schema(decode_schema(*c.as_message(), deps));
+        deps.register_schema(decode_shape(*c.as_message(), deps));
     }
 }
 
@@ -336,7 +440,7 @@ inline void decode_referenced(const Value& manifest, Registry& deps, SchemaClaim
         return;
     }
     for (const Cell& c : refs->as_list()) {
-        deps.claim(scope, {decode_schema(*c.as_message(), deps)});
+        deps.claim(scope, {decode_shape(*c.as_message(), deps)});
     }
 }
 

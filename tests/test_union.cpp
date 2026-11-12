@@ -545,24 +545,40 @@ TEST_CASE("a shape's description says a union, its bare cases and an open field,
           "the same identity") {
     Registry deps;
     deps.register_schema(moved());
-    for (const auto& s : {moment(), carry()}) {
-        Value desc = encode_schema(*s);
-        Admission a = admit(parse(serialize(desc)), schema_desc_schema());
+    for (const auto& s : {moment(), carry(), sample()}) {
+        Value desc = encode_shape(*s);
+        Admission a = admit(parse(serialize(desc)), shape_desc_schema());
         REQUIRE(a.ok());
-        const auto rebuilt = decode_schema(a.value(), deps);
+        const auto rebuilt = decode_shape(a.value(), deps);
         CHECK(same_identity(*rebuilt, *s));
         deps.register_schema(rebuilt);
     }
+    // A record keeps the description it always had, and a union has its own.
+    CHECK(schema_desc_schema()->version() == 1);
+    CHECK(field_desc_schema()->version() == 1);
+    CHECK(shape_desc_schema()->is_union());
+    CHECK_THROWS_AS(encode_schema(*moment()), std::invalid_argument);
+    CHECK_THROWS_AS(encode_union(*moved()), std::invalid_argument);
     // A token naming a record as a union is refused.
-    Value forged(schema_desc_schema());
-    forged.set("name", Cell::text("Bad")).set("version", Cell::integer(1));
-    forged.set("union", Cell::boolean(false));
     Value fd(field_desc_schema());
     fd.set("name", Cell::text("m")).set("required", Cell::boolean(true));
-    fd.set("carries", Cell::boolean(true));
     fd.set("type", Cell::list({Cell::message(make_type_token(Kind::Union, moved()))}));
+    Value forged(schema_desc_schema());
+    forged.set("name", Cell::text("Bad")).set("version", Cell::integer(1));
     forged.set("fields", Cell::list({Cell::message(std::move(fd))}));
     CHECK_THROWS_AS(decode_schema(forged, deps), std::runtime_error);
+    // A case that carries nothing yet names a type is refused, and so is a union of no case.
+    Value cd(case_desc_schema());
+    cd.set("name", Cell::text("idle")).set("carries", Cell::boolean(false));
+    cd.set("type", Cell::list({Cell::message(make_type_token(Kind::Int, nullptr))}));
+    Value bad_union(union_desc_schema());
+    bad_union.set("name", Cell::text("U")).set("version", Cell::integer(1));
+    bad_union.set("cases", Cell::list({Cell::message(std::move(cd))}));
+    CHECK_THROWS_AS(decode_union(bad_union, deps), std::runtime_error);
+    Value empty_union(union_desc_schema());
+    empty_union.set("name", Cell::text("U")).set("version", Cell::integer(1));
+    empty_union.set("cases", Cell::list({}));
+    CHECK_THROWS_AS(decode_union(empty_union, deps), std::invalid_argument);
     CHECK(manifest_schema()->version() == 6);
 }
 

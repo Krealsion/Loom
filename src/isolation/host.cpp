@@ -601,7 +601,7 @@ void IsolationHost::reconstruct_and_cache(Link& link, const std::string& manifes
 
     std::vector<std::shared_ptr<const Schema>> accept;
     for (const loom::Cell& c : mv.get("accepted")->as_list()) {
-        auto door = loom::decode_schema(*c.as_message(), registry_);
+        auto door = loom::decode_shape(*c.as_message(), registry_);
         if (door->name() == DispatchRefused::zen_name &&
             door->version() == DispatchRefused::zen_version) {
             throw std::runtime_error("zen.DispatchRefused requires native or loaded delivery; "
@@ -609,14 +609,14 @@ void IsolationHost::reconstruct_and_cache(Link& link, const std::string& manifes
         }
         accept.push_back(std::move(door));
     }
-    auto state = loom::decode_schema(*mv.get("state")->as_message(), registry_);
+    auto state = loom::decode_shape(*mv.get("state")->as_message(), registry_);
     // The declared emit-set, decoded as the doors are: top-level, against this host's
     // registry. This pipe's contract is flat shapes (no `referenced` section is read here),
     // and an emit is held to that contract rather than a wider one nothing else here has.
     std::vector<std::shared_ptr<const Schema>> emits;
     if (const loom::Cell* declared = mv.get("emits")) {
         for (const loom::Cell& c : declared->as_list()) {
-            emits.push_back(loom::decode_schema(*c.as_message(), registry_));
+            emits.push_back(loom::decode_shape(*c.as_message(), registry_));
         }
     }
     // One transaction for the child's whole vocabulary (LIFE-08): a disagreement about the

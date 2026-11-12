@@ -67,13 +67,11 @@ std::string deep_list_descriptor_bytes(int n) {
     Value fd(field_desc_schema());
     fd.set("name", Cell::text("x"));
     fd.set("required", Cell::boolean(true));
-    fd.set("carries", Cell::boolean(true));
     fd.set("type", Cell::list(std::move(tokens)));
 
     Value desc(schema_desc_schema());
     desc.set("name", Cell::text("Evil"));
     desc.set("version", Cell::integer(1));
-    desc.set("union", Cell::boolean(false));
     desc.set("fields", Cell::list({Cell::message(std::move(fd))}));
     return serialize(desc);
 }
@@ -134,11 +132,11 @@ TEST_CASE("a manifest carries the accept-set and state schema") {
     Registry deps;
     std::vector<std::shared_ptr<const Schema>> rebuilt;
     for (const Cell& c : manifest.get("accepted")->as_list()) {
-        auto s = decode_schema(*c.as_message(), deps);
+        auto s = decode_shape(*c.as_message(), deps);
         deps.register_schema(s);
         rebuilt.push_back(s);
     }
-    auto state = decode_schema(*manifest.get("state")->as_message(), deps);
+    auto state = decode_shape(*manifest.get("state")->as_message(), deps);
 
     REQUIRE(rebuilt.size() == 2);
     CHECK(rebuilt[0]->content_id() == ping->content_id());
@@ -157,10 +155,10 @@ TEST_CASE("a struct-derived manifest carries each optional field as optional, ne
     REQUIRE(deps.lookup("Mark", 1) != nullptr);
     CHECK(deps.lookup("Mark", 1)->content_id() == schema_of<Mark>()->content_id());
     CHECK_FALSE(deps.lookup("Mark", 1)->find("label")->required);
-    const auto seek = decode_schema(*a.value().get("accepted")->as_list()[0].as_message(), deps);
+    const auto seek = decode_shape(*a.value().get("accepted")->as_list()[0].as_message(), deps);
     CHECK(seek->content_id() == schema_of<Seek>()->content_id());
     CHECK_FALSE(seek->find("to")->required);
-    const auto state = decode_schema(*a.value().get("state")->as_message(), deps);
+    const auto state = decode_shape(*a.value().get("state")->as_message(), deps);
     CHECK(state->content_id() == schema_of<MarkedState>()->content_id());
     CHECK(state->find("marks")->required);
     CHECK_FALSE(state->find("current")->required);
@@ -195,11 +193,11 @@ TEST_CASE("a manifest is self-contained: nested component schemas travel in `ref
         decode_referenced(manifest, deps);
         std::vector<std::shared_ptr<const Schema>> rebuilt;
         for (const Cell& c : manifest.get("accepted")->as_list()) {
-            auto s = decode_schema(*c.as_message(), deps);
+            auto s = decode_shape(*c.as_message(), deps);
             deps.register_schema(s);
             rebuilt.push_back(s);
         }
-        auto state = decode_schema(*manifest.get("state")->as_message(), deps);
+        auto state = decode_shape(*manifest.get("state")->as_message(), deps);
         REQUIRE(rebuilt.size() == 2);
         CHECK(rebuilt[0]->content_id() == tick->content_id());
         CHECK(rebuilt[1]->content_id() == outer->content_id());
@@ -216,7 +214,7 @@ TEST_CASE("a manifest is self-contained: nested component schemas travel in `ref
         // Straight to the state descriptor with no referenced pass — exactly
         // what every decode site did before v3, and why the first nested
         // consumer's load refused with "unresolved nested schema 'Pos'".
-        CHECK_THROWS_AS(decode_schema(*manifest.get("state")->as_message(), deps),
+        CHECK_THROWS_AS(decode_shape(*manifest.get("state")->as_message(), deps),
                         std::runtime_error);
     }
 
@@ -261,10 +259,10 @@ TEST_CASE("decode_schema refuses a pathologically deep type-token stream instead
 
     // THE DECODE-MATERIALIZATION BUDGET IS A SECOND BOUND IN FRONT OF THIS ONE, and the two must
     // meet with no gap (docs/reference/bounds.md#the-decode-materialization-bound). n nested List
-    // tokens materialise 4 (SchemaDesc slots) + 1 (fields element) + 4 (Field slots) + (n+1)
-    // (type-token elements) + 3(n+1) (each TypeToken's slots) = 13 + 4n decoded cells, so the gate
-    // admits a stream only while 13 + 4n fits the budget; above that it never becomes a Value.
-    const int deepest_admissible = static_cast<int>((loom::kMaxDecodedCells - 13) / 4);
+    // tokens materialise 3 (SchemaDesc slots) + 1 (fields element) + 3 (Field slots) + (n+1)
+    // (type-token elements) + 3(n+1) (each TypeToken's slots) = 11 + 4n decoded cells, so the gate
+    // admits a stream only while 11 + 4n fits the budget; above that it never becomes a Value.
+    const int deepest_admissible = static_cast<int>((loom::kMaxDecodedCells - 11) / 4);
 
     SUBCASE("the deepest descriptor the budget still admits is still refused by kMaxTypeDepth") {
         // The deep descriptor at the largest size the budget leaves reachable: the gate admits
@@ -343,7 +341,7 @@ TEST_CASE("a manifest (v5) carries the declared emit-set and the components it n
     decode_referenced(manifest, deps, scope);
     std::vector<std::shared_ptr<const Schema>> rebuilt;
     for (const Cell& c : manifest.get("emits")->as_list()) {
-        rebuilt.push_back(decode_schema(*c.as_message(), deps));
+        rebuilt.push_back(decode_shape(*c.as_message(), deps));
     }
     REQUIRE(rebuilt.size() == 2);
     CHECK(rebuilt[0]->content_id() == greet->content_id());
@@ -402,8 +400,8 @@ TEST_CASE("a manifest whose declaration carries two definitions of one component
     decode_referenced(a.value(), deps, scope);
     CHECK(deps.lookup("Part", 1)->content_id() == part_a->content_id());
     const Cell::Array& doors = a.value().get("accepted")->as_list();
-    CHECK(decode_schema(*doors[0].as_message(), deps)->content_id() == box->content_id());
-    CHECK(decode_schema(*doors[1].as_message(), deps)->content_id() == whole->content_id());
+    CHECK(decode_shape(*doors[0].as_message(), deps)->content_id() == box->content_id());
+    CHECK(decode_shape(*doors[1].as_message(), deps)->content_id() == whole->content_id());
 }
 
 TEST_CASE("an externally supplied manifest is held to the same rules: an emitted shape "
@@ -418,13 +416,13 @@ TEST_CASE("an externally supplied manifest is held to the same rules: an emitted
         auto counter = SchemaBuilder("Counter", 1).field("count", Kind::Int).build();
         Value m(manifest_schema());
         m.set("accepted", Cell::list({}));
-        m.set("state", Cell::message(encode_schema(*counter)));
-        m.set("emits", Cell::list({Cell::message(encode_schema(*carrier))}));
+        m.set("state", Cell::message(encode_shape(*counter)));
+        m.set("emits", Cell::list({Cell::message(encode_shape(*carrier))}));
         Unverified u = parse(serialize(m));
         Admission a = admit(u, manifest_schema());
         REQUIRE(a.ok());
         Registry deps;
-        CHECK_THROWS_AS(decode_schema(*a.value().get("emits")->as_list()[0].as_message(), deps),
+        CHECK_THROWS_AS(decode_shape(*a.value().get("emits")->as_list()[0].as_message(), deps),
                         std::runtime_error);
         CHECK(deps.size() == 0);
     }
@@ -448,6 +446,27 @@ TEST_CASE("an externally supplied manifest is held to the same rules: an emitted
         Unverified u = parse(serialize(old));
         REQUIRE(u.well_formed());
         Admission a = admit(u, manifest_schema());
+        CHECK_FALSE(a.ok());
+        CHECK(a.first_error().kind == ErrorKind::SchemaMismatch);
+    }
+    SUBCASE("a manifest whose lists hold records' descriptions alone is another shape at this "
+            "door") {
+        // zen.Manifest v5, spelled as it was: every list of zen.SchemaDesc, `emits` among them.
+        // An image built against it, at the same ABI version, meets this refusal in
+        // `reconstruct` (docs/reference/dynamic-abi.md).
+        auto v5 = SchemaBuilder("zen.Manifest", 5)
+                      .list("referenced", type_message(schema_desc_schema()), /*required=*/false)
+                      .list("accepted", type_message(schema_desc_schema()))
+                      .message("state", schema_desc_schema())
+                      .message("requests", capability_ask_schema(), /*required=*/false)
+                      .list("claims", type_message(schema_desc_schema()), /*required=*/false)
+                      .list("emits", type_message(schema_desc_schema()), /*required=*/false)
+                      .build();
+        auto counter = SchemaBuilder("Counter", 1).field("count", Kind::Int).build();
+        Value old(v5);
+        old.set("accepted", Cell::list({}));
+        old.set("state", Cell::message(encode_schema(*counter)));
+        Admission a = admit(parse(serialize(old)), manifest_schema());
         CHECK_FALSE(a.ok());
         CHECK(a.first_error().kind == ErrorKind::SchemaMismatch);
     }

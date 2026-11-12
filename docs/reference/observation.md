@@ -78,7 +78,7 @@ itself, visibly, and nothing in a subscriber's reach can write it for it.
 shapes, next }` says where the subscription begins: the relay's **lifetime** (minted when it was
 made, never reused — a subscription number is only ever read together with it), the role's
 holder and incarnation at that moment (0 when nobody holds it), the window granted, and the
-number the first word will carry. `shapes` is `loom.observe.Shapes`: `zen.SchemaDesc` for each
+number the first word will carry. `shapes` is `loom.observe.Shapes`: `zen.ShapeDesc` for each
 subscribed shape and the closure it nests, in the subscription's encoding — so a subscriber
 decodes a shape its own host never declared (the Python client does exactly that).
 

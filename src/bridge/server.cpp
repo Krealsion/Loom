@@ -597,9 +597,12 @@ void BridgeServer::on_frame(Conn& c, const BridgeIncoming& f) {
             c.ch->queue(BridgeOp::SchemaNone, body);
         } else {
             // Ship the schema AS BYTES (the IPC currency): encode it to its descriptor Value and
-            // serialize, in the session's own encoding. The client re-admits + reconstructs it
-            // (decode_schema).
-            c.ch->queue(BridgeOp::Schema, encode_for(c.encoding, loom::encode_schema(*schema)));
+            // serialize, in the session's own encoding -- a record's `zen.SchemaDesc`, a union's
+            // `zen.UnionDesc`. The client re-admits + reconstructs it (decode_schema,
+            // decode_union).
+            c.ch->queue(BridgeOp::Schema,
+                        encode_for(c.encoding, schema->is_union() ? loom::encode_union(*schema)
+                                                                  : loom::encode_schema(*schema)));
         }
         break;
     }

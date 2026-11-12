@@ -159,12 +159,16 @@ void RemoteConsole::process(const BridgeIncoming& f) const {
     case BridgeOp::Schema: {
         // [bytes encoded_schema] — re-admit against the meta-schema, reconstruct, register.
         loom::Unverified u = loom::parse(f.payload);
-        loom::Admission a = loom::admit(u, loom::schema_desc_schema());
+        const bool is_union = u.claimed_name() == loom::union_desc_schema()->name();
+        loom::Admission a = loom::admit(
+            u, is_union ? loom::union_desc_schema() : loom::schema_desc_schema());
         if (!a.ok()) {
             break;
         }
         try {
-            std::shared_ptr<const loom::Schema> s = loom::decode_schema(a.value(), registry_);
+            std::shared_ptr<const loom::Schema> s =
+                is_union ? loom::decode_union(a.value(), registry_)
+                         : loom::decode_schema(a.value(), registry_);
             if (!registry_.lookup(s->name(), s->version())) {
                 registry_.register_schema(s);
             }

@@ -92,14 +92,24 @@ def _type_from_tokens(tokens, i):
 
 
 def schema_from_desc(fields_json):
-    """A Schema from the fields of a ``zen.SchemaDesc`` envelope (the bridge's Schema reply)."""
+    """A Schema from a shape's description: a record's ``zen.SchemaDesc`` or a union's
+    ``zen.UnionDesc`` (the bridge's Schema reply), or a ``zen.ShapeDesc`` holding either (the
+    entries of a descriptor package)."""
+    if set(fields_json) == {"record"} or set(fields_json) == {"union"}:
+        (_, desc), = fields_json.items()
+        return schema_from_desc(desc)
+    if "cases" in fields_json:
+        cases = []
+        for c in fields_json.get("cases", []):
+            carries = bool(c.get("carries", False))
+            t = _type_from_tokens(c["type"], 0)[0] if carries else TypeRef(BOOL)
+            cases.append(Field(c["name"], True, t, carries))
+        return Schema(fields_json["name"], int(fields_json["version"]), cases, is_union=True)
     fields = []
     for f in fields_json.get("fields", []):
         t, _ = _type_from_tokens(f["type"], 0)
-        fields.append(Field(f["name"], bool(f.get("required", False)), t,
-                            bool(f.get("carries", True))))
-    return Schema(fields_json["name"], int(fields_json["version"]), fields,
-                  bool(fields_json.get("union", False)))
+        fields.append(Field(f["name"], bool(f.get("required", False)), t))
+    return Schema(fields_json["name"], int(fields_json["version"]), fields)
 
 
 def envelope(name, version, fields_json):

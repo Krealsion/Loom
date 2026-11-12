@@ -71,14 +71,14 @@ inline constexpr std::int64_t kMaxWindow = 4096;     ///< the most a subscriber 
 
 // ---- the descriptor package a Subscribed carries ------------------------------------------------
 
-/// `loom.observe.Shapes`: `zen.SchemaDesc` for each subscribed shape (`shapes`) and the closure
+/// `loom.observe.Shapes`: `zen.ShapeDesc` for each subscribed shape (`shapes`) and the closure
 /// they nest (`referenced`, post-order, so one forward pass resolves it) -- self-description's own
 /// descriptor and closure rule (zen/weave/describe.hpp), under a name that says what these are.
 inline std::shared_ptr<const Schema> shapes_schema() {
     static const auto s = SchemaBuilder("loom.observe.Shapes", 2)
-                              .list("referenced", type_message(schema_desc_schema()),
+                              .list("referenced", type_message(shape_desc_schema()),
                                     /*required=*/false)
-                              .list("shapes", type_message(schema_desc_schema()))
+                              .list("shapes", type_message(shape_desc_schema()))
                               .build();
     return s;
 }
@@ -93,32 +93,32 @@ inline Value encode_shapes(const std::vector<std::shared_ptr<const Schema>>& roo
         std::vector<Cell> refs;
         refs.reserve(referenced.size());
         for (const auto& s : referenced) {
-            refs.push_back(Cell::message(encode_schema(*s)));
+            refs.push_back(Cell::message(encode_shape(*s)));
         }
         v.set("referenced", Cell::list(std::move(refs)));
     }
     std::vector<Cell> out;
     out.reserve(roots.size());
     for (const auto& s : roots) {
-        out.push_back(Cell::message(encode_schema(*s)));
+        out.push_back(Cell::message(encode_shape(*s)));
     }
     v.set("shapes", Cell::list(std::move(out)));
     return v;
 }
 
 /// The subscribed shapes, reconstructed from an admitted `loom.observe.Shapes` value; the closure
-/// is registered into `deps` first. Throws, as `decode_schema` does, on a descriptor it cannot
+/// is registered into `deps` first. Throws, as `decode_shape` does, on a descriptor it cannot
 /// rebuild.
 inline std::vector<std::shared_ptr<const Schema>> decode_shapes(const Value& v, Registry& deps) {
     if (const Cell* refs = v.get("referenced")) {
         for (const Cell& c : refs->as_list()) {
-            deps.register_schema(decode_schema(*c.as_message(), deps));
+            deps.register_schema(decode_shape(*c.as_message(), deps));
         }
     }
     std::vector<std::shared_ptr<const Schema>> out;
     if (const Cell* roots = v.get("shapes")) {
         for (const Cell& c : roots->as_list()) {
-            out.push_back(decode_schema(*c.as_message(), deps));
+            out.push_back(decode_shape(*c.as_message(), deps));
         }
     }
     return out;
