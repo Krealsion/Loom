@@ -2,12 +2,11 @@
 // Copyright (c) 2026 Joshua DeMoss
 
 // THE PUBLIC MACRO SURFACE, COMPILED AS A STRANGER: every form of ZEN_SHAPE / ZEN_EXPOSE /
-// ZEN_HIDE, BOTH zero-argument spellings included (the dispatch MSVC's traditional
-// preprocessor cannot perform), and ZEN_UNION with and without its names, ZEN_ENUM and an
-// open field (loom::Any), built against find_package(loom) with no consumer-written
-// compiler switch, so a package that stops carrying its own preprocessor requirement fails
-// here. It ASSERTS the tags: a surface that builds but tags the wrong fields would pass a
-// compile-only witness.
+// ZEN_HIDE, both zero-argument spellings included (the dispatch MSVC's traditional preprocessor
+// cannot perform), ZEN_UNION with and without names, ZEN_ENUM and loom::Any, built against
+// find_package(loom) with no consumer-written compiler switch, so a package that stops carrying
+// its own preprocessor requirement fails here. It ASSERTS what each derives, since a surface that
+// builds but tags or names the wrong fields would pass a compile-only witness.
 
 #include "witness_protocol.hpp"
 
