@@ -12,6 +12,7 @@
 
 #include "detail/sha256.hpp"
 
+#include <zen/kernel/descriptor.hpp>
 #include <zen/serialize.hpp>
 #include <zen/switchboard/switchboard.hpp> // lifecycle_policy_schema
 
@@ -67,8 +68,6 @@ wasmtime_val_t i64v(std::int64_t v) {
     x.of.i64 = v;
     return x;
 }
-
-std::int32_t as_i32(std::uint32_t v) { return static_cast<std::int32_t>(v); }
 
 // ---- the counts ---------------------------------------------------------------------------------
 
@@ -182,7 +181,7 @@ void keep(const std::string& digest, std::shared_ptr<BoxModule> module) {
 /// module glue (cmake/loom-wasm-glue.cpp).
 struct Exports {
     wasmtime_func_t initialize{}, abi_version{}, alloc{}, free{}, create{}, destroy{}, describe{},
-        snapshot{}, policy{}, revive{}, handle{}, claim_published{}, sink_deliver{};
+        snapshot{}, policy{}, revive{}, handle{}, claim_published{}, sink_deliver{}, manifest_version{};
 };
 
 struct Box {
@@ -210,6 +209,8 @@ struct Box {
     std::int64_t reloads = 0;
     bool quarantined = false;
     std::string last_trap;
+    /// The exports a module being judged lacks, refused once its version is read.
+    std::string missing;
     /// What the module wrote to its standard output and error in this entry, and what was dropped.
     std::string log;
     std::size_t log_dropped = 0;
@@ -317,10 +318,17 @@ struct Door {
     explicit Door(wasmtime_caller_t* caller)
         : b(*box_of(caller)), cx(wasmtime_caller_context(caller)) {}
 
-    /// A door exists only while a delivery is in progress, and only if the host table has it.
+    /// A door exists only while a delivery is in progress, and only if the host table reaches
+    /// and fills it.
     template <class Slot>
     bool open(Slot ZenHostApi::*slot) const {
-        return b.host != nullptr && b.host->*slot != nullptr;
+        if (b.host == nullptr) {
+            return false;
+        }
+        const auto* base = reinterpret_cast<const unsigned char*>(b.host);
+        const auto* at = reinterpret_cast<const unsigned char*>(&(b.host->*slot));
+        return static_cast<std::size_t>(at - base) + sizeof(Slot) <= b.host->size &&
+               b.host->*slot != nullptr;
     }
     bool bytes(std::uint32_t ptr, std::uint32_t len, const std::uint8_t** out) const {
         std::uint8_t* p = nullptr;
@@ -630,12 +638,22 @@ wasm_trap_t* deliver_reading(Box& b, std::uint32_t by_ptr, const ZenSenseBy& by,
         free_in(b, p);
     }
     if (by_ptr != 0) {
+        // The module's own struct says its size: the host writes no further than it reaches.
+        static_assert(sizeof(ZenSenseBy) == 48, "ZenSenseBy has one layout on wasm32 and the host");
         std::uint8_t* at = nullptr;
-        if (!span(b.cx, b.memory, by_ptr, sizeof(ZenSenseBy), &at)) {
+        std::uint32_t size = 0;
+        if (!span(b.cx, b.memory, by_ptr, sizeof(size), &at)) {
             return trap("the module named a reading's authorship outside its memory");
         }
-        static_assert(sizeof(ZenSenseBy) == 48, "ZenSenseBy has one layout on wasm32 and the host");
-        std::memcpy(at, &by, sizeof(ZenSenseBy));
+        std::memcpy(&size, at, sizeof(size));
+        const std::uint32_t reach =
+            size < sizeof(ZenSenseBy) ? size : static_cast<std::uint32_t>(sizeof(ZenSenseBy));
+        if (!span(b.cx, b.memory, by_ptr, reach, &at)) {
+            return trap("the module named a reading's authorship outside its memory");
+        }
+        ZenSenseBy full = by;
+        full.size = size;
+        std::memcpy(at, &full, reach);
     }
     return nullptr;
 }
@@ -652,6 +670,7 @@ BOX_CB(zh_sense_observe) {
     }
     Held held[2];
     ZenSenseBy by{};
+    by.size = sizeof(ZenSenseBy); // the host fills it whole; the module's own size is read after
     const ZenStatus st = d.b.host->sense_observe(d.b.host->ctx, u64(args, 0), shape.c_str(),
                                                  u32(args, 2), ZenByteSink{&held[0], &held_write},
                                                  ZenByteSink{&held[1], &held_write}, &by);
@@ -675,6 +694,7 @@ BOX_CB(zh_sense_observe_role) {
     }
     Held held[2];
     ZenSenseBy by{};
+    by.size = sizeof(ZenSenseBy); // the host fills it whole; the module's own size is read after
     const ZenStatus st = d.b.host->sense_observe_role(
         d.b.host->ctx, role.c_str(), shape.c_str(), u32(args, 2),
         ZenByteSink{&held[0], &held_write}, ZenByteSink{&held[1], &held_write}, &by);
@@ -915,8 +935,9 @@ bool export_func(Box& b, const char* name, wasmtime_func_t& out) {
 }
 
 /// A fresh store and instance of the box's module, its static initialisation run; nothing of the
-/// weave is made yet. False with `why` when the module cannot be run as a weave.
-bool instantiate(Box& b, std::string& why) {
+/// weave is made yet. False with `why` when the module cannot be run as a weave; while `judging`,
+/// a module that says its version runs lacking other exports, and they are kept in `missing`.
+bool instantiate(Box& b, std::string& why, bool judging = false) {
     Engine& en = engine();
     b.store = wasmtime_store_new(en.engine, &b, nullptr);
     b.cx = wasmtime_store_context(b.store);
@@ -951,17 +972,24 @@ bool instantiate(Box& b, std::string& why) {
         {"zw_describe", &Exports::describe},   {"zw_snapshot", &Exports::snapshot},
         {"zw_policy", &Exports::policy},       {"zw_revive", &Exports::revive},
         {"zw_handle", &Exports::handle},       {"zw_claim_published", &Exports::claim_published},
-        {"zw_sink_deliver", &Exports::sink_deliver}};
+        {"zw_sink_deliver", &Exports::sink_deliver},
+        {"zw_abi_manifest_version", &Exports::manifest_version}};
     std::string missing;
+    bool versioned = true;
     for (const Named& n : kTable) {
         if (!export_func(b, n.name, b.fn.*n.slot)) {
             missing += (missing.empty() ? "" : ", ") + std::string(n.name);
+            versioned = versioned && n.slot != &Exports::initialize &&
+                        n.slot != &Exports::abi_version;
         }
     }
-    if (!missing.empty()) {
+    // A module that says its version is judged by it first, so one built against another
+    // table is refused by its version, not by the exports that table did not have.
+    if (!missing.empty() && !(judging && versioned)) {
         why = "the module does not export the weave table a box drives: " + missing;
         return false;
     }
+    b.missing = missing;
     if (!call(b.cx, b.fn.initialize, nullptr, 0, nullptr, 0, why)) {
         why = "the module trapped in its static initialisation: " + why;
         return false;
@@ -975,6 +1003,18 @@ bool abi_version_of(Box& b, std::uint32_t& version, std::string& why) {
     wasmtime_val_t r;
     if (!call(b.cx, b.fn.abi_version, nullptr, 0, &r, 1, why)) {
         why = "the module trapped reporting its ABI version: " + why;
+        return false;
+    }
+    version = static_cast<std::uint32_t>(r.of.i32);
+    return true;
+}
+
+/// The manifest version the module's weave writes, read through its own export.
+bool manifest_version_of(Box& b, std::uint32_t& version, std::string& why) {
+    refuel(b);
+    wasmtime_val_t r;
+    if (!call(b.cx, b.fn.manifest_version, nullptr, 0, &r, 1, why)) {
+        why = "the module trapped reporting its manifest version: " + why;
         return false;
     }
     version = static_cast<std::uint32_t>(r.of.i32);
@@ -1191,43 +1231,72 @@ ZenStatus box_slot_claim_published(void* instance, const uint8_t* value, size_t 
     return st;
 }
 
-ZenStatus box_slot_handle(void* instance, uint64_t sender, uint64_t reply_to,
-                          uint64_t correlation, uint32_t provenance, int64_t attested_sequence,
-                          const char* authored_role, const uint8_t* payload, size_t len,
-                          const ZenHostApi* host) {
+/// A delivery's facts as a module reads them: `ZenDelivery` in wasm32's layout, its two role
+/// pointers four bytes each. The glue holds the module's side of it to the same offsets
+/// (cmake/loom-wasm-glue.cpp).
+namespace wasm32_delivery {
+constexpr std::uint32_t kSize = 0, kProvenance = 4, kSender = 8, kReplyTo = 16, kCorrelation = 24,
+                        kAttestedSequence = 32, kAuthoredRole = 40, kAddressedRole = 44,
+                        kBytes = 48;
+} // namespace wasm32_delivery
+
+/// A host string copied into fresh module memory, NUL-terminated; 0 for NULL. False on failure.
+bool copy_name_in(Box& b, const char* name, std::int32_t& at, std::string& why) {
+    at = 0;
+    if (name == nullptr) {
+        return true;
+    }
+    at = copy_in(b, reinterpret_cast<const std::uint8_t*>(name), std::strlen(name) + 1, why);
+    return at != 0;
+}
+
+ZenStatus box_slot_handle(void* instance, const ZenDelivery* d, const uint8_t* payload,
+                          size_t len, const ZenHostApi* host) {
     auto* b = static_cast<Box*>(instance);
     if (!live(*b)) {
         return ZEN_ERR;
     }
     refuel(*b);
     std::string why;
+    // The host's own delivery is this build's, so every field it names is there.
     const std::int32_t p = copy_in(*b, payload, len, why);
-    std::int32_t role = 0;
-    if (p != 0 && authored_role != nullptr) {
-        role = copy_in(*b, reinterpret_cast<const std::uint8_t*>(authored_role),
-                       std::strlen(authored_role) + 1, why);
+    std::int32_t authored = 0;
+    std::int32_t addressed = 0;
+    std::int32_t facts = 0;
+    bool trapped = p == 0 || !copy_name_in(*b, d->authored_role, authored, why) ||
+                   !copy_name_in(*b, d->addressed_role, addressed, why);
+    if (!trapped) {
+        namespace w = wasm32_delivery;
+        std::uint8_t image[w::kBytes] = {};
+        const auto put = [&](std::uint32_t at, const void* v, std::size_t n) {
+            std::memcpy(image + at, v, n);
+        };
+        const std::uint32_t size = w::kBytes;
+        put(w::kSize, &size, 4);
+        put(w::kProvenance, &d->provenance, 4);
+        put(w::kSender, &d->sender, 8);
+        put(w::kReplyTo, &d->reply_to, 8);
+        put(w::kCorrelation, &d->correlation, 8);
+        put(w::kAttestedSequence, &d->attested_sequence, 8);
+        put(w::kAuthoredRole, &authored, 4);
+        put(w::kAddressedRole, &addressed, 4);
+        facts = copy_in(*b, image, sizeof(image), why);
+        trapped = facts == 0;
     }
     ZenStatus st = ZEN_ERR;
-    bool trapped = p == 0 || (authored_role != nullptr && role == 0);
     if (!trapped) {
-        wasmtime_val_t a[9] = {i32v(b->weave),
-                               i64v(static_cast<std::int64_t>(sender)),
-                               i64v(static_cast<std::int64_t>(reply_to)),
-                               i64v(static_cast<std::int64_t>(correlation)),
-                               i32v(as_i32(provenance)),
-                               i64v(attested_sequence),
-                               i32v(role),
-                               i32v(p),
+        wasmtime_val_t a[4] = {i32v(b->weave), i32v(facts), i32v(p),
                                i32v(static_cast<std::int32_t>(len))};
         wasmtime_val_t r;
         b->host = host; // the doors exist for exactly this call
-        trapped = !call(b->cx, b->fn.handle, a, 9, &r, 1, why);
+        trapped = !call(b->cx, b->fn.handle, a, 4, &r, 1, why);
         b->host = nullptr;
         if (!trapped) {
             st = r.of.i32;
-            free_in(*b, p);
-            if (role != 0) {
-                free_in(*b, role);
+            for (const std::int32_t held : {p, authored, addressed, facts}) {
+                if (held != 0) {
+                    free_in(*b, held);
+                }
             }
         }
     }
@@ -1242,6 +1311,9 @@ ZenStatus box_slot_handle(void* instance, uint64_t sender, uint64_t reply_to,
 }
 
 const ZenWeaveAbi kBoxAbi = {.abi_version     = ZEN_ABI_VERSION,
+                             .size            = sizeof(ZenWeaveAbi),
+                             .host_size       = sizeof(ZenHostApi),
+                             .manifest_version = kManifestVersion,
                              .create          = box_slot_create,
                              .destroy         = box_slot_destroy,
                              .describe        = box_slot_describe,
@@ -1298,21 +1370,31 @@ std::shared_ptr<BoxModule> box_open(const std::string& path, std::string& error)
         error = "the module imports what a box never grants: " + undefined;
         return nullptr;
     }
-    // One throwaway instance, for the version its weave was built against: refused before any
-    // slot of the weave runs, both versions named, as a native image's is.
+    // One throwaway instance, for the versions its weave was built against: refused before any
+    // slot of the weave runs, by what it needs, as a native image's is. The module's host table
+    // is its imports, judged by name above; its descriptor is its glue's, built with it.
     Box probe;
     probe.module = module;
     std::string why;
-    std::uint32_t version = 0;
-    const bool read = instantiate(probe, why) && abi_version_of(probe, version, why);
+    // Its version judged first, alone, then its manifest's.
+    ZenWeaveAbi said{};
+    said.size = sizeof(ZenWeaveAbi);
+    said.manifest_version = kManifestVersion;
+    bool read = instantiate(probe, why, /*judging=*/true) &&
+                abi_version_of(probe, said.abi_version, why);
+    ZenWeaveAbi judged{};
+    if (read && !detail::read_descriptor(&said, judged, why)) {
+        read = false; // a version this host does not load, whatever else it lacks
+    } else if (read && !probe.missing.empty()) {
+        why = "the module does not export the weave table a box drives: " + probe.missing;
+        read = false;
+    } else if (read) {
+        read = manifest_version_of(probe, said.manifest_version, why) &&
+               detail::read_descriptor(&said, judged, why);
+    }
     drop_store(probe);
     if (!read) {
         error = why;
-        return nullptr;
-    }
-    if (version != ZEN_ABI_VERSION) {
-        error = "unsupported abi_version " + std::to_string(version) + " (host supports " +
-                std::to_string(ZEN_ABI_VERSION) + ")";
         return nullptr;
     }
     keep(digest, module);

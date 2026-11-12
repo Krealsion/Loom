@@ -14,6 +14,7 @@
 #define ZEN_ENFORCEMENT_DOMAIN "isolation"
 #include "enforcement_gate.hpp"
 #include "switchboard_fixtures.hpp"
+#include "weavelib/addressed_protocol.hpp"
 #include "weavelib/role_protocol.hpp"
 
 #include <zen/isolation/channel.hpp>
@@ -278,6 +279,26 @@ TEST_CASE("out-of-process delivery and reply are indistinguishable from in-proce
     CHECK(rec_out.weave->handled_names[0] == rec_in.weave->handled_names[0]);
     CHECK(rec_out.weave->handled_values[0] == rec_in.weave->handled_values[0]);
     CHECK(rec_out.weave->handled_values[0] == 42);
+}
+
+TEST_CASE("an isolated weave reads the role a delivery was addressed to, as a native one does: "
+          "where it went crosses the pipe, and no attestation does") {
+    Switchboard bus;
+    IsolationHost host(bus, kHostExe);
+    OutOfProcessResult door = host.mount("door", ZEN_SO_ADDRESSED, Grant{}, "door.a");
+    REQUIRE_MESSAGE(door.ok, door.error);
+    const auto heard = [&] { return bus.weave(door.id)->snapshot(); };
+    const auto knocks = [&] { return heard().get("knocks")->as_int(); };
+
+    bus.send_to_role("door.a", Message(to_value(addressed::AddressedKnock{1})));
+    REQUIRE(host.run_until([&] { return knocks() == 1; }, 2000));
+    CHECK(heard().get("addressed")->as_text() == "door.a");
+    CHECK(heard().get("authored")->as_text().empty());
+
+    // The canary: a directed send names no role, across the pipe as in process.
+    bus.send(door.id, Message(to_value(addressed::AddressedKnock{2})));
+    REQUIRE(host.run_until([&] { return knocks() == 2; }, 2000));
+    CHECK(heard().get("addressed")->as_text().empty());
 }
 
 TEST_CASE("the sender of a child's emitted message is stamped from the connection") {

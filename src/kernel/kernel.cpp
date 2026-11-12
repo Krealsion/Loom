@@ -157,12 +157,14 @@ bool same_accepted_contract(const std::vector<std::shared_ptr<const Schema>>& a,
     return identities(a) == identities(b);
 }
 
-// Resolve and validate the descriptor exported by a loaded library.
-const ZenWeaveAbi* fetch_abi(void* lib, std::string& error) {
+// Resolve the descriptor exported by a loaded library and read it into `out` as this host reads
+// it (zen/kernel/descriptor.hpp): false, with `error` naming what it needs, for one this host
+// does not load.
+bool fetch_abi(void* lib, ZenWeaveAbi& out, std::string& error) {
     void* sym = lib_symbol(lib, "zen_weave_abi");
     if (sym == nullptr) {
         error = "library does not export zen_weave_abi";
-        return nullptr;
+        return false;
     }
     using AbiFn = const ZenWeaveAbi* (*)(void);
     AbiFn fn = nullptr;
@@ -170,14 +172,9 @@ const ZenWeaveAbi* fetch_abi(void* lib, std::string& error) {
     const ZenWeaveAbi* abi = fn();
     if (abi == nullptr) {
         error = "zen_weave_abi returned null";
-        return nullptr;
+        return false;
     }
-    if (abi->abi_version != ZEN_ABI_VERSION) {
-        error = "unsupported abi_version " + std::to_string(abi->abi_version) + " (host supports " +
-                std::to_string(ZEN_ABI_VERSION) + ")";
-        return nullptr;
-    }
-    return abi;
+    return detail::read_descriptor(abi, out, error);
 }
 
 // ---- host callbacks the library calls during handle() ---------------------
@@ -257,14 +254,21 @@ public:
     LoadedLibrary(LoadedLibrary&&) = delete;
     LoadedLibrary& operator=(LoadedLibrary&&) = delete;
 
-    /// The descriptor this image's instances are driven through, or null with `error` set.
+    /// The descriptor this image's instances are driven through, as this host reads it, or null
+    /// with `error` set. A library's is read once and kept here, with the image it describes.
     const ZenWeaveAbi* abi(std::string& error) const {
 #if defined(LOOM_ENABLE_WASM)
         if (module_) {
-            return detail::box_abi(); // the module's own version was judged when it was opened
+            return detail::box_abi(); // the module's own descriptor was judged when it was opened
         }
 #endif
-        return fetch_abi(handle_, error);
+        if (!read_) {
+            if (!fetch_abi(handle_, descriptor_, error)) {
+                return nullptr;
+            }
+            read_ = true;
+        }
+        return &descriptor_;
     }
 
     /// One instance of this image's weave, made through `abi`; null when it refused its making.
@@ -303,6 +307,9 @@ public:
 
 private:
     void* handle_ = nullptr;
+    /// The library's descriptor as this host read it, once `read_`.
+    mutable ZenWeaveAbi descriptor_{};
+    mutable bool read_ = false;
 #if defined(LOOM_ENABLE_WASM)
     std::shared_ptr<detail::BoxModule> module_;
 #endif
@@ -673,18 +680,21 @@ static ZenStatus sense_status_of(loom::SenseRefusal why) {
 /// written" means "no role", which no real role name can imitate.
 static void fill_sense_by(const loom::SenseReading& r, ZenByteSink role_sink, ZenSenseBy* by) {
     if (by != nullptr) {
-        *by = ZenSenseBy{};
-        by->author = r.by.author.value;
-        by->author_life = r.by.author_life;
-        by->author_incarnation = r.by.author_incarnation;
-        by->author_life_is_current = r.by.author_life_is_current ? 1u : 0u;
+        ZenSenseBy full{};
+        full.author = r.by.author.value;
+        full.author_life = r.by.author_life;
+        full.author_incarnation = r.by.author_incarnation;
+        full.author_life_is_current = r.by.author_life_is_current ? 1u : 0u;
         // Carried separately from the life fact on purpose: a same-life
         // replacement moves the incarnation and not the life, so deriving this
         // from the line above would report a predecessor's claim as the current
         // incarnation's.
-        by->author_incarnation_is_current = r.by.author_incarnation_is_current ? 1u : 0u;
-        by->role_holder_is_current = r.by.role_holder_is_current ? 1u : 0u;
-        by->revision = r.by.revision;
+        full.author_incarnation_is_current = r.by.author_incarnation_is_current ? 1u : 0u;
+        full.role_holder_is_current = r.by.role_holder_is_current ? 1u : 0u;
+        full.revision = r.by.revision;
+        // As far as the library's own size reaches, and its size as it said it.
+        full.size = by->size;
+        std::memcpy(by, &full, std::min<std::size_t>(by->size, sizeof(ZenSenseBy)));
     }
     if (role_sink.write != nullptr && !r.by.role.empty()) {
         role_sink.write(role_sink.ctx,
@@ -929,7 +939,8 @@ public:
         // name the wrong function; the loaded semantic witness tells destination, role
         // provenance and attempt from count through this table. The payload gate cannot.
         // See docs/reference/dynamic-abi.md#constructing-the-tables.
-        ZenHostApi api{.ctx                  = &ctx,
+        ZenHostApi api{.size                 = sizeof(ZenHostApi),
+                       .ctx                  = &ctx,
                        .send                 = &zen_host_send,
                        .publish              = &zen_host_publish,
                        .send_to_role         = &zen_host_send_to_role,
@@ -966,8 +977,18 @@ public:
             break;
         }
         // The authored role: the delivery's stamped fact, NUL-terminated for the seam;
-        // NULL means personal speech.
+        // NULL means personal speech. The addressed role likewise; NULL for a directed send and
+        // a publication.
         const std::string authored(in.provenance.authored_role());
+        const ZenDelivery delivery{
+            .size = sizeof(ZenDelivery),
+            .provenance = prov,
+            .sender = in.sender.value,
+            .reply_to = in.reply_to.value,
+            .correlation = in.correlation,
+            .attested_sequence = in.provenance.attested_sequence(),
+            .authored_role = authored.empty() ? nullptr : authored.c_str(),
+            .addressed_role = in.addressed_role.empty() ? nullptr : in.addressed_role.c_str()};
         // The library handler's status is contained, not discarded. The delivery was valid
         // and the library's error stays its own: nothing is refused, retried or translated,
         // and no weave can read the status. But `do_handle` catches every exception at the
@@ -975,10 +996,8 @@ public:
         // complete: the fact crosses back and the Switchboard says `HandlerFailed`, not
         // `Delivered`.
         const ZenStatus st =
-            abi_->handle(instance_, in.sender.value, in.reply_to.value, in.correlation, prov,
-                         in.provenance.attested_sequence(),
-                         authored.empty() ? nullptr : authored.c_str(),
-                         reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), &api);
+            abi_->handle(instance_, &delivery, reinterpret_cast<const std::uint8_t*>(bytes.data()),
+                         bytes.size(), &api);
         if (st != ZEN_OK && bus_ != nullptr) {
             bus_->note_handler_failure();
         }

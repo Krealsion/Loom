@@ -20,6 +20,7 @@
 // union by `zen.UnionDesc` (its cases, each carrying a type or nothing), and a list that may hold
 // either holds `zen.ShapeDesc`, the union of the two.
 
+#include <zen/kernel/descriptor.hpp>
 #include <zen/registry.hpp>
 #include <zen/schema.hpp>
 #include <zen/value.hpp>
@@ -114,9 +115,9 @@ inline std::shared_ptr<const Schema> manifest_schema() {
     // them, so the manifest is self-contained), `accepted`, `state`, and the optional
     // `requests` (the ask), `claims` (the claim-set) and `emits` (the emit-set: vocabulary the
     // host claims into its agreement wall, never authority). An image built for an older
-    // manifest is an older ABI, refused by the version gate before its manifest is read.
-    // docs/decisions/declared-vocabulary-is-agreed-at-admission.md
-    static const auto s = SchemaBuilder("zen.Manifest", 6)
+    // manifest is refused by the manifest version its descriptor names, before its manifest is
+    // read. docs/decisions/declared-vocabulary-is-agreed-at-admission.md
+    static const auto s = SchemaBuilder("zen.Manifest", kManifestVersion)
                               .list("referenced", type_message(shape_desc_schema()),
                                     /*required=*/false)
                               .list("accepted", type_message(shape_desc_schema()))

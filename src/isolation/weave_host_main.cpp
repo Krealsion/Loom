@@ -9,6 +9,7 @@
 
 #include <zen/isolation/protocol.hpp>
 #include <zen/kernel/abi.h>
+#include <zen/kernel/descriptor.hpp>
 #include <zen/kernel/making_words.hpp>
 
 #include <cerrno>
@@ -169,10 +170,15 @@ int main(int argc, char** argv) {
     using AbiFn = const ZenWeaveAbi* (*)(void);
     AbiFn abi_fn = nullptr;
     std::memcpy(&abi_fn, &sym, sizeof(abi_fn));
-    const ZenWeaveAbi* abi = abi_fn();
-    if (abi == nullptr || abi->abi_version != ZEN_ABI_VERSION) {
+    const ZenWeaveAbi* exported = abi_fn();
+    // Read as the parent's own kernel reads one (zen/kernel/descriptor.hpp): an image it would
+    // refuse is refused here before any slot of it runs.
+    ZenWeaveAbi descriptor{};
+    std::string why;
+    if (exported == nullptr || !loom::detail::read_descriptor(exported, descriptor, why)) {
         return 5;
     }
+    const ZenWeaveAbi* abi = &descriptor;
     loom::MakingWords words;
     void* instance = abi->create(words.sink());
     if (instance == nullptr) {
@@ -210,7 +216,8 @@ int main(int argc, char** argv) {
     // and Sense claims, reads and offers (a child cannot present the parent's grant or identity).
     // A verified role frame on this pipe is the seam an out-of-process role would need.
     // By name, in declaration order (KERN-04): a designator is the comment the compiler reads.
-    ZenHostApi api{.ctx                  = nullptr,
+    ZenHostApi api{.size                 = sizeof(ZenHostApi),
+                   .ctx                  = nullptr,
                    .send                 = &zen_child_send,
                    .publish              = &zen_child_publish,
                    .send_to_role         = &zen_child_send_to_role,
@@ -237,20 +244,38 @@ int main(int argc, char** argv) {
         }
         Cursor cursor(payload);
         if (op == Op::Deliver) {
+            std::string_view facts;
             std::uint64_t sender = 0;
             std::uint64_t reply_to = 0;
             std::uint64_t correlation = 0;
-            if (!cursor.u64(sender) || !cursor.u64(reply_to) || !cursor.u64(correlation)) {
+            std::string_view addressed;
+            if (!cursor.bytes(facts)) {
+                break;
+            }
+            // What this child knows of the facts, in order; what follows is a later fact.
+            Cursor known(facts);
+            if (!known.u64(sender) || !known.u64(reply_to) || !known.u64(correlation) ||
+                !known.bytes(addressed)) {
                 break;
             }
             std::string_view bytes = cursor.rest();
+            const std::string addressed_role(addressed); // NUL-terminated for the seam
             // Provenance does not cross this pipe: a Deliver frame carries no attestation, so an
             // out-of-process weave is told nothing here is attested, and never adopts an
             // authenticated answer, an attested activation or an authored role (the NULL role
-            // below) that the parent could not vouch for across it.
-            abi->handle(instance, sender, reply_to, correlation, ZEN_PROV_NONE,
-                        /*attested_sequence=*/0, /*authored_role=*/nullptr,
-                        reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), &api);
+            // below) that the parent could not vouch for across it. The addressed role is no
+            // attestation: it says where the parent delivered, and crosses.
+            const ZenDelivery delivery{
+                .size = sizeof(ZenDelivery),
+                .provenance = ZEN_PROV_NONE,
+                .sender = sender,
+                .reply_to = reply_to,
+                .correlation = correlation,
+                .attested_sequence = 0,
+                .authored_role = nullptr,
+                .addressed_role = addressed_role.empty() ? nullptr : addressed_role.c_str()};
+            abi->handle(instance, &delivery, reinterpret_cast<const std::uint8_t*>(bytes.data()),
+                        bytes.size(), &api);
             (void)emit_snapshot(abi, instance);
         } else if (op == Op::Revive) {
             std::string_view state = cursor.rest();

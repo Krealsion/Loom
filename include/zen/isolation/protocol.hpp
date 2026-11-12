@@ -28,7 +28,9 @@ enum class Op : std::uint8_t {
                   ///< on the wire; the host stamps it from link.id and routes via role
     Refused = 5,  ///< [u8 cut][bytes words]: the weave refused its making, in place of Hello
     // parent -> child
-    Deliver = 16,  ///< [u64 sender][u64 reply_to][u64 correlation][bytes payload]
+    Deliver = 16,  ///< [bytes facts][bytes payload]; facts = [u64 sender][u64 reply_to]
+                   ///< [u64 correlation][bytes addressed role], appended to and read as far as
+                   ///< a reader knows
     Revive = 17,   ///< [bytes state]
     Shutdown = 18, ///< (empty)
 };

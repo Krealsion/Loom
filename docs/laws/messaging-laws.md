@@ -83,7 +83,11 @@ MEANS
 - authorization for role sends is by role name (stable across replacement);
 - each role has one holder, and a holder may hold other roles too
   ([MSG-13](#msg-13--a-weave-answers-to-the-set-of-roles-it-was-bound-to)):
-  whoever holds R is reached, whatever else it holds.
+  whoever holds R is reached, whatever else it holds;
+- the recipient reads where it was reached: `mail.addressed_role()` is R for a delivery
+  addressed to R, resolved to it at delivery, and empty for a directed send and a publication,
+  alike for a native, a loaded, a boxed and an isolated weave. It says where the delivery went,
+  so a weave holding several roles tells their traffic apart by it.
 
 DOES NOT MEAN
 - that a role may have several holders: the role table maps each name to one;
@@ -91,11 +95,14 @@ DOES NOT MEAN
   merely *holding* R could never supply it (the same weave, holding the same
   role, may speak personally or as the role; holding is necessary, not
   sufficient). Deliberately speaking **as** R is its own explicit act with its
-  own law: [MSG-07](#msg-07--role-authorship-is-explicit).
+  own law: [MSG-07](#msg-07--role-authorship-is-explicit);
+- that the addressed role is authority, or says who spoke: a handler that branches on it still
+  checks authorship and its grants.
 
 PROVEN BY — delivery-time resolution: suite `switchboard`; the
 destination/authorship orthogonality: suite `role_authorship` (all four
-combinations, and the two roles of a role-to-role send never conflating).
+combinations, and the two roles of a role-to-role send never conflating); the addressed role
+read by each kind of weave: suites `seam` (native, loaded), `box` and `isolation`.
 
 ## MSG-05 — Refusals are structured and observable
 

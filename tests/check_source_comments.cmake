@@ -25,7 +25,9 @@ include("${CMAKE_CURRENT_LIST_DIR}/private_ids.cmake")
 # shell scripts under the roots are read as scripts.
 set(ZEN_COMMENT_ROOTS CMakeLists.txt cmake examples include src tests
     python tools/basics tools/basics-machine tools/loom-session tools/loom-session.cmd)
-set(ZEN_COMMENT_EXCLUDED "^tests/third_party/")
+# A kept header (tests/abi_kept/) is an earlier version's bytes, held to its hash: no rule of today
+# is applied to what may not change.
+set(ZEN_COMMENT_EXCLUDED "^tests/third_party/|^tests/abi_kept/")
 set(ZEN_COMMENT_GLOBS *.h *.hpp *.ipp *.inl *.c *.cc *.cpp *.cxx *.py *.sh CMakeLists.txt *.cmake
     *.cmake.in suite_population.txt entry_population.txt)
 # A long block is more comment lines in a row than this -- the SPDX pair and a law pointer

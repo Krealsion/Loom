@@ -1914,9 +1914,9 @@ ZEN_BOXED_TWIN("a boxed owner's declined showing crosses as its own status: reco
                "not held, its next claim replacing the value",
                joint_declined_showing, ZEN_BOX_JOINT)
 
-TEST_CASE("a refused replacement runs nothing of the incumbent's -- a candidate claiming the "
-              "previous ABI is judged before the incumbent's snapshot, so a pending showing stays "
-              "pending and the real reload still repairs") {
+TEST_CASE("a refused replacement runs nothing of the incumbent's -- a candidate claiming an ABI "
+              "from before the oldest a host loads is judged before the incumbent's snapshot, so "
+              "a pending showing stays pending and the real reload still repairs") {
     // The candidate is judged (ABI version, descriptor, manifest) BEFORE the reload's
     // snapshot of the incumbent is taken (docs/reference/joint-publication.md#repair).
     // The observable is the showing: a snapshot SHOWS the weave its pending publication,
@@ -1941,11 +1941,11 @@ TEST_CASE("a refused replacement runs nothing of the incumbent's -- a candidate 
     rig.bus.drain_until_idle();
     REQUIRE(rig.o->committed.ok);
     REQUIRE(rig.bus.has_unobserved_publication(loaded.id));
-    // THE REFUSED REPLACEMENT: a current-layout image claiming the previous ABI version.
+    // THE REFUSED REPLACEMENT: a current-layout image claiming a version before the oldest.
     const ReloadResult rr = kernel.reload_from("joint-doc", ZEN_SO_STALEABI);
     CHECK_FALSE(rr.ok);
     CHECK(rr.error.find("abi_version") != std::string::npos);
-    CHECK(rr.error.find(std::to_string(ZEN_ABI_VERSION - 1u)) != std::string::npos);
+    CHECK(rr.error.find(std::to_string(ZEN_ABI_OLDEST - 1u)) != std::string::npos);
     // NOTHING OF THE INCUMBENT'S RAN: still Pending, no attempt counted, still bound to
     // the same incarnation (the operation is intact, not aborted by a swap that never was).
     CHECK(rig.bus.has_unobserved_publication(loaded.id));

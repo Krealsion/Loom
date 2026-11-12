@@ -15,6 +15,9 @@
 // the ONLY thing wrong here" claim checkable instead of asserted.
 extern "C" ZEN_KERNEL_EXPORT const ZenWeaveAbi* zen_weave_abi(void) {
     static const ZenWeaveAbi abi = {.abi_version = ZEN_ABI_VERSION + 1000u,
+                                    .size        = sizeof(ZenWeaveAbi),
+                                    .host_size   = sizeof(ZenHostApi),
+                                    .manifest_version = ::loom::kManifestVersion,
                                     .create      = nullptr,
                                     .destroy     = nullptr,
                                     .describe    = nullptr,

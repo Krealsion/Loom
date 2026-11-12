@@ -142,7 +142,8 @@ ZenStatus g_sense_offer(void*, uint64_t op, const uint8_t* p, size_t n) {
 }
 
 // By name, in declaration order (KERN-04).
-const ZenHostApi kHostApi{.ctx                  = nullptr,
+const ZenHostApi kHostApi{.size                 = sizeof(ZenHostApi),
+                          .ctx                  = nullptr,
                           .send                 = &g_send,
                           .publish              = &g_publish,
                           .send_to_role         = &g_send_to_role,
@@ -168,6 +169,11 @@ LOOM_WASM_EXPORT(zw_abi_version) uint32_t zw_abi_version(void) {
     const ZenWeaveAbi* abi = zen_weave_abi();
     return abi == nullptr ? 0u : abi->abi_version;
 }
+// The manifest version the weave's `describe` writes, which a host judges before making it.
+LOOM_WASM_EXPORT(zw_abi_manifest_version) uint32_t zw_abi_manifest_version(void) {
+    const ZenWeaveAbi* abi = zen_weave_abi();
+    return abi == nullptr ? 0u : abi->manifest_version;
+}
 LOOM_WASM_EXPORT(zw_alloc) void* zw_alloc(size_t n) { return std::malloc(n == 0 ? 1 : n); }
 LOOM_WASM_EXPORT(zw_free) void zw_free(void* p) { std::free(p); }
 LOOM_WASM_EXPORT(zw_create) void* zw_create(int32_t refusal_sink) {
@@ -188,12 +194,15 @@ LOOM_WASM_EXPORT(zw_policy) int32_t zw_policy(void* instance, int32_t sink) {
 LOOM_WASM_EXPORT(zw_revive) int32_t zw_revive(void* instance, const uint8_t* state, size_t len) {
     return zen_weave_abi()->revive(instance, state, len);
 }
-LOOM_WASM_EXPORT(zw_handle) int32_t zw_handle(void* instance, uint64_t sender, uint64_t reply_to,
-                                              uint64_t correlation, uint32_t provenance,
-                                              int64_t attested_sequence, const char* authored_role,
+// The host writes the delivery's facts into this module's memory in this target's own layout,
+// at the offsets the box keeps (src/kernel/wasm_box.cpp), and says their size.
+static_assert(sizeof(void*) == 4 && offsetof(ZenDelivery, attested_sequence) == 32 &&
+                  offsetof(ZenDelivery, authored_role) == 40 &&
+                  offsetof(ZenDelivery, addressed_role) == 44 && sizeof(ZenDelivery) == 48,
+              "ZenDelivery's wasm32 layout is the one the box writes");
+LOOM_WASM_EXPORT(zw_handle) int32_t zw_handle(void* instance, const ZenDelivery* delivery,
                                               const uint8_t* payload, size_t len) {
-    return zen_weave_abi()->handle(instance, sender, reply_to, correlation, provenance,
-                                   attested_sequence, authored_role, payload, len, &kHostApi);
+    return zen_weave_abi()->handle(instance, delivery, payload, len, &kHostApi);
 }
 LOOM_WASM_EXPORT(zw_claim_published) int32_t zw_claim_published(void* instance,
                                                                 const uint8_t* value, size_t len) {

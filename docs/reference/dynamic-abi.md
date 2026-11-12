@@ -1,12 +1,25 @@
 # Dynamic ABI — reference
 
-The C seam a weave library and the host agree on. Current version: **v<!-- value ZEN_ABI_VERSION -->12<!-- /value -->**
-(`ZEN_ABI_VERSION` in `include/zen/kernel/abi.h`). Laws:
+The C seam a weave library and the host agree on. Current version: **v<!-- value ZEN_ABI_VERSION -->13<!-- /value -->**
+(`ZEN_ABI_VERSION` in `include/zen/kernel/abi.h`), and the oldest a host loads is
+`ZEN_ABI_OLDEST`, beside it ([the number and the sizes](#the-number-and-the-sizes)). Laws:
 [KERN-01, KERN-04](../laws/kernel-laws.md),
 [GATE-04](../laws/admission-laws.md#gate-04--immutable-published-schemas),
 [ANS-06](../laws/answer-authority-laws.md),
 [MSG-07](../laws/messaging-laws.md#msg-07--role-authorship-is-explicit),
 [SENSE-01..07](../laws/sense-laws.md).
+
+**v13 makes the seam grow.** Every struct that crosses it and can grow says its size, and a
+reader takes what that size reaches. The descriptor's first four fields are the version the
+image needs, its own size, the size of the host table it was built against and the version of
+the manifest `describe` writes (`ZEN_ABI_REACHES` reads a field only where a size reaches it).
+`ZenHostApi` and `ZenSenseBy` start with their size. `handle` takes the delivery's facts as one
+`ZenDelivery` that says its size, in place of its six positional ones (sender, reply address,
+correlation, provenance, attested sequence, authored role), and the role the delivery was
+addressed to is its first new field, read as `Mail::addressed_role()` by a native, a loaded, a
+boxed and an isolated weave alike. A manifest's version moves without the tables' number now.
+An image from before v13 is refused at load and at reload, both versions named, before any
+callback into it: it is the last version refused for being another number.
 
 **v12 names the per-sender waiting bound.** No slot changes. A send that bound refuses
 returns `ZEN_ERR_PENDING_PER_SENDER` on `send`, `send_to_role`, `publish`, `role_send`,
@@ -35,9 +48,9 @@ field's, and an `Any` field by its kind alone
 it always was, so a shape of anyone's that nests one keeps its identity, and so does every value
 stored in it. The descriptor's manifest is the next version of `zen.Manifest`, beside the same ABI
 version and the same tables. An image built against the previous manifest is refused by the gate in
-`reconstruct`, as a v8 image would be without its version below: after its static initializers and
-`create()` have run, with a sentence about a meta-schema (`SchemaMismatch`, pinned in suite
-`schema_codec`). The next break of the ABI's version refuses such an image in `fetch_abi` instead.
+`reconstruct`: after its static initializers and `create()` have run, with a sentence about a
+meta-schema (`SchemaMismatch`, pinned in suite `schema_codec`). From v13 the descriptor names its
+manifest's version, and such an image is refused by it before `create()`.
 
 **v10 carries the words of a making refused.** `ZenWeaveAbi::create` takes a `ZenByteSink`: a
 weave that makes no instance returns NULL having written why, and `ZEN_EXPORT_WEAVE` writes there
@@ -101,8 +114,7 @@ Bus inherits the refusing defaults and answers `NoLiveDelivery`
 isolated pipe supplies no offer door. No compatibility with v7 is claimed: a v7
 image is refused at load **and at reload** with both versions named, before any
 callback of anybody's runs, and an incumbent it was meant to replace stands
-untouched. No descriptor-size negotiation and no old-image bridge: rebuild
-hosts, libraries and images together.
+untouched.
 
 **v7 carries sender-visible dispatch refusal.** The four ordinary addressed
 send callbacks (`send`, `send_to_role`, `role_send`, `role_send_to_role`)
@@ -181,8 +193,43 @@ free, no host pointer into library memory), revive, policy. `ZEN_EXPORT_WEAVE`
 writes all of it for a `Weave` subclass; library authors almost never touch
 the ABI directly ([guide](../guides/dynamic-weaves.md)).
 
-An artifact declaring any other version is refused at load, naming both
-versions ([KERN-04](../laws/kernel-laws.md)).
+An artifact the host does not load is refused before any slot of it is called, by what it needs
+and what the host has ([KERN-04](../laws/kernel-laws.md),
+[the number and the sizes](#the-number-and-the-sizes)).
+
+## The number and the sizes
+
+From v13 the version says what an image needs: a host loads every version from
+`ZEN_ABI_OLDEST` to its own `ZEN_ABI_VERSION`. Every change to `abi.h` still moves the number,
+and none breaks an image already built: a field or a slot is appended at the end of its struct,
+and a status, a provenance value and a slot keep their number and their meaning for ever. A host
+reads an image's descriptor (`zen/kernel/descriptor.hpp`, shared by the kernel, the box and the
+isolated child) before calling any slot of it, and refuses, naming what the image needs and what
+the host has:
+
+| the image | refused as |
+|---|---|
+| from before `ZEN_ABI_OLDEST` | `unsupported abi_version ...`, both versions named |
+| newer than the host | `the image needs abi_version ...`, which the host lacks |
+| a descriptor whose size does not reach `handle` | its size, and the size `handle` needs |
+| built against a larger host table | both tables' sizes |
+| writing a manifest version the host does not read | both manifest versions, before `create()` |
+
+What it loads it reads as far as each size reaches. A slot past the descriptor's size is a NULL
+slot, whose meaning the slot's comment says (`claim_published`: shown nothing, read as Failed). The
+host hands a table of its own size, at least the size the image named, and the library calls no
+door the table's size does not reach (`ZEN_ABI_REACHES`). A delivery's facts and a reading's
+authorship are read and written the same way: a fact past the size is absent. A provenance value
+is handed only with a shape the library declares it accepts for that value, so a value appended
+later, with a shape of its own, never reaches an image built before it; a status a reader does not
+know reads as its slot says, never as success.
+
+A box judges the same facts: a module's version and manifest version through its glue's exports
+(`zw_abi_version`, read first, so a module built against another table is refused by its version
+and not by the exports it lacks, and `zw_abi_manifest_version`), and its host table by its
+imports, each by name. The delivery's facts are written into the module's memory in wasm32's
+layout and say their size. The isolation pipe carries a delivery's facts as one block that says
+its length, so a reader takes the facts it knows and a later one is appended.
 
 ## A handler that does not finish
 
@@ -225,7 +272,7 @@ imply one another:
 
 | protection | mechanism | scope |
 |---|---|---|
-| stale-binary refusal | `abi_version` checked at load before descriptor callbacks (KERN-04) | an artifact built against another ABI meeting this host |
+| refusal by what an image needs | the descriptor's version, sizes and manifest version read at load before any slot is called (KERN-04) | an artifact built against an ABI this host does not load, or needing what it lacks, meeting this host |
 | rebuilt-source compatibility | declared function-pointer types; `-Wmissing-field-initializers` with `-Werror` on in-tree C++ producers | incompatible assignments and omitted appended fields; outside producers choose their own warnings |
 | correct current wiring | named initializers plus semantic witnesses through the real host and loaded image | this build's field-to-function mapping, including assignment-compatible mistakes |
 
@@ -239,8 +286,8 @@ has its own schema.
 **The host table has one compatible pair.** `send_to_role` and `role_publish`
 share a function-pointer type since v7 added `attempt_out` to the addressed door:
 both end in `uint64_t*`, but one returns an attempt and the other a recipient count.
-They are the only pair among the host's fifteen callbacks (sixteen fields including
-`ctx`), and they are not adjacent. Both can admit the same payload shape, so the
+They are the only pair among the host's fifteen callbacks (seventeen fields with
+`size` and `ctx`), and they are not adjacent. Both can admit the same payload shape, so the
 descriptor-schema argument does not distinguish their operations. v8's appended
 `sense_offer` (`void*, uint64_t, const uint8_t*, size_t`) shares its type with
 nothing in the host table, and the descriptor's appended `claim_published`
@@ -270,16 +317,20 @@ by compiling it with a minimal named C producer under strict C99/C11/C17 and the
 export path under C++20 (step 4 below). A real C/non-C++ producer or public
 binding is the trigger to add that infrastructure.
 
-For an appended field **or a changed existing signature**:
+For an appended field or slot, the one change that from v13 breaks no image already built (a
+changed signature, a removed field and a slot whose meaning changes each break one, and the seam
+makes none of them):
 
 1. Inventory assignment-compatible callbacks across **all** fields, including
    nonadjacent pairs. A signature change can create a collision without adding
    or moving a field: v7's `attempt_out` made `send_to_role` and `role_publish`
    one type.
 2. Keep each construction site explicit and in declaration order: export macro,
-   in-process host, isolation child and manual bad/stale descriptors. Append new
-   fields at the end and document their meaning in the header; review existing
-   mappings when a signature changes. Null unsupported child doors deliberately.
+   in-process host, isolation child, the box's descriptor and its module glue, and the manual
+   descriptors in `tests/weavelib/`. Append new fields at the end and document their meaning in
+   the header, including what a reader does where a size does not reach the field: an appended
+   slot is NULL to a host reading an older image, and an appended fact absent to an older
+   library. Null unsupported child doors deliberately.
 3. Check each interchangeable pair through its public semantic consequences.
    Different descriptor schemas distinguish the three descriptor doors; two
    operations accepting the same schema need destination/provenance/result
@@ -290,12 +341,12 @@ For an appended field **or a changed existing signature**:
    export path in C++20; check the changed assignments at every construction site.
    Preserve the missing-field warnings, while keeping source compatibility
    separate from semantic wiring and stale-binary evidence.
-5. Decide the version deliberately and preserve rejection before callbacks —
-   at load and at reload, where a refused candidate must leave the incumbent
-   untouched. The manual previous/future-version fixtures pin the gate's
-   ordering; a current image relabeled old does not replace evidence from an
-   actual pre-change artifact. The opening of this page says what each break
-   carried, and a new break adds its paragraph there.
+5. Move the version, and preserve rejection before callbacks — at load and at
+   reload, where a refused candidate must leave the incumbent untouched. The
+   manual fixtures pin the gate's ordering; a current image relabeled old does
+   not replace evidence from an actual earlier artifact. An append owes what the
+   [compatibility discipline](#compatibility-discipline) names, and the opening of
+   this page says what each version carried: a new one adds its paragraph there.
 6. **State what the bus records for every status of a new callback slot** —
    including the one that is neither OK nor an error — and witness each with a
    loaded image whose callback answers it. A slot whose status the host
@@ -337,11 +388,13 @@ host could not hold the bytes library ... wrote"); when the library's sink,
 handed to an observe door, records one, the library refuses that reading. Suite
 `dispatch_loaded` drives each door through a real image.
 
-Delivery-side, the host passes provenance flags + the attested sequence + the
-authored role (v5: its own NUL-terminated parameter, NULL = personal — a
-separate axis, deliberately not another `ZEN_PROV_*` kind) into the library
-shim, so `mail.answers_ask()` / `mail.lifecycle_attested()` /
-`mail.authored_from_role()` read the same on both sides. A library could lie
+Delivery-side, the host passes the delivery's facts as one `ZenDelivery`:
+provenance, the attested sequence, the authored role (NULL = personal — a
+separate axis, deliberately not another `ZEN_PROV_*` kind) and the role the
+delivery was addressed to, into the library shim, so `mail.answers_ask()` /
+`mail.lifecycle_attested()` / `mail.authored_from_role()` /
+`mail.addressed_role()` read the same on both sides. The addressed role is no
+attestation: it says where the delivery went, and an isolated child is told it too. A library could lie
 to *itself* here; it buys nothing — provenance has no wire form and the host
 recomputes its own truth.
 
@@ -363,27 +416,45 @@ parent minted.
 
 ## Compatibility discipline
 
-The stale-artifact test fixture always declares `ZEN_ABI_VERSION - 1`, so the
-refusal pin keeps meaning "the previous ABI refuses" after every bump — at
-load, and at reload over a live participant, where the incumbent must stand.
 A version number is structurally unobservable within one self-consistent build —
-it protects **mixed** artifacts. The fixture is a current-layout image that
-*claims* the previous version: it pins the gate's ordering, and it is not
-evidence about an old binary's descriptor. That evidence is an image genuinely
-compiled against the pre-change header, retained with its hash and refused by
-the current host with both versions named, and a version bump owes one.
+it protects **mixed** artifacts, so each protection is witnessed by an image built
+apart from the host that judges it.
+
+- **An image from before the tables said their size is refused.** The stale-artifact
+  fixture declares `ZEN_ABI_OLDEST - 1`, so the pin keeps its meaning at every
+  append — at load, and at reload over a live participant, where the incumbent must
+  stand. It is a current-layout image that *claims* that version: it pins the gate's
+  ordering, and it is not evidence about an old binary's descriptor. That evidence is
+  `tests/weavelib/abi_v12_image.cpp`, compiled against ABI 12's header as it was,
+  kept byte for byte in `tests/abi_kept/` and held to its hash at configure (suite
+  `seam`, at load and at reload).
+- **An image needing what the host lacks is refused by what it needs**: the next
+  version, a larger host table, an unread manifest and a descriptor short of
+  `handle`, each its own fixture (`tests/weavelib/needs_more.cpp`, suite `seam`).
+- **An image built against an earlier header loads and works.** Every append owes
+  an image compiled against the previous header, loading and working on the new
+  host: the header of each version is kept in `tests/abi_kept/<version>/` as the
+  version leaves it, the current one held to the live header byte for byte until the
+  version moves. Until the first append, a descriptor that *says* it was built
+  against smaller tables stands in for it (`ADDRESSED_PROBE_SMALLER_TABLES`, suite
+  `seam`), and the read of a descriptor and of a host table past their sizes is
+  pinned directly.
 
 ## Tests
 
-Suite `kernel` (descriptor gate, byte-sink ownership, dynamic answer parity,
-provenance across the seam, role-authorship parity + the previous-ABI
-refusal at load and at reload — the fixture always declares
-`ZEN_ABI_VERSION - 1`, so those cases never name a frozen number; the "schema
+Suite `seam` (the descriptor and the host table read as far as their sizes, each
+refusal by what an image needs, the ABI 12 image at load and at reload, a descriptor
+saying smaller tables loading and working, the addressed role read natively and
+loaded, and boxed in suite `box`); suite `kernel` (descriptor gate, byte-sink
+ownership, dynamic answer parity, provenance across the seam, role-authorship parity
++ the stale fixture's refusal at load and at reload — it declares
+`ZEN_ABI_OLDEST - 1`, so those cases never name a frozen number; the "schema
 admission" cases: a loaded emitter's definition meeting acceptors at load, in
 both orders); suite `schema_codec` (the manifest carries the emit-set and
 its components; a v4 manifest does not pass the current door; a manifest carrying two
 definitions of one component is refused at the second); suite `joint` (the v8
 claimant doors: offer across the seam, and the showing's three statuses); suite
-`isolation` (the fail-closed pipe, both directions; a child's emit-set);
+`isolation` (the fail-closed pipe, both directions; a child's emit-set; the
+addressed role across the pipe);
 [Night Lab](../evidence/night-lab.md)'s `marathon/repro_answer_seam.cpp` as the
 application-shaped witness.

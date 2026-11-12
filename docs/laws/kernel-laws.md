@@ -62,16 +62,31 @@ PROVEN BY — `roles_of`/`query_role`/`unload_role`/`release_role` all derive;
 suite `kernel` (direct-admission visibility, pending-window truth), suite
 `manager` (a library loaded into a set of roles, and one of them released).
 
-## KERN-04 — The ABI seam refuses loudly
+## KERN-04 — The ABI seam grows, and refuses loudly what it cannot carry
 
-LAW — An artifact built against a different ABI version is refused at load,
-naming both versions. The current version is `ZEN_ABI_VERSION`
-in `include/zen/kernel/abi.h`; that header owns the version, rather than a
-second version number maintained in this law.
+LAW — A host loads an image of any ABI version from `ZEN_ABI_OLDEST` to its own, and refuses,
+before calling any slot of the image, one from before `ZEN_ABI_OLDEST`, one newer than itself,
+one whose descriptor does not reach its `handle` slot, one built against a larger host table than
+the host's, and one whose manifest version the host does not read, naming what the image needs
+and what the host has. Every struct that crosses the seam and can grow says its size, and a
+reader takes what that size reaches and no more. `include/zen/kernel/abi.h` owns both versions,
+rather than a second number maintained in this law.
 
 MEANS
-- the stale-artifact fixture always declares `ZEN_ABI_VERSION - 1`, so the pin
-  means "the previous ABI refuses" after every future bump;
+- every change to the header moves `ZEN_ABI_VERSION`, and from `ZEN_ABI_OLDEST` on the number
+  says what an image needs, not the one host it loads on: a field or slot is appended, and a
+  status, a provenance value or a slot keeps its number and meaning;
+- an image built against an earlier header loads on a later host and uses what it knows; a slot
+  past its descriptor's size is a NULL slot to the host, and a host door past the host table's
+  size is one the image does not call;
+- the stale-artifact fixture declares `ZEN_ABI_OLDEST - 1`, so the pin keeps meaning "an image
+  from before the tables said their size refuses" at every append; beside it an image truly
+  compiled against ABI 12's header, kept with its hash (`tests/abi_kept/`), is refused at load and
+  at reload with the incumbent untouched;
+- each append owes an image compiled against the previous header, loading and working on the new
+  host: the current header is kept for it, byte for byte;
+- the manifest's version moves without the tables' number: an image whose manifest the host does
+  not read is refused by that version, before `create()`;
 - out-of-process children get null capability doors and fail closed rather
   than pretending;
 - a weave that refuses its making is refused at load, and at a replacement, in the words it
@@ -79,10 +94,14 @@ MEANS
 
 DOES NOT MEAN
 - that a version number is observable *within* one self-consistent build — it
-  protects mixed artifacts.
+  protects mixed artifacts;
+- that a host bridges an image from before `ZEN_ABI_OLDEST`: that image is rebuilt.
 
-PROVEN BY — descriptor version gate; suite `kernel` (stale-ABI case, the refused making's
-cases); suite `isolation` (an isolated weave whose making is refused).
+PROVEN BY — the descriptor's reading (`zen/kernel/descriptor.hpp`); suite `seam` (a descriptor
+read as far as its size, a host door past the table's size never called, each refusal by what an
+image needs, the ABI 12 image at load and at reload, an image saying smaller tables loading and
+working); suite `kernel` (stale-ABI case, the refused making's cases); suite `box` (a module
+refused by its version); suite `isolation` (an isolated weave whose making is refused).
 
 ## KERN-05 — A weave's statics live and die with it, and its C++ runtime is its own
 

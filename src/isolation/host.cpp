@@ -932,10 +932,15 @@ void IsolationHost::ship_deliver(Link& link, const loom::Message& in) {
         return; // no live child (dead/quarantined); the delivery is dropped
     }
     const std::string bytes = loom::serialize(in.payload);
+    // The delivery's facts as one block that says its length, so it grows by appending and a
+    // reader takes what it knows of it. No attestation is in it: the pipe carries none.
+    std::string facts;
+    put_u64(facts, in.sender.value);
+    put_u64(facts, in.reply_to.value);
+    put_u64(facts, in.correlation);
+    put_bytes(facts, in.addressed_role);
     std::string frame;
-    put_u64(frame, in.sender.value);
-    put_u64(frame, in.reply_to.value);
-    put_u64(frame, in.correlation);
+    put_bytes(frame, facts);
     frame.append(bytes);
     link.channel->queue(Op::Deliver, frame); // flushed on the next step()
 }
