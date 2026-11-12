@@ -85,6 +85,13 @@ void print_weaves(const loom::ConsoleEngine& engine) {
 }
 
 void print_fields(const loom::ShapeDesc& desc) {
+    if (desc.is_union) {
+        std::cout << "  " << desc.name << " v" << desc.version << " is one of these cases:\n";
+        for (const auto& f : desc.fields) {
+            std::cout << "    " << f.name << " : " << f.type << '\n';
+        }
+        return;
+    }
     std::cout << "  " << desc.name << " v" << desc.version << " fields:\n";
     for (const auto& f : desc.fields) {
         std::cout << "    " << f.name << " : " << f.type << (f.required ? " (required)" : " (optional)")

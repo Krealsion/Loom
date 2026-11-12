@@ -40,7 +40,8 @@ struct FieldDesc {
 struct ShapeDesc {
     std::string name;
     std::uint32_t version;
-    std::vector<FieldDesc> fields;
+    std::vector<FieldDesc> fields; ///< a union's cases, a case carrying nothing typed "nothing"
+    bool is_union = false;         ///< the value holds exactly one of `fields`
 };
 
 /// Build a ShapeDesc (name/version + each field's type spelling and required-ness) from a resolved

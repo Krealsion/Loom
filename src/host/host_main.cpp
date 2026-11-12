@@ -1061,7 +1061,7 @@ void cmd_history(HostSession& s, const std::vector<Token>& tok) {
             std::shared_ptr<const loom::Schema> door =
                 s.bus().resolve_schema(u.claimed_name(), u.claimed_version());
             if (door) {
-                loom::Admission a = loom::admit(u, door);
+                loom::Admission a = loom::admit(u, door, s.bus().registry());
                 if (a.ok()) {
                     std::cout << ": " << loom::compat::serialize(a.value());
                 } else {

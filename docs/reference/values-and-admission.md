@@ -5,9 +5,12 @@ The core: self-describing values, one gate, immutable published schemas. Laws:
 
 ## Schema
 
-A `Schema` is a frozen, named, versioned shape: `(name, version)` plus ordered
-fields of the seven permanent primitive kinds (`Int` i64, `Float` f64, `Text`,
-`Bool`, `Bytes`, `List`, `Message` — nested by schema). Identity across any
+A `Schema` is a frozen, named, versioned shape: `(name, version)`, a form, and
+ordered fields of the nine permanent kinds (`Int` i64, `Float` f64, `Text`,
+`Bool`, `Bytes`, `List`, `Message` and `Union` — nested by schema — and `Any`,
+nested by the value's own shape). Its form is a **record**, whose value holds
+any of its fields, or a **union**, whose value holds exactly one of them
+([below](#unions-and-the-open-field)). Identity across any
 boundary is the **content-id** (FNV over the canonical shape), never the C++
 type; `same_identity` is name, version and content-id, confirmed field by field
 (`same_structure`), since the content-id is a fast hash rather than a
@@ -47,12 +50,111 @@ An optional field is not a versioning tool: adding one is a new version
 another's gate however optional its fields
 ([handoff](handoff.md#different-schemas-remain-different)).
 
+## Unions and the open field
+
+### A union
+
+A union is a named shape whose value is exactly one of its cases: a pointer
+moment is a move, or a button, or a wheel, never two and never none. Its fields
+are its cases, in declared order; each case carries a value of any type a field
+takes, or carries nothing (`Field::carries`, `case_bare`). A union whose cases
+all carry nothing is an **enumeration**, and it is the same form. A union is a
+shape like any other: it has a name, a version and a content id, the registry's
+one wall refuses two definitions of it, a manifest carries it once in
+`referenced` before whatever nests it, and a new case is a new version. It may
+stand wherever a shape stands: at a door, nested in a field, as a list's
+element, a claim or a weave's state.
+
+A field holding a union is of kind `Union`, a field holding a record of kind
+`Message`; `type_message(schema)` gives the one the shape's form says, and a
+`TypeRef` naming a shape of the other form is refused when the schema is built.
+`Kind` gained the two at its end, so every `switch` over it with no default
+fails to compile until its reader decides what a union and an open field mean
+to it. A record's content id folds exactly what it folded before unions
+existed; a union's folds its form as well, so a record and a union with the same
+fields are two identities.
+
+```cpp
+struct Moment {
+    std::variant<KeyPressed, PointerMoved, PointerWheel> is;
+    ZEN_UNION(Moment, 1, is);                      // cases named by their shapes
+};
+struct Pick {
+    std::variant<std::int64_t, std::int64_t, std::monostate> is;
+    ZEN_UNION(Pick, 1, is, "left", "right", "none"); // or every case by the line
+};
+enum class Outcome { delivered, refused, handler_failed };
+ZEN_ENUM(Outcome, 1, delivered, refused, handler_failed);
+```
+
+A case is named by its shape's name, or every case by the names the line lists,
+in order: a scalar case, two cases of one type and a `std::monostate` case (one
+that carries nothing) need them. `to_value`, `from_value`, `schema_of` and a
+door's accept list take a union and an enumeration as they take a record, and a
+handler reads one with `std::visit`. By hand, `make_union(name, version,
+{case_of(...), case_bare(...)})` builds the shape, `Value::set` holds a case that
+carries a value and `Value::choose` one that carries nothing; either replaces the
+case held, so a value never holds two, and `Value::chosen()` says which it holds.
+
+### The open field
+
+A field of kind `Any` holds a value of **any shape the registry holds**, named by
+the value itself: an element's data, a carried item, a thing whose shape is
+chosen at run time and may be a stranger's. It is for a set that is truly open;
+a set closed at a version is a union. With `ZEN_SHAPE` the member is a
+`loom::Any`: `Any::of(obj)` holds a struct's value, `holds<T>()` and `as<T>()`
+read it back, and an empty `Any` leaves its field absent.
+
+The gate checks the value an open field holds against a registry: its shape must
+be registered there as one definition with it (`same_identity`), and the value
+must conform to it, at its path. `admit(value, door, open)` and
+`admit(unverified, door, open)` take the registry; the bus admits every delivery
+against its own, and a host that admits bytes at a seam passes the bus's
+(`Switchboard::registry()`). Without one, an open field is refused
+`UnknownSchema`, never trusted. **A weave nests only a shape it may itself
+send**: before the gate, the bus asks the sender's effective authority for every
+shape an open field of the payload holds, however deep, to the same destination,
+and refuses the delivery `CapabilityDenied` if any is not one it may send
+([capabilities](capabilities.md)). A loaded weave reads an open field against the
+shapes it declares itself (its doors, state, claims and emits and what they
+nest): a shape it does not declare is not one it can read, and the value is
+refused at its seam.
+
+### On the wire
+
+- **Native**: a record's body is a presence mask and its present fields; a
+  union's is its case's index as a minimal varint, then that case's value, or
+  nothing for a case that carries nothing — an enumeration's value is one byte up
+  to 128 cases. An index past the last case is `MalformedField`, never skipped.
+  An open field's value is its shape's name, version and content id, then its
+  body, decoded under the registry's definition: one it does not hold is
+  `UnknownSchema`, another content id `SchemaMismatch`. A union holding no case
+  cannot be written: `serialize` throws.
+- **Compat JSON**: a union is an object with one member, its case's name and
+  value (`{"moved": {"x": "1", "y": "2"}}`), or a case that carries nothing as its
+  name alone (`"idle"`), at a door as in a field. No member is `NoCase`, several
+  are `SeveralCases`, a name the union does not declare is `UnknownField`, and a
+  case in the other form is refused by its kind. An open field's value is
+  `{"schema", "version", "content_id", "fields"}`, the envelope's own members,
+  `content_id` optional as it is there.
+
+## A value never changes once admitted
+
+A nested value is **made, never adopted**: `Cell::message(Value)` takes the value
+and makes the cell's own node, and no overload takes a pointer. Nothing outside a
+value holds a way to change what is inside it, so the value the gate admitted is
+the value every recipient is handed, and a sender that keeps its own copy keeps a
+copy. Copying a value copies its own slots and shares everything beneath them,
+which is safe because nothing beneath can change. An open field's value is held
+the same way, and so is a union's case.
+
 ## Value
 
-A `Value` carries the schema it *claims* plus positional cells. Values are
-ordinary C++ values (copyable); `construct_blind` builds one at runtime from a
-discovered schema — the console's road. Claiming is not conforming: only the
-gate says a value is what it claims.
+A `Value` carries the schema it *claims* plus positional cells; a union's value
+holds at most one case. Values are ordinary C++ values (copyable);
+`construct_blind` builds one at runtime from a discovered schema — the console's
+road, which asks a union for one case. Claiming is not conforming: only the gate
+says a value is what it claims.
 
 ## The gate
 
@@ -64,10 +166,31 @@ bytes ──parse()──► Unverified ──admit(door)──► Value      (o
 ([GATE-01](../laws/admission-laws.md)). `Unverified` says only what it claims
 to be (`well_formed()`, `claimed_name()`, `claimed_version()`) and has no accessor
 for its data — there is no road from bytes to readable data around the gate
-([GATE-02](../laws/admission-laws.md)). Admission is strict (no partial
-acceptance) and total (caps on depth/size make hostile input safe — see
-[bounds](bounds.md)). Refusals carry kind, field path, expected/actual.
-`gate_invocations()` exists so tests can prove every boundary funneled through.
+([GATE-02](../laws/admission-laws.md)). Admission is total (caps on depth/size
+make hostile input safe — see [bounds](bounds.md)). Refusals carry kind, field
+path, expected/actual. `gate_invocations()` exists so tests can prove every
+boundary funneled through.
+
+**Admission is strict, and this is how strict.** A door admits **one exact
+shape**: the claimed name, version and content id are its own (`SchemaMismatch`
+otherwise), and a nested value's are its field's. Then the value is whole: every
+required field present (`MissingField`), every present one of its declared kind
+(`TypeMismatch`), a union holding exactly one of its cases (`NoCase`), an open
+field's value of a registered shape. Nothing is skipped and nothing is dropped.
+Each format refuses an added field in its own way: compat JSON names its fields,
+so its decoder refuses a member the door does not declare (`UnknownField`, and
+only that decoder raises it); the native body is positional and names none, so a
+value written against a shape with another field list carries another content
+id and is refused by the identity question (`SchemaMismatch`). A reader meeting
+a newer shape is told so at the door, never inside the value.
+
+**A live value is bounded as a decoded one is.** The gate counts the cells a
+decode of the value would materialise, as the decoder counts them, and refuses a
+value past `kMaxDecodedCells` (`TooLarge`), so no live value is larger than a
+boundary would take back. A nested value placed in several fields is counted at
+each, a visit: a value whose parts are shared many times over costs the walk it
+takes, and the walk stops at the bound
+([bounds](bounds.md#the-decode-materialization-bound)).
 
 **Decoding is bounded, and that is a separate fact from the wire size.**
 Wire-size limits bound how many *serialized bytes* a value may carry.
@@ -91,7 +214,8 @@ prior step and never folds into the gate
 ## Registry
 
 Immutable `(name, version) → schema` registrations; a conflicting
-re-registration of the same identity throws `SchemaConflict`. The bus takes
+re-registration of the same identity throws `SchemaConflict`. It is also what an
+open field's value is checked against ([above](#the-open-field)). The bus takes
 every weave's accept-set, declared claim-set, declared emit-set and state schema
 at registration — **with every component those shapes nest**, walked by
 `collect_referenced` (`zen/schema.hpp`) — so every party that declares a name,
@@ -144,7 +268,9 @@ the persistence boundary and the dynamic-library currency
 
 ## Tests
 
-Suites `schema`, `value`, `gate`, `registry`, `serialize`, `compat`,
+Suites `schema`, `value`, `gate`, `union` (the union, the open field and the
+live budget, through the gate, both codecs, the authoring layer, the manifest's
+codec, the composer and the bus), `registry`, `serialize`, `compat`,
 `integration`, `fuzz` (deterministic-seeded regression corpus), `weave_shape`
 (struct-derived shapes, optional members among them); the entry
 `optional_member_types` holds what a `std::optional` member compiles to and

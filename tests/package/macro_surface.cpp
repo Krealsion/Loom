@@ -2,21 +2,24 @@
 // Copyright (c) 2026 Joshua DeMoss
 
 // THE PUBLIC MACRO SURFACE, COMPILED AS A STRANGER: every form of ZEN_SHAPE / ZEN_EXPOSE /
-// ZEN_HIDE, BOTH zero-argument spellings included (the dispatch MSVC's traditional
-// preprocessor cannot perform), built against find_package(loom) with no consumer-written
-// compiler switch, so a package that stops carrying its own preprocessor requirement fails
-// here. It ASSERTS the tags: a surface that builds but tags the wrong fields would pass a
-// compile-only witness.
+// ZEN_HIDE, both zero-argument spellings included (the dispatch MSVC's traditional preprocessor
+// cannot perform), ZEN_UNION with and without names, ZEN_ENUM and loom::Any, built against
+// find_package(loom) with no consumer-written compiler switch, so a package that stops carrying
+// its own preprocessor requirement fails here. It ASSERTS what each derives, since a surface that
+// builds but tags or names the wrong fields would pass a compile-only witness.
 
 #include "witness_protocol.hpp"
 
 #include <zen/serialize.hpp>
 #include <zen/weave/shape.hpp>
 
+#include <zen/registry.hpp>
+
 #include <cstdint>
 #include <cstdio>
 #include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace {
@@ -48,6 +51,34 @@ struct Note {
     std::string to;
     std::optional<std::string> text;
     ZEN_SHAPE(Note, 1, ZEN_FIELD(to), ZEN_EXPOSE(text));
+};
+
+// A union named by its cases' shapes (ZEN_UNION's variadic part empty), one named by the line,
+// an enumeration, and a record holding them and an open field.
+struct Moved {
+    std::int64_t x = 0;
+    ZEN_SHAPE(Moved, 1, ZEN_FIELD(x));
+};
+struct Pressed {
+    std::int64_t key = 0;
+    ZEN_SHAPE(Pressed, 1, ZEN_FIELD(key));
+};
+struct Moment {
+    std::variant<Moved, Pressed> is;
+    ZEN_UNION(Moment, 1, is);
+};
+struct Side {
+    std::variant<std::int64_t, std::monostate> is;
+    ZEN_UNION(Side, 1, is, "by", "none");
+};
+enum class Mood { calm, busy };
+ZEN_ENUM(Mood, 1, calm, busy);
+struct Held {
+    Moment moment;
+    Side side;
+    Mood mood = Mood::calm;
+    loom::Any extra;
+    ZEN_SHAPE(Held, 1, ZEN_FIELD(moment), ZEN_FIELD(side), ZEN_FIELD(mood), ZEN_FIELD(extra));
 };
 
 int failures = 0;
@@ -135,6 +166,38 @@ int main() {
     const std::vector<loom::FieldAccess> na = loom::access_of<Note>();
     check(na.size() == 2 && na[1].writable && na[1].type.kind == loom::Kind::Text,
           "ZEN_EXPOSE(text) tags a std::optional member, and its kind is the inner one");
+
+    // ---- a union, an enumeration and an open field ----------------------------------
+    const auto moment = loom::schema_of<Moment>();
+    check(moment->is_union() && moment->fields().size() == 2 &&
+              moment->fields()[1].name == std::string("Pressed"),
+          "ZEN_UNION names each case by its shape");
+    const auto side = loom::schema_of<Side>();
+    check(side->fields().size() == 2 && side->fields()[0].name == std::string("by") &&
+              !side->fields()[1].carries,
+          "ZEN_UNION names every case by the line, and std::monostate carries nothing");
+    const auto mood = loom::schema_of<Mood>();
+    check(mood->is_union() && mood->fields().size() == 2 &&
+              mood->fields()[1].name == std::string("busy"),
+          "ZEN_ENUM is a union of its enumerators");
+    loom::Registry open;
+    open.register_schema(loom::schema_of<Moved>());
+    Held held;
+    held.moment.is = Pressed{7};
+    held.side.is = std::monostate{};
+    held.mood = Mood::busy;
+    held.extra = loom::Any::of(Moved{3});
+    const loom::Admission crossed =
+        loom::admit(loom::parse(loom::serialize(loom::to_value(held))), loom::schema_of<Held>(), open);
+    check(crossed.ok(), "a value holding a union, an enumeration and an open field crosses the bytes");
+    if (crossed.ok()) {
+        const Held read = loom::from_value<Held>(crossed.value());
+        check(std::get<Pressed>(read.moment.is).key == 7 && read.side.is.index() == 1 &&
+                  read.mood == Mood::busy && read.extra.as<Moved>().x == 3,
+              "each comes back as it was sent");
+    }
+    check(!loom::admit(loom::to_value(held), *loom::schema_of<Held>()).ok(),
+          "an open field is refused by a gate given no registry");
 
     if (failures != 0) {
         std::fprintf(stderr, "package witness: macro surface FAILED (%d)\n", failures);

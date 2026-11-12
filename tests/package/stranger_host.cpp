@@ -143,7 +143,11 @@ std::set<std::string> wire_identities(const loom::Value& answer, const char* sec
         return out;
     }
     for (const loom::Cell& c : list->as_list()) {
-        const loom::Value& d = *c.as_message();
+        // A zen.ShapeDesc: a record's description or a union's, each naming its shape alike.
+        const loom::Value& shape = *c.as_message();
+        const loom::Cell* form =
+            shape.get("record") != nullptr ? shape.get("record") : shape.get("union");
+        const loom::Value& d = *form->as_message();
         out.insert(d.get("name")->as_text() + " v" + std::to_string(d.get("version")->as_int()));
     }
     return out;

@@ -71,14 +71,14 @@ inline constexpr std::int64_t kMaxWindow = 4096;     ///< the most a subscriber 
 
 // ---- the descriptor package a Subscribed carries ------------------------------------------------
 
-/// `loom.observe.Shapes`: `zen.SchemaDesc` v1 for each subscribed shape (`shapes`) and the closure
+/// `loom.observe.Shapes`: `zen.ShapeDesc` for each subscribed shape (`shapes`) and the closure
 /// they nest (`referenced`, post-order, so one forward pass resolves it) -- self-description's own
 /// descriptor and closure rule (zen/weave/describe.hpp), under a name that says what these are.
 inline std::shared_ptr<const Schema> shapes_schema() {
-    static const auto s = SchemaBuilder("loom.observe.Shapes", 1)
-                              .list("referenced", type_message(schema_desc_schema()),
+    static const auto s = SchemaBuilder("loom.observe.Shapes", 2)
+                              .list("referenced", type_message(shape_desc_schema()),
                                     /*required=*/false)
-                              .list("shapes", type_message(schema_desc_schema()))
+                              .list("shapes", type_message(shape_desc_schema()))
                               .build();
     return s;
 }
@@ -93,14 +93,14 @@ inline Value encode_shapes(const std::vector<std::shared_ptr<const Schema>>& roo
         std::vector<Cell> refs;
         refs.reserve(referenced.size());
         for (const auto& s : referenced) {
-            refs.push_back(Cell::message(encode_schema(*s)));
+            refs.push_back(Cell::message(encode_shape(*s)));
         }
         v.set("referenced", Cell::list(std::move(refs)));
     }
     std::vector<Cell> out;
     out.reserve(roots.size());
     for (const auto& s : roots) {
-        out.push_back(Cell::message(encode_schema(*s)));
+        out.push_back(Cell::message(encode_shape(*s)));
     }
     v.set("shapes", Cell::list(std::move(out)));
     return v;

@@ -18,8 +18,9 @@ namespace loom {
 
 /// The total decoded structure one top-level decode may materialise, shared by every message
 /// and list nested in it: the allowance admit() spends, for native and compat bytes alike. The
-/// unit is one cell slot, one per declared field of every message entered and one per list
-/// element; payload bytes are not counted. A decode totalling exactly this many cells is
+/// unit is one cell slot, one per declared field of every record entered, one per union entered
+/// and one per list element; payload bytes are not counted. The live gate counts a value the same
+/// way and refuses one past it (TooLarge), so no live value is larger than a decode admits. A decode totalling exactly this many cells is
 /// accepted and one more is refused with MalformedBytes. Host-owned: no caller and nothing on
 /// the wire widens it; 65,536 cells is about 6 MiB. See docs/reference/bounds.md.
 inline constexpr std::uint64_t kMaxDecodedCells = 1u << 16; // cells in one decode
@@ -74,6 +75,8 @@ private:
     friend Unverified parse(std::string_view bytes) noexcept;
     friend Unverified compat::parse(std::string_view bytes) noexcept;
     friend Admission admit(const Unverified&, std::shared_ptr<const Schema>, Report);
+    friend Admission admit(const Unverified&, std::shared_ptr<const Schema>, const Registry&,
+                           Report);
     friend Admission admit(const Unverified&, const Registry&, Report);
 };
 
@@ -90,12 +93,19 @@ Unverified parse(std::string_view bytes) noexcept;
 /// claim must match `door` (identity); the decoded value must conform
 /// (structure). `door` is taken by shared owner so the admitted Value's schema
 /// can never dangle. Unknown encodings and malformed fields are refused, not
-/// trusted.
+/// trusted. A value an Any field holds names a shape this overload cannot resolve, so it is
+/// refused with UnknownSchema; the next overload resolves it.
 Admission admit(const Unverified& unverified, std::shared_ptr<const Schema> door,
                 Report report = Report::FirstError);
 
-/// As above, but resolve the claimed schema against a registry. A claim naming a
-/// schema the registry does not hold is refused with UnknownSchema.
+/// As above, resolving each value an Any field holds against `open`: decoded under the
+/// definition `open` holds for the name and version it names, refused UnknownSchema when `open`
+/// holds none and SchemaMismatch when the bytes carry another content id.
+Admission admit(const Unverified& unverified, std::shared_ptr<const Schema> door,
+                const Registry& open, Report report = Report::FirstError);
+
+/// As above, but resolve the claimed schema against a registry, which also resolves every
+/// Any field. A claim naming a schema the registry does not hold is refused with UnknownSchema.
 Admission admit(const Unverified& unverified, const Registry& registry,
                 Report report = Report::FirstError);
 
@@ -106,7 +116,12 @@ Admission admit(const Unverified& unverified, const Registry& registry,
 ///
 /// Under the strict-core policy the JSON decoder rejects any field the door does
 /// not declare (ErrorKind::UnknownField) — there is no partial acceptance and no
-/// silent drop in any format.
+/// silent drop in any format. The native form is positional and names no field: a value written
+/// against a shape with another field list carries another content id, refused SchemaMismatch.
+/// A union is an object with one member, its case (`{"moved": {...}}`), or a case carrying
+/// nothing as its name alone (`"refused"`); a case it does not declare is UnknownField, several
+/// are SeveralCases and none NoCase. An Any field's value is an object naming its shape:
+/// `{"schema", "version", "content_id", "fields"}`.
 namespace compat {
 
 /// Serialize a value to JSON text. Total for any in-memory Value.

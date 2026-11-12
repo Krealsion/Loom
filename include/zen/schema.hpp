@@ -26,32 +26,51 @@ struct SchemaAccess;
 /// "is your claim the shape this door expects", before its field-by-field compare.
 using ContentId = std::uint64_t;
 
+/// What a shape's fields are. A record holds any of its fields, each present or absent; a union
+/// holds exactly one of them, its case. A union whose cases all carry nothing is an
+/// enumeration. docs/reference/values-and-admission.md#unions-and-the-open-field
+enum class Form : std::uint8_t {
+    Record = 0,
+    Union = 1,
+};
+
 /// The type of a field, or the element type of a list. Recursive: a list's
 /// element may itself be a list (nesting) or a message.
 ///
 /// Invariants (enforced when a Schema is built):
-///   - kind == Message  =>  message != nullptr, element == nullptr
+///   - kind == Message  =>  message is a record shape, element == nullptr
+///   - kind == Union    =>  message is a union shape, element == nullptr
 ///   - kind == List     =>  element != nullptr, message == nullptr
-///   - otherwise        =>  message == nullptr, element == nullptr
+///   - otherwise        =>  message == nullptr, element == nullptr (Any names no shape: the
+///                          value names its own, and the registry answers for it)
 struct TypeRef {
     Kind kind = Kind::Int;
-    std::shared_ptr<const Schema> message;  ///< non-null iff kind == Message
+    std::shared_ptr<const Schema> message;  ///< non-null iff kind is Message or Union
     std::shared_ptr<const TypeRef> element; ///< non-null iff kind == List
 };
 
-/// Factory for a primitive type (anything but Message/List).
+/// Factory for a primitive type (Int, Float, Text, Bool, Bytes, or Any).
 TypeRef type_of(Kind k);
-/// Factory for a nested-message type.
+/// Factory for a field holding a nested value of `schema`: Kind::Message for a record shape,
+/// Kind::Union for a union shape.
 TypeRef type_message(std::shared_ptr<const Schema> schema);
 /// Factory for a list type with the given element type (may nest).
 TypeRef type_list(TypeRef element);
+/// Factory for a field holding a value of any shape the registry holds (Kind::Any).
+TypeRef type_any();
 
-/// One named slot in a schema.
+/// One named slot in a schema: a record's field, or a union's case.
 struct Field {
     std::string name;
     TypeRef type;
-    bool required = true;
+    bool required = true; ///< a record's field may be absent when false; a union's case is true
+    bool carries = true;  ///< false only for a union's case that carries nothing (its type unread)
 };
+
+/// A union's case carrying a value of `type`.
+Field case_of(std::string name, TypeRef type);
+/// A union's case carrying nothing: an enumeration's member.
+Field case_bare(std::string name);
 
 /// A runtime descriptor of a value's shape. Immutable once constructed: a
 /// published schema is frozen forever (register a new version to change shape).
@@ -63,11 +82,20 @@ public:
     /// invariants (e.g. a Message field with no nested schema) or if two
     /// fields share a name.
     Schema(std::string name, std::uint32_t version, std::vector<Field> fields);
+    /// A shape of either form. A union needs at least one case; each of its cases is required
+    /// and carries a value unless `carries` is false. A record's field always carries.
+    Schema(Form form, std::string name, std::uint32_t version, std::vector<Field> fields);
 
     const std::string& name() const noexcept { return name_; }
     std::uint32_t version() const noexcept { return version_; }
+    Form form() const noexcept { return form_; }
+    bool is_union() const noexcept { return form_ == Form::Union; }
+    /// A record's fields, or a union's cases in declared order.
     const std::vector<Field>& fields() const noexcept { return fields_; }
     ContentId content_id() const noexcept { return content_id_; }
+    /// Whether a value of this shape can hold an open field's value (Kind::Any), in a field of its
+    /// own or of any shape it nests, however deep. Known when the schema is built.
+    bool reaches_open() const noexcept { return reaches_open_; }
 
     /// Field lookup by name, or nullptr if absent. Linear scan; field counts
     /// are small and this keeps the value model index-free.
@@ -85,13 +113,15 @@ private:
 
     std::string name_;
     std::uint32_t version_;
+    Form form_ = Form::Record;
     std::vector<Field> fields_;
     ContentId content_id_;
+    bool reaches_open_ = false;
 };
 
-/// True iff the two schemas have the same fields, in the same order: each field's name,
-/// requiredness and type, a nested message compared by `same_identity` and a list by its
-/// element, however deep. Name and version are not compared.
+/// True iff the two schemas have the same form and the same fields, in the same order: each
+/// field's name, requiredness, whether it carries, and type, a nested shape compared by
+/// `same_identity` and a list by its element, however deep. Name and version are not compared.
 bool same_structure(const Schema& a, const Schema& b) noexcept;
 
 /// True iff both schemas are one definition: the same name, version and content id, AND the
@@ -140,6 +170,9 @@ private:
 /// Convenience: build an immutable schema in one call.
 std::shared_ptr<const Schema> make_schema(std::string name, std::uint32_t version,
                                           std::vector<Field> fields);
+/// Convenience: build an immutable union shape from its cases (`case_of`, `case_bare`).
+std::shared_ptr<const Schema> make_union(std::string name, std::uint32_t version,
+                                         std::vector<Field> cases);
 
 /// THE COMPONENT CLOSURE OF A SCHEMA — every schema `root` transitively references
 /// through its field types (a Message field, a List of Messages, however deep),

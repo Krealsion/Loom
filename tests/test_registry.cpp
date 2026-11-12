@@ -453,7 +453,7 @@ std::shared_ptr<const Schema> foo_int() {
     return SchemaBuilder("Foo", 1).field("x", Kind::Int).build();
 }
 std::shared_ptr<const Schema> foo_text_twin() {
-    return zen_test::twin_of(*foo_int(), {Field{"x", type_of(Kind::Text), true}});
+    return zen_test::twin_of(*foo_int(), {Field{"x", type_of(Kind::Text), true, true}});
 }
 } // namespace
 
@@ -512,7 +512,7 @@ TEST_CASE("agreement: a twin nested inside two outer shapes makes the outer shap
     // one; only the nested structure differs.
     const auto part = SchemaBuilder("Part", 1).field("a", Kind::Int).build();
     const auto part_twin = zen_test::twin_of(
-        *part, {Field{"a", type_of(Kind::Int), true}, Field{"b", type_of(Kind::Int), true}});
+        *part, {Field{"a", type_of(Kind::Int), true, true}, Field{"b", type_of(Kind::Int), true, true}});
     const auto box = SchemaBuilder("Box", 1).message("part", part).build();
     const auto box_over_twin = SchemaBuilder("Box", 1).message("part", part_twin).build();
     REQUIRE(box->content_id() == box_over_twin->content_id());

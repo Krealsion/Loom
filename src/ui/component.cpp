@@ -336,6 +336,8 @@ std::string stress_value_for(Kind k) {
         return "false";
     case Kind::Bytes:
     case Kind::Message:
+    case Kind::Union:
+    case Kind::Any:
     case Kind::List:
         // No display stress value exists: bindings to these are refused by check_bindings
         // (List binds to List/Log nodes whose stress case is stress_rows()).

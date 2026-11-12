@@ -19,28 +19,64 @@
 // std::optional<T> member, which is an optional field of T's type: std::nullopt is the field
 // absent. docs/guides/writing-a-weave.md,
 // docs/reference/values-and-admission.md#required-and-optional-fields
+//
+// A union is a struct with one std::variant member and one line; a case is named by its
+// shape's name, or every case by the names the line lists, in order (a scalar case, two cases
+// of one type, and a std::monostate case, which carries nothing, need them):
+//
+//   struct Moment {
+//       std::variant<KeyPressed, PointerMoved> is;
+//       ZEN_UNION(Moment, 1, is);
+//   };
+//
+// An enumeration is a union whose cases carry nothing, written beside its enum, whose
+// enumerators it lists: `ZEN_ENUM(Outcome, 1, delivered, refused);`. A field that holds a value
+// of any registered shape is a loom::Any. docs/reference/values-and-admission.md#unions-and-the-open-field
 
 #include <zen/schema.hpp>
 #include <zen/value.hpp>
 
+#include <array>
 #include <concepts>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <type_traits>
+#include <utility>
+#include <variant>
 #include <vector>
 
 namespace loom {
 
-/// A type carrying a ZEN_SHAPE registration.
+/// A type carrying a ZEN_SHAPE registration: a record.
 template <class T>
-concept Shape = requires {
+concept RecordShape = requires {
     { T::zen_version } -> std::convertible_to<std::uint32_t>;
     { T::zen_name } -> std::convertible_to<const char*>;
     T::zen_fields();
 };
+
+/// A type carrying a ZEN_UNION registration: one std::variant member, its cases.
+template <class T>
+concept UnionShape = requires {
+    { T::zen_version } -> std::convertible_to<std::uint32_t>;
+    { T::zen_name } -> std::convertible_to<const char*>;
+    T::zen_union();
+    T::zen_case_names;
+};
+
+/// An enum written with ZEN_ENUM: a union whose cases carry nothing.
+template <class E>
+concept Enumeration = std::is_enum_v<E> && requires(E* e) { zen_enum_info(e); };
+
+/// A shape a struct declares: a record, a union, or an enumeration.
+template <class T>
+concept Shape = RecordShape<T> || UnionShape<T> || Enumeration<T>;
 
 // Forward declarations break the mutual recursion among the derivations below
 // (a Message field's type/conversion refers back to these for the nested shape).
@@ -50,6 +86,60 @@ template <class T>
 loom::Value to_value(const T& obj);
 template <Shape T>
 T from_value(const loom::Value& v);
+
+/// A field's value of any shape the registry holds (Kind::Any): an admitted value, which
+/// nothing can change, shared by every copy. The gate checks the shape it holds against the
+/// registry the bus admits by, and the bus lets a weave nest only a shape it may itself send.
+/// An empty Any leaves its field absent. docs/reference/values-and-admission.md#the-open-field
+class Any {
+public:
+    Any() = default;
+    /// Hold `v`, made into a node of its own (never adopted).
+    explicit Any(loom::Value v) : value_(std::make_shared<const loom::Value>(std::move(v))) {}
+    /// Hold a struct's value.
+    template <Shape T>
+    static Any of(const T& obj) {
+        return Any(to_value(obj));
+    }
+
+    bool has_value() const noexcept { return value_ != nullptr; }
+    /// The value held, or nullptr.
+    const loom::Value* value() const noexcept { return value_.get(); }
+    /// The shape of the value held, or nullptr.
+    const loom::Schema* shape() const noexcept { return value_ ? &value_->schema() : nullptr; }
+    /// Whether it holds a value of T's shape, one definition with it.
+    template <Shape T>
+    bool holds() const {
+        return value_ && same_identity(value_->schema(), *schema_of<T>());
+    }
+    /// The value held as T. Throws std::invalid_argument if it holds another shape or none.
+    template <Shape T>
+    T as() const {
+        if (!holds<T>()) {
+            throw std::invalid_argument(std::string("loom::Any holds ") +
+                                        (value_ ? value_->schema().name() : "nothing") +
+                                        ", not " + schema_of<T>()->name());
+        }
+        return from_value<T>(*value_);
+    }
+
+    /// The cell of a field holding it. Throws std::invalid_argument when it holds nothing.
+    loom::Cell cell() const {
+        if (!value_) {
+            throw std::invalid_argument("loom::Any holds no value");
+        }
+        return loom::Cell::message(*value_);
+    }
+    /// What a field's cell holds, shared: an admitted value never changes.
+    static Any from(const loom::Cell& c) {
+        Any a;
+        a.value_ = c.as_message();
+        return a;
+    }
+
+private:
+    std::shared_ptr<const loom::Value> value_;
+};
 
 /// The two access-tag bits a field registration may carry: metadata beside the shape, never
 /// part of it.
@@ -160,6 +250,10 @@ template <>
 struct type_ref_for<loom::Bytes> {
     static loom::TypeRef get() { return loom::type_of(loom::Kind::Bytes); }
 };
+template <>
+struct type_ref_for<loom::Any> {
+    static loom::TypeRef get() { return loom::type_any(); }
+};
 template <class T>
 struct type_ref_for<std::vector<T>> {
     static loom::TypeRef get() { return loom::type_list(type_ref_for<T>::get()); }
@@ -184,6 +278,7 @@ inline loom::Cell to_cell(double v) { return loom::Cell::real(v); }
 inline loom::Cell to_cell(const std::string& v) { return loom::Cell::text(v); }
 inline loom::Cell to_cell(bool v) { return loom::Cell::boolean(v); }
 inline loom::Cell to_cell(const loom::Bytes& v) { return loom::Cell::bytes(v); }
+inline loom::Cell to_cell(const loom::Any& v) { return v.cell(); }
 template <class T>
 loom::Cell to_cell(const std::vector<T>& v) {
     loom::Cell::Array arr;
@@ -203,6 +298,7 @@ inline void from_cell(double& d, const loom::Cell& c) { d = c.as_float(); }
 inline void from_cell(std::string& d, const loom::Cell& c) { d = c.as_text(); }
 inline void from_cell(bool& d, const loom::Cell& c) { d = c.as_bool(); }
 inline void from_cell(loom::Bytes& d, const loom::Cell& c) { d = c.as_bytes(); }
+inline void from_cell(loom::Any& d, const loom::Cell& c) { d = loom::Any::from(c); }
 template <class T>
 void from_cell(std::vector<T>& d, const loom::Cell& c) {
     const loom::Cell::Array& arr = c.as_list();
@@ -226,13 +322,134 @@ namespace detail {
 template <class M>
 loom::Field field_of(const char* name) {
     return loom::Field{name, type_ref_for<typename member_field<M>::type>::get(),
-                       /*required=*/!member_field<M>::optional};
+                       /*required=*/!member_field<M>::optional, /*carries=*/true};
 }
 } // namespace detail
+
+// ---- unions and enumerations --------------------------------------------------
+
+namespace detail {
+/// The case names a ZEN_UNION line lists, in order; none when the line lists none.
+template <class... N>
+constexpr std::array<const char*, sizeof...(N)> case_names(N... names) {
+    return {names...};
+}
+
+/// The std::variant a ZEN_UNION names.
+template <UnionShape T>
+using union_variant_t = std::remove_cvref_t<decltype(std::declval<T&>().*(T::zen_union()))>;
+
+template <class A>
+loom::Field case_field(const char* name) {
+    if constexpr (std::is_same_v<A, std::monostate>) {
+        return loom::case_bare(name);
+    } else {
+        return loom::case_of(name, type_ref_for<A>::get());
+    }
+}
+
+template <UnionShape T, std::size_t I>
+const char* case_name() {
+    using A = std::variant_alternative_t<I, union_variant_t<T>>;
+    if constexpr (T::zen_case_names.size() != 0) {
+        return T::zen_case_names[I];
+    } else {
+        static_assert(Shape<A>,
+                      "loom: a ZEN_UNION case is named by its shape's name, and this case is not "
+                      "a shape: list every case's name on the ZEN_UNION line");
+        return A::zen_name;
+    }
+}
+
+/// An enumeration's members, as ZEN_ENUM lists them: each enumerator and its spelling.
+template <class E, std::size_t N>
+struct EnumInfo {
+    const char* name;
+    std::uint32_t version;
+    std::array<E, N> values;
+    std::array<std::string_view, N> spellings;
+};
+
+/// The enumerator spellings in "a, b, c" (a ZEN_ENUM line, stringified), in order.
+template <std::size_t N>
+constexpr std::array<std::string_view, N> split_spellings(std::string_view list) {
+    std::array<std::string_view, N> out{};
+    std::size_t at = 0;
+    for (std::size_t i = 0; i < N; ++i) {
+        while (at < list.size() && (list[at] == ' ' || list[at] == ',')) {
+            ++at;
+        }
+        std::size_t end = at;
+        while (end < list.size() && list[end] != ',' && list[end] != ' ') {
+            ++end;
+        }
+        out[i] = list.substr(at, end - at);
+        at = end;
+    }
+    return out;
+}
+
+template <class E>
+std::size_t enum_index(E e) {
+    const auto info = zen_enum_info(static_cast<E*>(nullptr));
+    for (std::size_t i = 0; i < info.values.size(); ++i) {
+        if (info.values[i] == e) {
+            return i;
+        }
+    }
+    return info.values.size();
+}
+} // namespace detail
+
+namespace detail {
+template <UnionShape T, std::size_t... I>
+void union_cases(std::vector<loom::Field>& cases, std::index_sequence<I...>) {
+    (cases.push_back(case_field<std::variant_alternative_t<I, union_variant_t<T>>>(
+         case_name<T, I>())),
+     ...);
+}
+} // namespace detail
+
+template <UnionShape T>
+std::shared_ptr<const loom::Schema> build_union_schema() {
+    using V = detail::union_variant_t<T>;
+    constexpr std::size_t n = std::variant_size_v<V>;
+    static_assert(T::zen_case_names.size() == 0 || T::zen_case_names.size() == n,
+                  "loom: a ZEN_UNION line names every case or none");
+    std::vector<loom::Field> cases;
+    cases.reserve(n);
+    detail::union_cases<T>(cases, std::make_index_sequence<n>{});
+    return loom::make_union(T::zen_name, T::zen_version, std::move(cases));
+}
+
+template <Enumeration E>
+std::shared_ptr<const loom::Schema> build_enum_schema() {
+    const auto info = zen_enum_info(static_cast<E*>(nullptr));
+    std::vector<loom::Field> cases;
+    cases.reserve(info.spellings.size());
+    for (std::string_view s : info.spellings) {
+        cases.push_back(loom::case_bare(std::string(s)));
+    }
+    return loom::make_union(info.name, info.version, std::move(cases));
+}
+
+template <class T>
+std::shared_ptr<const loom::Schema> build_record_schema();
 
 template <class T>
 std::shared_ptr<const loom::Schema> build_schema() {
     static_assert(Shape<T>, "loom: type is not a ZEN_SHAPE (no zen_fields/zen_version)");
+    if constexpr (UnionShape<T>) {
+        return build_union_schema<T>();
+    } else if constexpr (Enumeration<T>) {
+        return build_enum_schema<T>();
+    } else {
+        return build_record_schema<T>();
+    }
+}
+
+template <class T>
+std::shared_ptr<const loom::Schema> build_record_schema() {
     loom::SchemaBuilder builder(T::zen_name, T::zen_version);
     std::apply(
         [&](auto&&... fe) {
@@ -259,6 +476,10 @@ void put_member(loom::Value& v, const char* name, const M& member) {
         if (member.has_value()) {
             v.set(name, to_cell(*member));
         }
+    } else if constexpr (std::is_same_v<M, loom::Any>) {
+        if (member.has_value()) { // an empty Any leaves its field absent, for the gate to refuse
+            v.set(name, to_cell(member));
+        }
     } else {
         v.set(name, to_cell(member));
     }
@@ -267,7 +488,9 @@ void put_member(loom::Value& v, const char* name, const M& member) {
 template <class M>
 void take_member(M& member, const loom::Value& v, const char* name) {
     const loom::Cell* c = v.get(name);
-    if constexpr (member_field<M>::optional) {
+    if constexpr (std::is_same_v<M, loom::Any>) {
+        member = c == nullptr ? loom::Any{} : loom::Any::from(*c);
+    } else if constexpr (member_field<M>::optional) {
         // Absent is std::nullopt, whatever the member's initializer holds.
         if (c == nullptr) {
             member.reset();
@@ -280,15 +503,68 @@ void take_member(M& member, const loom::Value& v, const char* name) {
 }
 } // namespace detail
 
+namespace detail {
+// One case of a union struct into its Value, if it is the alternative the variant holds.
+template <UnionShape T, std::size_t I>
+void put_case(loom::Value& v, const loom::Schema& s, const union_variant_t<T>& held) {
+    if (held.index() != I) {
+        return;
+    }
+    using A = std::variant_alternative_t<I, union_variant_t<T>>;
+    if constexpr (std::is_same_v<A, std::monostate>) {
+        v.choose(s.fields()[I].name);
+    } else {
+        v.set(s.fields()[I].name, to_cell(std::get<I>(held)));
+    }
+}
+template <UnionShape T, std::size_t... I>
+void put_union(loom::Value& v, const loom::Schema& s, const union_variant_t<T>& held,
+               std::index_sequence<I...>) {
+    (put_case<T, I>(v, s, held), ...);
+}
+
+// The variant's alternative for the Value's case, if it is case I.
+template <UnionShape T, std::size_t I>
+void take_case(union_variant_t<T>& held, const loom::Value& v, std::size_t chosen) {
+    if (chosen != I) {
+        return;
+    }
+    auto& alt = held.template emplace<I>();
+    using A = std::variant_alternative_t<I, union_variant_t<T>>;
+    if constexpr (!std::is_same_v<A, std::monostate>) {
+        from_cell(alt, *v.at(I));
+    }
+}
+template <UnionShape T, std::size_t... I>
+void take_union(union_variant_t<T>& held, const loom::Value& v, std::size_t chosen,
+                std::index_sequence<I...>) {
+    (take_case<T, I>(held, v, chosen), ...);
+}
+} // namespace detail
+
 /// Convert a struct to a Value claiming its derived schema: an optional member holding
 /// std::nullopt leaves its field absent. Adds no validation; the caller hands the Value to the
 /// same admit.
 template <class T>
 loom::Value to_value(const T& obj) {
     static_assert(Shape<T>, "loom: to_value requires a ZEN_SHAPE struct");
-    loom::Value v(schema_of<T>());
-    std::apply([&](auto&&... fe) { (detail::put_member(v, fe.name, obj.*(fe.ptr)), ...); },
-               T::zen_fields());
+    const std::shared_ptr<const loom::Schema> schema = schema_of<T>();
+    loom::Value v(schema);
+    if constexpr (UnionShape<T>) {
+        using V = detail::union_variant_t<T>;
+        // A variant left valueless by an exception holds no case, which the gate refuses.
+        detail::put_union<T>(v, *schema, obj.*(T::zen_union()),
+                             std::make_index_sequence<std::variant_size_v<V>>{});
+    } else if constexpr (Enumeration<T>) {
+        const std::size_t i = detail::enum_index(obj);
+        // An enumerator ZEN_ENUM does not list holds no case, which the gate refuses.
+        if (i < schema->fields().size()) {
+            v.choose(schema->fields()[i].name);
+        }
+    } else {
+        std::apply([&](auto&&... fe) { (detail::put_member(v, fe.name, obj.*(fe.ptr)), ...); },
+                   T::zen_fields());
+    }
     return v;
 }
 
@@ -298,8 +574,17 @@ loom::Value to_value(const T& obj) {
 template <Shape T>
 T from_value(const loom::Value& v) {
     T obj{};
-    std::apply([&](auto&&... fe) { (detail::take_member(obj.*(fe.ptr), v, fe.name), ...); },
-               T::zen_fields());
+    if constexpr (UnionShape<T>) {
+        using V = detail::union_variant_t<T>;
+        // The gate saw exactly one case.
+        detail::take_union<T>(obj.*(T::zen_union()), v, v.chosen().value(),
+                              std::make_index_sequence<std::variant_size_v<V>>{});
+    } else if constexpr (Enumeration<T>) {
+        obj = zen_enum_info(static_cast<T*>(nullptr)).values[v.chosen().value()];
+    } else {
+        std::apply([&](auto&&... fe) { (detail::take_member(obj.*(fe.ptr), v, fe.name), ...); },
+                   T::zen_fields());
+    }
     return obj;
 }
 
@@ -387,6 +672,31 @@ std::vector<FieldAccess> access_of() {
     ::loom::field_entry(#member, &ZenSelf::member, ::loom::access::kHide)
 #define ZEN_DETAIL_HIDE_()                                                                          \
     static constexpr bool zen_hide_all = true;                                                      \
+    static_assert(true, "") /* swallow the trailing semicolon */
+
+/// Declare a struct with one std::variant member as a union shape: exactly one of the variant's
+/// alternatives, each a case. Each case is named by its shape's name, unless the line lists a
+/// name for every case, in order: `ZEN_UNION(Pick, 1, is, "left", "right")`. A std::monostate
+/// alternative is a case that carries nothing.
+#define ZEN_UNION(ShapeName, ShapeVersion, member, ...)                                            \
+    using ZenSelf = ShapeName;                                                                      \
+    static constexpr const char* zen_name = #ShapeName;                                             \
+    static constexpr ::std::uint32_t zen_version = (ShapeVersion);                                  \
+    static constexpr auto zen_union() { return &ZenSelf::member; }                                  \
+    static constexpr auto zen_case_names = ::loom::detail::case_names(__VA_ARGS__);                 \
+    static_assert(true, "") /* swallow the trailing semicolon */
+
+/// Declare an enum as an enumeration: a union shape whose cases carry nothing, one an
+/// enumerator, named as spelled and in the order listed. Written at namespace scope beside the
+/// enum (it defines a function found through the enum's namespace).
+#define ZEN_ENUM(EnumName, EnumVersion, ...)                                                       \
+    [[maybe_unused]] inline auto zen_enum_info(EnumName*) {                                         \
+        using enum EnumName;                                                                        \
+        constexpr auto values = ::std::array{__VA_ARGS__};                                          \
+        return ::loom::detail::EnumInfo<EnumName, values.size()>{                                   \
+            #EnumName, (EnumVersion), values,                                                       \
+            ::loom::detail::split_spellings<values.size()>(#__VA_ARGS__)};                          \
+    }                                                                                               \
     static_assert(true, "") /* swallow the trailing semicolon */
 
 /// Declare a struct as a Zen shape. The version is required and part of the identity: a shape

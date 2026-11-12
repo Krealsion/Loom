@@ -347,6 +347,39 @@ private:
 
 // A making refused: what the constructor threw, written to the host's sink as its words; an
 // exception that is no std::exception says nothing.
+/// Admit bytes at one of this library's own doors. An Any field names a shape the door does not,
+/// and the library reads it against the shapes it declares itself: its doors, its state, its
+/// claims and its emits, and every shape they nest. A shape it does not declare is not one it
+/// can read, and the value is refused as any value its gate does not pass.
+template <class S>
+loom::Admission admit_declared(const S& s, const loom::Unverified& u,
+                               const std::shared_ptr<const loom::Schema>& door) {
+    loom::Admission a = loom::admit(u, door);
+    if (a.ok() || a.first_error().kind != loom::ErrorKind::UnknownSchema ||
+        a.first_error().path.empty()) {
+        return a; // nothing open in it, or refused for another reason
+    }
+    loom::Registry own;
+    try {
+        std::vector<std::shared_ptr<const loom::Schema>> roots = s.accepted_schemas();
+        for (const auto& more : {s.claimed_schemas(), s.emitted_schemas()}) {
+            roots.insert(roots.end(), more.begin(), more.end());
+        }
+        roots.push_back(s.snapshot().schema_ptr());
+        std::vector<std::shared_ptr<const loom::Schema>> all;
+        for (const auto& r : roots) {
+            loom::collect_referenced(*r, all);
+            all.push_back(r);
+        }
+        for (const auto& sc : all) {
+            own.register_schema(sc);
+        }
+    } catch (const std::exception&) {
+        return a; // a vocabulary that does not agree with itself reads nothing open
+    }
+    return loom::admit(u, door, own);
+}
+
 template <class S>
 void* do_create(ZenByteSink refusal) {
     try {
@@ -434,7 +467,7 @@ ZenStatus do_claim_published(void* instance, const std::uint8_t* value, std::siz
         if (!door) {
             return ZEN_ERR_UNKNOWN_SCHEMA;
         }
-        loom::Admission a = loom::admit(u, door);
+        loom::Admission a = admit_declared(*s, u, door);
         if (!a.ok()) {
             return ZEN_ERR_REFUSED;
         }
@@ -460,7 +493,7 @@ ZenStatus do_revive(void* instance, const std::uint8_t* state, std::size_t len) 
         // The host admitted these bytes; they are re-admitted against the library's own state
         // schema to rebuild the Value revive() takes.
         loom::Value probe = s->snapshot();
-        loom::Admission a = loom::admit(u, probe.schema_ptr());
+        loom::Admission a = admit_declared(*s, u, probe.schema_ptr());
         if (!a.ok()) {
             return ZEN_ERR_REFUSED;
         }
@@ -514,7 +547,7 @@ ZenStatus do_handle(void* instance, std::uint64_t sender, std::uint64_t reply_to
         if (!door) {
             return ZEN_ERR_UNKNOWN_SCHEMA;
         }
-        loom::Admission a = loom::admit(u, door);
+        loom::Admission a = admit_declared(*s, u, door);
         if (!a.ok()) {
             return ZEN_ERR_REFUSED;
         }

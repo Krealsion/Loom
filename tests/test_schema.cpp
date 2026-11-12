@@ -84,10 +84,10 @@ TEST_CASE("nested-message structure participates in identity") {
 
 TEST_CASE("malformed type references are rejected at construction") {
     // A Message field with no schema.
-    CHECK_THROWS_AS((void)Schema("Bad", 1, {Field{"m", TypeRef{Kind::Message, nullptr, nullptr}, true}}),
+    CHECK_THROWS_AS((void)Schema("Bad", 1, {Field{"m", TypeRef{Kind::Message, nullptr, nullptr}, true, true}}),
                     std::invalid_argument);
     // A List field with no element.
-    CHECK_THROWS_AS((void)Schema("Bad", 1, {Field{"l", TypeRef{Kind::List, nullptr, nullptr}, true}}),
+    CHECK_THROWS_AS((void)Schema("Bad", 1, {Field{"l", TypeRef{Kind::List, nullptr, nullptr}, true, true}}),
                     std::invalid_argument);
     // type_of refuses non-primitive kinds.
     CHECK_THROWS_AS((void)type_of(Kind::Message), std::invalid_argument);

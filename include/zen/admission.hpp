@@ -22,8 +22,14 @@ enum class ErrorKind : std::uint8_t {
     TypeMismatch,   ///< a field is present but holds the wrong kind
     NullMessage,    ///< a Message field holds a null sub-value
     MalformedBytes, ///< the serialized envelope could not be parsed at all
-    MalformedField, ///< a field's bytes could not be decoded (bad varint/base64, bad UTF-8, bad bool)
-    UnknownField,   ///< the payload carries a field the door does not declare (strict-reject)
+    MalformedField, ///< a field's bytes could not be decoded (bad varint/base64, bad UTF-8, bad
+                    ///< bool, a union's case index past its last case)
+    UnknownField,   ///< compat JSON names a field or case the door does not declare. Only the
+                    ///< JSON decoder raises it: the native body is positional, and an added
+                    ///< field there is another content id, refused as SchemaMismatch
+    NoCase,         ///< a union holds none of its cases
+    SeveralCases,   ///< compat JSON names more than one case of a union
+    TooLarge,       ///< a live value holds more cells than any decode admits (kMaxDecodedCells)
 };
 
 const char* name_of(ErrorKind k) noexcept;

@@ -97,7 +97,7 @@ struct Subscribe {
 
 /// THE SUBSCRIPTION EXISTS, and this is where it begins. `shapes` is the subscribed shapes'
 /// descriptors -- `loom.observe.Shapes` (relay.hpp), serialized in the subscription's encoding:
-/// `zen.SchemaDesc` v1 for each shape and the closure it nests, exactly as self-description carries
+/// `zen.ShapeDesc` for each shape and the closure it nests, exactly as self-description carries
 /// them -- so a subscriber decodes a shape its own host never declared.
 struct Subscribed {
     std::int64_t subscription = 0;

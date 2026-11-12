@@ -416,8 +416,8 @@ TEST_CASE("an externally supplied manifest is held to the same rules: an emitted
         auto counter = SchemaBuilder("Counter", 1).field("count", Kind::Int).build();
         Value m(manifest_schema());
         m.set("accepted", Cell::list({}));
-        m.set("state", Cell::message(encode_schema(*counter)));
-        m.set("emits", Cell::list({Cell::message(encode_schema(*carrier))}));
+        m.set("state", Cell::message(encode_shape(*counter)));
+        m.set("emits", Cell::list({Cell::message(encode_shape(*carrier))}));
         Unverified u = parse(serialize(m));
         Admission a = admit(u, manifest_schema());
         REQUIRE(a.ok());
@@ -446,6 +446,27 @@ TEST_CASE("an externally supplied manifest is held to the same rules: an emitted
         Unverified u = parse(serialize(old));
         REQUIRE(u.well_formed());
         Admission a = admit(u, manifest_schema());
+        CHECK_FALSE(a.ok());
+        CHECK(a.first_error().kind == ErrorKind::SchemaMismatch);
+    }
+    SUBCASE("a manifest whose lists hold records' descriptions alone is another shape at this "
+            "door") {
+        // zen.Manifest v5, spelled as it was: every list of zen.SchemaDesc, `emits` among them.
+        // An image built against it, at the same ABI version, meets this refusal in
+        // `reconstruct` (docs/reference/dynamic-abi.md).
+        auto v5 = SchemaBuilder("zen.Manifest", 5)
+                      .list("referenced", type_message(schema_desc_schema()), /*required=*/false)
+                      .list("accepted", type_message(schema_desc_schema()))
+                      .message("state", schema_desc_schema())
+                      .message("requests", capability_ask_schema(), /*required=*/false)
+                      .list("claims", type_message(schema_desc_schema()), /*required=*/false)
+                      .list("emits", type_message(schema_desc_schema()), /*required=*/false)
+                      .build();
+        auto counter = SchemaBuilder("Counter", 1).field("count", Kind::Int).build();
+        Value old(v5);
+        old.set("accepted", Cell::list({}));
+        old.set("state", Cell::message(encode_schema(*counter)));
+        Admission a = admit(parse(serialize(old)), manifest_schema());
         CHECK_FALSE(a.ok());
         CHECK(a.first_error().kind == ErrorKind::SchemaMismatch);
     }

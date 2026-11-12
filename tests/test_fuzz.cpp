@@ -184,7 +184,7 @@ TEST_CASE("pathological binary nesting in a VALUE body is bounded by the depth c
     for (int i = 0; i < 200; ++i) {
         t = type_list(t);
     }
-    auto deep = make_schema("Deep", 1, {Field{"x", t, true}});
+    auto deep = make_schema("Deep", 1, {Field{"x", t, true, true}});
 
     std::string bytes = native_header(deep);
     bytes.push_back('\x01');           // presence: field 0 present

@@ -460,6 +460,42 @@ def main():
     check("D3 decode and encode spell absence alike: encoding the decoded fields leaves it out",
           again == {"key": "width", "number": "80"}, again)
 
+    # ---- unions and the open field, read from the host's descriptors ---------------------------
+    moved = values.schema_from_desc({"record": {"name": "Moved", "version": "1", "fields": [
+        {"name": "x", "required": True, "type": [{"kind": "0"}]}]}})
+    moment = values.schema_from_desc({"name": "Moment", "version": "1", "cases": [
+        {"name": "moved", "carries": True,
+         "type": [{"kind": "5", "ref_name": "Moved", "ref_version": "1"}]},
+        {"name": "idle", "carries": False, "type": []}]})
+    carry = values.Schema("Carry", 1, [values.Field("item", True, values.TypeRef(values.ANY)),
+                                       values.Field("now", True,
+                                                    values.TypeRef(values.UNION,
+                                                                   ref=("Moment", 1)))])
+    shapes_by = {("Moved", 1): moved, ("Moment", 1): moment}
+    ucodec = values.Codec(lambda name, version: shapes_by[(name, version)])
+    check("U1 a union's descriptor says its form and its bare cases, and a ShapeDesc either form",
+          moment.is_union and not moved.is_union and not moment.fields[1].carries
+          and moment.describe()[1] == ("idle", "nothing", True), moment.describe())
+    said = ucodec.encode(carry, {"item": {"schema": "Moved", "version": 1, "fields": {"x": 4}},
+                                 "now": {"moved": {"x": 2}}})
+    check("U2 an Any names its shape and a union one case, as the host's compat JSON does",
+          said == {"item": {"schema": "Moved", "version": 1, "fields": {"x": "4"}},
+                   "now": {"moved": {"x": "2"}}}, said)
+    check("U3 a bare case is its name alone, and decodes as it was said",
+          ucodec.encode(moment, "idle") == "idle" and ucodec.decode(moment, "idle") == "idle")
+    back = ucodec.decode(carry, said)
+    check("U4 decoding reads the case and the named shape back",
+          back == {"item": {"schema": "Moved", "version": 1, "fields": {"x": 4}},
+                   "now": {"moved": {"x": 2}}}, back)
+    refused = []
+    for wrong in ({}, {"moved": {"x": 1}, "idle": None}, "jump", {"idle": True}, "moved"):
+        try:
+            ucodec.encode(moment, wrong)
+        except values.ShapeError as e:
+            refused.append(str(e))
+    check("U5 no case, several, an undeclared one and a case in the wrong form are refused here",
+          len(refused) == 5, refused)
+
     # ---- observing: a subscription's words, held, numbered, decoded and acknowledged ----------
     # A real relay cannot be asked to skip a number, forge a speaker or say a word before its own
     # answer has been read, so these rules are pinned against the shipped client here.
@@ -490,7 +526,7 @@ def main():
 
     probe_desc = {"name": "Probe", "version": "1",
                   "fields": [{"name": "n", "required": True, "type": [{"kind": "0"}]}]}
-    described = values.envelope("loom.observe.Shapes", 1, {"shapes": [probe_desc]})
+    described = values.envelope("loom.observe.Shapes", 2, {"shapes": [{"record": probe_desc}]})
     LINK = 41
 
     def watching_context():

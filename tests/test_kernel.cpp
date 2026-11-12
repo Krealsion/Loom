@@ -740,7 +740,7 @@ TEST_CASE("schema admission: a refused load leaves nothing behind, a valid load 
 // the wall as a differing id would.
 namespace sa {
 inline std::shared_ptr<const Schema> greet_text_twin() {
-    static const auto s = zen_test::twin_of(*greet_text(), {Field{"msg", type_of(Kind::Text), true}});
+    static const auto s = zen_test::twin_of(*greet_text(), {Field{"msg", type_of(Kind::Text), true, true}});
     return s;
 }
 } // namespace sa

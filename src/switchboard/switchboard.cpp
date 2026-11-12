@@ -294,6 +294,62 @@ bool owns_seal(const CandidateOwner& owner, WeaveId speaker,
     return owner.valid() && owner.who == speaker && owner.life == speaker_life &&
            owner.incarnation == speaker_incarnation;
 }
+
+// The shapes the Any fields of a value hold, however deep, each once a visit, as the value's
+// own shapes declare its fields. A weave nests only a shape it may itself send, so each is asked
+// of the sender's authority as the payload's own shape is. The walk stops after as many visits
+// as a decode would materialise cells: a value that large is the gate's TooLarge, which runs
+// after this and sees it whole.
+void cell_open_shapes(const Cell& c, const TypeRef& t, std::vector<const Schema*>& out,
+                      std::uint64_t& visits);
+
+void open_shapes(const Value& v, std::vector<const Schema*>& out, std::uint64_t& visits) {
+    if (visits == 0) {
+        return;
+    }
+    --visits;
+    const std::vector<Field>& fields = v.schema().fields();
+    for (std::size_t i = 0; i < fields.size(); ++i) {
+        const Cell* c = v.at(i);
+        if (c != nullptr && fields[i].carries) {
+            cell_open_shapes(*c, fields[i].type, out, visits);
+        }
+    }
+}
+
+void cell_open_shapes(const Cell& c, const TypeRef& t, std::vector<const Schema*>& out,
+                      std::uint64_t& visits) {
+    switch (t.kind) {
+    case Kind::Any:
+        if ((c.kind() == Kind::Message || c.kind() == Kind::Union) && c.as_message()) {
+            out.push_back(&c.as_message()->schema());
+            open_shapes(*c.as_message(), out, visits);
+        }
+        return;
+    case Kind::Message:
+    case Kind::Union:
+        if ((c.kind() == Kind::Message || c.kind() == Kind::Union) && c.as_message()) {
+            open_shapes(*c.as_message(), out, visits);
+        }
+        return;
+    case Kind::List:
+        if (c.kind() == Kind::List) {
+            for (const Cell& e : c.as_list()) {
+                if (visits == 0) {
+                    return;
+                }
+                cell_open_shapes(e, *t.element, out, visits);
+            }
+        }
+        return;
+    case Kind::Int:
+    case Kind::Float:
+    case Kind::Text:
+    case Kind::Bool:
+    case Kind::Bytes:
+        return;
+    }
+}
 } // namespace
 
 // ---- Switchboard ----------------------------------------------------------
@@ -481,7 +537,7 @@ WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant
         canonicalize(s);
     }
 
-    Admission seeded = loom::admit(std::move(snap), *state_schema);
+    Admission seeded = loom::admit(std::move(snap), *state_schema, registry_);
     if (!seeded.ok()) {
         throw std::invalid_argument("register_weave: initial snapshot does not conform to its "
                                     "own schema: " +
@@ -762,7 +818,7 @@ Switchboard::MadeClaim Switchboard::make_claim(const WeaveRecord& rec, Value val
     // The same one gate every value crosses. A malformed claim is refused, not
     // stored: a repository holding an unadmitted value would be the one place in
     // Loom where a value was trusted without passing the gate.
-    Admission a = loom::admit(std::move(value), *door);
+    Admission a = loom::admit(std::move(value), *door, registry_);
     if (!a.ok()) {
         return MadeClaim{std::nullopt, SenseClaimResult{false, SenseRefusal::GateRefused, 0}};
     }
@@ -2350,13 +2406,28 @@ void Switchboard::deliver_one(Envelope env) {
     ev.authored_role = std::string(env.msg.provenance.authored_role());
 
     const WeaveRecord* author = env.gated ? find(env.msg.sender) : nullptr;
-    const bool permitted = !env.gated ||
-        (author != nullptr &&
-         (env.role.empty()
-              ? effective_permits(author->grant.live(), author->delegated, ev.schema_name,
-                                  ev.schema_version, env.target)
-              : effective_permits_role(author->grant.live(), author->delegated, ev.schema_name,
-                                       ev.schema_version, env.role)));
+    const auto may_send = [&](const std::string& name, std::uint32_t version) {
+        return env.role.empty()
+                   ? effective_permits(author->grant.live(), author->delegated, name, version,
+                                       env.target)
+                   : effective_permits_role(author->grant.live(), author->delegated, name,
+                                            version, env.role);
+    };
+    bool permitted = !env.gated ||
+        (author != nullptr && may_send(ev.schema_name, ev.schema_version));
+    // A weave nests only a shape it may itself send, to this same destination: an Any field is
+    // never a way around the send rule of the shape it holds.
+    if (permitted && env.gated && env.msg.payload.schema().reaches_open()) {
+        std::vector<const Schema*> nested;
+        std::uint64_t visits = kMaxDecodedCells;
+        open_shapes(env.msg.payload, nested, visits);
+        for (const Schema* s : nested) {
+            if (!may_send(s->name(), s->version())) {
+                permitted = false;
+                break;
+            }
+        }
+    }
     const auto refuse = [&](const Refusal& r) {
         record(env.seq, Disposition::Refused, r);
         ev.kind = EventKind::Refused;
@@ -2510,7 +2581,7 @@ void Switchboard::deliver_one(Envelope env) {
     // The one gate, live path. admit() consumes the candidate and re-emits it
     // trusted on success; on failure the candidate is dropped and never seen.
     const Schema& door_schema = door != nullptr ? **door : *wildcard_door;
-    Admission a = loom::admit(std::move(env.msg.payload), door_schema);
+    Admission a = loom::admit(std::move(env.msg.payload), door_schema, registry_);
     if (!a.ok()) {
         const Refusal r{RefusalReason::GateRefused, a.first_error()};
         refuse(r);
@@ -3030,7 +3101,8 @@ std::optional<Value> Switchboard::activation_deliverable(const WeaveRecord& cand
     if (door == nullptr && !wildcard_door) {
         return std::nullopt;
     }
-    Admission a = loom::admit(std::move(payload), door != nullptr ? **door : *wildcard_door);
+    Admission a = loom::admit(std::move(payload), door != nullptr ? **door : *wildcard_door,
+                                 registry_);
     if (!a.ok()) {
         return std::nullopt;
     }
@@ -3762,7 +3834,7 @@ ReviveOutcome Switchboard::reload(WeaveId id, std::string_view candidate_bytes) 
 
     // The bytes path: parse -> admit(Unverified, state schema). Same gate as live.
     Unverified candidate = loom::parse(candidate_bytes);
-    Admission admitted = loom::admit(candidate, rec->state_schema);
+    Admission admitted = loom::admit(candidate, rec->state_schema, registry_);
     if (admitted.ok()) {
         Value state = std::move(admitted).value();
         rec->weave->revive(state);
@@ -3823,7 +3895,7 @@ ReviveOutcome Switchboard::swap_state(WeaveId id, std::string_view candidate_byt
     // Same gate as the live and crash-revival paths: parse -> admit(Unverified,
     // state schema). No policy is consulted: an intentional swap spends no budget.
     Unverified candidate = loom::parse(candidate_bytes);
-    Admission admitted = loom::admit(candidate, rec->state_schema);
+    Admission admitted = loom::admit(candidate, rec->state_schema, registry_);
     if (!admitted.ok()) {
         // A clean refusal — no last-known-good fallback for an intentional swap.
         out.refusal = Refusal{RefusalReason::GateRefused, admitted.first_error()};

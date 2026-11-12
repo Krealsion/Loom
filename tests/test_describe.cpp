@@ -229,7 +229,10 @@ std::set<std::string> identities_from_wire(const Value& answer, const char* sect
         return out;
     }
     for (const Cell& c : list->as_list()) {
-        const Value& d = *c.as_message();
+        // A zen.ShapeDesc: a record's description or a union's, each naming its shape alike.
+        const Value& shape = *c.as_message();
+        const Cell* form = shape.get("record") != nullptr ? shape.get("record") : shape.get("union");
+        const Value& d = *form->as_message();
         out.insert(d.get("name")->as_text() + " v" + std::to_string(d.get("version")->as_int()));
     }
     return out;
@@ -261,7 +264,7 @@ TEST_CASE("the request is fieldless and the answer's grammar is versioned") {
 
     const auto answer = accepted_shapes_schema();
     CHECK(answer->name() == "zen.AcceptedShapes");
-    CHECK(answer->version() == 1u);
+    CHECK(answer->version() == 2u);
     REQUIRE(answer->fields().size() == 2);
     CHECK(answer->fields()[0].name == "referenced");
     CHECK(answer->fields()[0].required == false);
@@ -423,8 +426,8 @@ TEST_CASE("the answer carries the closure, in an order one forward pass can reso
     REQUIRE(refs_cell != nullptr); // a nesting target MUST carry its closure
     const Cell::Array& refs = refs_cell->as_list();
     REQUIRE(refs.size() == 2);
-    CHECK(refs[0].as_message()->get("name")->as_text() == "Leaf");
-    CHECK(refs[1].as_message()->get("name")->as_text() == "Middle");
+    CHECK(refs[0].as_message()->get("record")->as_message()->get("name")->as_text() == "Leaf");
+    CHECK(refs[1].as_message()->get("record")->as_message()->get("name")->as_text() == "Middle");
 
     Registry deps;
     decode_accepted_referenced(asker->answer(), deps);
@@ -747,7 +750,7 @@ TEST_CASE("allow_describe_answers adds exactly one rule, for the answer shape on
     REQUIRE(rules.size() == 1);
     CHECK(rules[0].any_shape == false);
     CHECK(rules[0].shape_name == kAcceptedShapesShapeName);
-    CHECK(rules[0].shape_version == 1u);
+    CHECK(rules[0].shape_version == accepted_shapes_schema()->version());
     CHECK(rules[0].any_target == true); // to whoever asked -- the asker is not known in advance
     CHECK(rules[0].target_role.empty());
 
@@ -771,9 +774,9 @@ TEST_CASE("a malformed answer fails whole; it never yields a partial vocabulary"
     // post-order by construction -- but a consumer must not half-trust one that
     // arrives anyway.
     Value bad(accepted_shapes_schema());
-    bad.set("referenced", Cell::list({Cell::message(encode_schema(*schema_of<Middle>())),
-                                      Cell::message(encode_schema(*schema_of<Leaf>()))}));
-    bad.set("accepted", Cell::list({Cell::message(encode_schema(*schema_of<Outer>()))}));
+    bad.set("referenced", Cell::list({Cell::message(encode_shape(*schema_of<Middle>())),
+                                      Cell::message(encode_shape(*schema_of<Leaf>()))}));
+    bad.set("accepted", Cell::list({Cell::message(encode_shape(*schema_of<Outer>()))}));
 
     Registry deps;
     CHECK_THROWS_AS(decode_accepted_referenced(bad, deps), std::runtime_error);
@@ -785,7 +788,7 @@ TEST_CASE("a malformed answer fails whole; it never yields a partial vocabulary"
     // And a root whose dependency is simply absent refuses too, rather than
     // reconstructing a shape with a hole in it.
     Value missing(accepted_shapes_schema());
-    missing.set("accepted", Cell::list({Cell::message(encode_schema(*schema_of<Outer>()))}));
+    missing.set("accepted", Cell::list({Cell::message(encode_shape(*schema_of<Outer>()))}));
     Registry empty;
     CHECK_THROWS_AS(decode_accepted_roots(missing, empty), std::runtime_error);
 }

@@ -3,6 +3,7 @@
 #include "box_twin.hpp"
 #include "switchboard_fixtures.hpp"
 #include "weavelib/dispatch_protocol.hpp"
+#include "weavelib/open_protocol.hpp"
 
 #include <zen/kernel/export.hpp>
 #include <zen/kernel/kernel.hpp>
@@ -368,4 +369,46 @@ TEST_SUITE("dispatch_loaded") {
                                         "wrote") != std::string::npos,
                       loaded.error);
     }
+
+TEST_CASE("a loaded weave reads an open field of a shape it declares, refuses one it does not, "
+          "and the host admits the one it sends against the bus's registry") {
+    Switchboard sb;
+    Kernel kernel(sb, sbfx::fixture_admission());
+    const auto loaded = kernel.load("open", ZEN_SO_OPEN_READER, "open.reader");
+    REQUIRE_MESSAGE(loaded.ok, loaded.error);
+    // A native participant that hears Notes and makes Strange a registered shape on this bus.
+    auto listener = std::make_unique<ProbeWeave>(
+        std::vector<std::shared_ptr<const Schema>>{schema_of<open_test::Note>()});
+    listener->declared_emits = {schema_of<open_test::Strange>()};
+    ProbeWeave* listener_raw = listener.get();
+    const WeaveId listener_id = sb.register_weave(std::move(listener), Grant{}.allow_any());
+
+    open_test::Note moved;
+    moved.item = Any::of(open_test::Moved{5});
+    sb.send(loaded.id, Message(to_value(moved)));
+    sb.drain_until_idle();
+    Value state = mind(sb, loaded.id);
+    CHECK(state.get("notes")->as_int() == 1);
+    CHECK(state.get("held")->as_text() == "Moved");
+    CHECK(state.get("x")->as_int() == 5);
+
+    // Registered on the bus, so the bus's gate admits it; not the reader's, so its seam refuses.
+    open_test::Note strange;
+    strange.item = Any::of(open_test::Strange{1});
+    std::vector<EventKind> kinds;
+    sb.add_observer([&](const BusEvent& e) {
+        if (e.target == loaded.id) {
+            kinds.push_back(e.kind);
+        }
+    });
+    sb.send(loaded.id, Message(to_value(strange)));
+    sb.drain_until_idle();
+    CHECK(mind(sb, loaded.id).get("notes")->as_int() == 1);
+    CHECK(std::find(kinds.begin(), kinds.end(), EventKind::Delivered) == kinds.end());
+
+    // What the reader sends crosses the host's seam, admitted against the bus's registry.
+    sb.send(loaded.id, Message(to_value(open_test::Pass{static_cast<std::int64_t>(listener_id.value), 9})));
+    sb.drain_until_idle();
+    REQUIRE(listener_raw->handled_names == std::vector<std::string>{"Note"});
+}
 }
