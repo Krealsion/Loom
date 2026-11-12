@@ -683,6 +683,12 @@ def main():
     # keep counting the execution against its capacity, still be able to stop it, and refuse to
     # let a client lose it by releasing the record.
     with Session.attach(session_dir) as s:
+        # A run with its verdict still counts until its process is gone, and a worker exits only
+        # once its verdict is answered: the baseline is taken when no earlier worker is on its way
+        # out, so it counts what is in flight and nothing that is leaving.
+        until(lambda: not any(row["state"] in FINAL and
+                              row["process"] in ("running", "descendants", "killing")
+                              for row in s.runs()["rows"]), 30, "earlier runs' processes to end")
         before_active = s.runs()["active"]
         s.start("lifecycle/linger", "linger", {"seconds": 300})
         s.wait("linger", timeout=60)

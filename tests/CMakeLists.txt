@@ -86,10 +86,9 @@ if(NOT WIN32)
     list(APPEND ZEN_POPULATION_GATES posix)
 endif()
 # The Windows kernel backend's own cases: where a weave's libraries are looked for, and the words
-# of a refusal (src/kernel/windows_loader.cpp); and what the serving host's idle nap asks of
-# Windows (src/host/idle_nap.cpp).
+# of a refusal (src/kernel/windows_loader.cpp).
 if(WIN32 AND TARGET zen-kernel)
-    set(ZEN_TEST_SOURCES_WINDOWS test_windows_loader.cpp test_host_nap.cpp)
+    set(ZEN_TEST_SOURCES_WINDOWS test_windows_loader.cpp)
     target_sources(zen-tests PRIVATE ${ZEN_TEST_SOURCES_WINDOWS})
     list(APPEND ZEN_TEST_SOURCES_DIRECT ${ZEN_TEST_SOURCES_WINDOWS})
     list(APPEND ZEN_POPULATION_GATES windows)

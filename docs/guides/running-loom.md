@@ -572,21 +572,24 @@ Conversation `0` means "named none" — an announcement, not an answer to anythi
 
 ### A host that rests until something is ready
 
-The supplied host waits for your next line a short while at a time. A host you write can do
-better: rest after each turn until something it serves is ready, or until its own next deadline,
-and wake at once when it is. That is `loom::host::Reactor`
-([`include/zen/host/reactor.hpp`](../../include/zen/host/reactor.hpp)), one wait on the
-host's own dispatch thread over every source the host trusts:
+A host rests after each turn until something it serves is ready, until a source it trusts is
+due, or until its own next deadline, and wakes at once when one comes. That is
+`loom::host::Reactor` ([`include/zen/host/reactor.hpp`](../../include/zen/host/reactor.hpp)),
+one wait on the host's own dispatch thread over every source the host trusts. The supplied host
+rests in it too, over its console and, serving, its door, so an idle `loom-host` costs nothing:
 
 ```cpp
 loom::host::Reactor wait(bus);
 wait.trust("my.window");     // roles whose claims the host lets into the wait
-wait.trust("my.door");
+wait.trust("my.timer");
 wait.watch(&console);        // a loom::host::LineInput, until it says Closed
+wait.watch_own([&server] { return server.wait_set(); }); // what the host serves itself
 for (;;) {
     bus.pump_pending();
-    const auto woke = wait.after_turn(next_deadline_ms); // 0 while the bus is busy
+    const auto woke = bus.pending() != 0 ? wait.after_turn(0) // a busy bus only looks
+                                         : wait.after_turn(); // or a deadline of its own, in ms
     if (woke.line) { /* console.read(&line, 0) */ }
+    if (woke.own) { /* server.service() */ }
 }
 ```
 
@@ -614,12 +617,55 @@ whatever its sources do, so nothing stalls it either.
 in the order the host trusted them; a claim that would pass the bound is not held, and its source
 is told why ([bounds](../reference/bounds.md#a-hosts-one-wait)).
 
+**What the host serves itself**, which is no role on the bus -- a door, a crossing it services
+after each turn -- it hands the wait as a function (`watch_own`), asked before every wait. It
+ends the wait when what it names is ready, counts in the bound before every role, and a handle in
+it the OS will not wait on is waited on no more while the set still names it.
+
 **Loom's own sources** say their wait sets the same way. A `LineInput`'s is an event its reader
 thread sets once a line is whole (Windows), or standard input (POSIX); that thread ends the wait
 and does nothing else, and the bus is only ever touched by the thread that turns it. A
 `BridgeServer`'s is its listener, its connections, and a signal it raises when a turn handed it
 something to send, so an answer leaves when the wait wakes rather than at the next poll
-([bridge](../reference/bridge.md#a-server-a-host-waits-on)).
+([bridge](../reference/bridge.md#a-server-a-host-waits-on)). A `BridgeClient`'s socket, a link
+to another host, is not one: while a link is mounted the supplied host's wait ends every few
+milliseconds to read it.
+
+### A source that is due at a time
+
+A source that keeps time -- a timer, a timeout on what it waits for -- says when it is due in the
+same claim: `WaitSet::until_ms`, a reading of the wait's clock. The wait rests until the soonest
+of those, its handles and the host's own deadline, and tells the source `due` in a `Waited` that
+carries the clock's reading, `now_ms`. Every `Waited` carries it, the first one that says the
+claim is held included, so the source acts on the time it was handed and reads no clock of its
+own. A time is due once per claim; a source that wants another claims its next, or claims no time
+at all. A time already past is due at the next wait, so a source that does not know the time
+claims `0` and is told it. Nothing is queued on the bus to keep the time: between the claim and
+its wake the bus holds nothing for it, a bus whose only business is a clock is idle, and
+`drain_until_idle()` returns. Only a role the host trusts puts a time in the wait, as only one
+puts a handle there; a weave that wants time asks such a source by message.
+
+**The clock is the host's** ([`include/zen/host/clock.hpp`](../../include/zen/host/clock.hpp)).
+`Reactor(bus)` keeps the machine's monotonic clock; `Reactor(bus, clock)` keeps the one given. A
+suite gives a `loom::host::ManualClock`, which moves only when told: the wait then only looks at
+its handles, and when nothing is ready it moves the clock to its soonest deadline and wakes what is
+due there. A case runs its host's real loop and asks for a time, and every timer due by then
+fires, in order, with no wait counted as time:
+
+```cpp
+loom::host::ManualClock clock;
+loom::host::Reactor wait(bus, clock);
+wait.trust("my.timer");
+while (clock.now_ms() < 5000) {
+    bus.pump_pending();
+    const auto woke = wait.after_turn(bus.pending() != 0 ? 0 : 5000 - clock.now_ms());
+}
+```
+
+A source that claimed the first version of `WaitSet`, built before times, is still held and is
+answered in the first version of `Waited`. On Windows a wait's deadline is a high-resolution
+waitable timer where Windows gives one, and lasts the scheduler's tick, about 15.6 ms, where it
+does not.
 
 ## 10. Link to another host
 

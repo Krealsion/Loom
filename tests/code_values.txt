@@ -85,8 +85,8 @@ kMaxCommandBytes                include/zen/host/line_input.hpp           kMaxCo
 claim   kMaxCommandBytes  longer than {} bytes
 kReadChunkBytes                 src/host/line_input.cpp                   kReadChunkBytes
 kMaxWaitedHandles               include/zen/host/reactor.hpp              kMaxWaitedHandles
-kIdleWaitMs                     src/host/host_main.cpp                    kIdleWaitMs
-kServeIdleWaitMs                src/host/host_main.cpp                    kServeIdleWaitMs
+kLinkLookMs                     src/host/host_main.cpp                    kLinkLookMs
+kServeLinkLookMs                src/host/host_main.cpp                    kServeLinkLookMs
 kMaxExpectations                src/host/session_door.hpp                 kMaxExpectations
 kMaxRulesPerRun                 src/host/session_door.hpp                 kMaxRulesPerRun
 kMaxRunNameBytes                src/host/session_door.hpp                 kMaxRunNameBytes

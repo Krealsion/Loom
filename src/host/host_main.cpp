@@ -10,7 +10,6 @@
 
 #include "boot_plan.hpp"
 #include "history_reader.hpp"
-#include "idle_nap.hpp"
 #include "link.hpp"
 #include "secure_random.hpp"
 #include "session_door.hpp"
@@ -24,6 +23,7 @@
 #include <zen/host/authority_command.hpp>
 #include <zen/host/grant_wiring.hpp>
 #include <zen/host/line_input.hpp>
+#include <zen/host/reactor.hpp>
 #include <zen/host/store_lock.hpp>
 #include <zen/host/warden.hpp>
 #include <zen/kernel/abi.h> // ZEN_ABI_VERSION — text, present on every platform
@@ -76,19 +76,19 @@ constexpr bool kPackaged = LOOM_HOST_PACKAGED != 0;
 /// open, the command says PENDING, and the answer prints when it arrives.
 constexpr int kSettleTurns = 16;
 
-/// How long an idle host waits on the person before turning the bus again. Only reached
-/// when the bus has nothing to do, so it costs a busy host nothing; short enough that a
-/// weave woken by something outside this loop is still serviced promptly.
-constexpr int kIdleWaitMs = 100;
+/// HOW OFTEN AN IDLE HOST LOOKS AT ITS LINKS. The host rests in one wait over its console and,
+/// serving, its door, and wakes the moment either has something; a link's socket is not in that
+/// wait, so while a link is mounted the wait ends this often to read it. The interactive host's
+/// is a console's latency; serve mode's, `kServeLinkLookMs`, a service's.
+constexpr int kLinkLookMs = 100;
 
 /// How long a boot waits on a far host's Welcome or Denied for one link. A far host that
 /// answers nothing in this time is reported as such; the link stays mounted and unlinked.
 constexpr int kLinkConnectMs = 3000;
 
-/// SERVE MODE'S IDLE WAIT. A session host answers clients over a socket, and an idle wait is the
-/// longest a client's request can sit unread; the interactive host's 100 ms is a console's
-/// latency, not a service's. Only reached when the bus has nothing to do.
-constexpr int kServeIdleWaitMs = 5;
+/// How often an idle session host looks at its links: the longest a far host's frame waits unread
+/// there. Its clients' requests wake it at once, through its door.
+constexpr int kServeLinkLookMs = 5;
 
 // ---- launch parameters ------------------------------------------------------
 //
@@ -1681,10 +1681,10 @@ int main(int argc, char** argv) {
 
     // ---- THE HOST LOOP ------------------------------------------------------
     //
-    // Both parties get served, every pass: one bounded bus turn, then the person, with a
-    // wait only when there is nothing else to do. There is no call in here that can fail
-    // to return because a participant decided to keep talking — and the wait itself is a
-    // real deadline even while the person has typed half a command (zen/host/line_input.hpp).
+    // Both parties get served, every pass: one bounded bus turn, then the person. Nothing here
+    // can fail to return because a participant keeps talking: a busy bus only looks, and an idle
+    // host rests in the one wait over its console and door (zen/host/reactor.hpp), which a line,
+    // a client and an answer the door owes each end at once.
     loom::host::LineInput input;
     bool prompt_shown = false;
     bool running = true;
@@ -1694,7 +1694,21 @@ int main(int argc, char** argv) {
     // (`loom.session.Shutdown`) or when someone types `quit`.
     loom::host::SessionDoor* const door = session.door();
     bool console_open = true;
-    loom::host::IdleNap idle_nap;
+    loom::host::Reactor rest(session.bus());
+    rest.watch(&input);
+    if (door != nullptr && door->server() != nullptr) {
+        loom::BridgeServer* const server = door->server();
+        rest.watch_own([server] { return server->wait_set(); });
+    }
+    const auto rest_after_turn = [&session, &rest, door] {
+        if (session.busy()) {
+            return rest.after_turn(0);
+        }
+        if (!session.links().empty()) {
+            return rest.after_turn(door != nullptr ? kServeLinkLookMs : kLinkLookMs);
+        }
+        return rest.after_turn();
+    };
     while (running) {
         session.turn();
         report_late_answers(session, prompt_shown);
@@ -1708,27 +1722,22 @@ int main(int argc, char** argv) {
         if (door != nullptr && door->ending()) {
             break; // a client ended this lifetime; its answer is flushed below
         }
-        if (!console_open) {
-            if (!session.busy()) {
-                idle_nap.nap(kServeIdleWaitMs);
-            }
-            continue;
-        }
-
-        if (!prompt_shown) {
+        if (console_open && !prompt_shown) {
             std::cout << "loom> " << std::flush;
             prompt_shown = true;
         }
+        const loom::host::Reactor::Woke woke = rest_after_turn();
+        if (!console_open || !woke.line) {
+            continue;
+        }
         std::string line;
-        // Poll while the bus has work; wait only when it does not. An idle host costs
-        // nothing and a busy one never stops reading.
-        const int wait = session.busy() ? 0 : (door != nullptr ? kServeIdleWaitMs : kIdleWaitMs);
-        const loom::host::LineInput::Status got = input.read(&line, wait);
+        const loom::host::LineInput::Status got = input.read(&line, 0);
         if (got == loom::host::LineInput::Status::Closed) {
             if (door == nullptr) {
                 break;
             }
             console_open = false;
+            rest.watch(nullptr);
             if (prompt_shown) {
                 std::cout << '\n';
                 prompt_shown = false;
@@ -1756,7 +1765,7 @@ int main(int argc, char** argv) {
         // flush its socket. Bounded: a client that stopped reading does not hold the host open.
         for (int i = 0; i < 8; ++i) {
             session.turn();
-            idle_nap.nap(kServeIdleWaitMs);
+            (void)rest.after_turn(kServeLinkLookMs);
         }
         const std::string reason = door->ending() ? door->ending_reason()
                                                   : std::string("ended at its console");
