@@ -580,6 +580,19 @@ TEST_CASE("a shape's description says a union, its bare cases and an open field,
     empty_union.set("cases", Cell::list({}));
     CHECK_THROWS_AS(decode_union(empty_union, deps), std::invalid_argument);
     CHECK(manifest_schema()->version() == 6);
+    // A consumer's own shape that keeps a list of records' descriptions reads as a manifest's
+    // list of shape descriptions does.
+    const auto carried = SchemaBuilder("Carried", 1)
+                             .list("referenced", type_message(schema_desc_schema()))
+                             .build();
+    Value own(carried);
+    own.set("referenced", Cell::list({Cell::message(encode_schema(*moved()))}));
+    Admission held = admit(parse(serialize(own)), carried);
+    REQUIRE(held.ok());
+    Registry fresh;
+    decode_referenced(held.value(), fresh);
+    CHECK(fresh.lookup("Moved", 1) != nullptr);
+    CHECK_THROWS_AS(decode_shape(own, fresh), std::runtime_error); // not a description at all
 }
 
 namespace {

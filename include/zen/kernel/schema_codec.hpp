@@ -405,15 +405,29 @@ inline std::shared_ptr<const Schema> decode_union(const Value& desc, const Regis
     return make_union(std::move(name), version, std::move(rebuilt));
 }
 
-/// A shape of either form from its admitted description (`zen.ShapeDesc`).
+/// A shape from any admitted description, read by the description it claims: a `zen.ShapeDesc`
+/// (either form), a record's `zen.SchemaDesc` or a union's `zen.UnionDesc`. So a list of any of
+/// them -- a manifest's, a describe answer's, a list a consumer's own shape keeps -- reads alike.
 inline std::shared_ptr<const Schema> decode_shape(const Value& desc, const Registry& deps) {
+    const Schema& claimed = desc.schema();
+    if (same_identity(claimed, *schema_desc_schema())) {
+        return decode_schema(desc, deps);
+    }
+    if (same_identity(claimed, *union_desc_schema())) {
+        return decode_union(desc, deps);
+    }
+    if (!same_identity(claimed, *shape_desc_schema())) {
+        throw std::runtime_error("schema descriptor: '" + claimed.name() +
+                                 "' is not a description of a shape");
+    }
     if (const Cell* u = desc.get("union")) {
         return decode_union(*u->as_message(), deps);
     }
     return decode_schema(*desc.get("record")->as_message(), deps);
 }
 
-/// Decode an admitted manifest's optional `referenced` section into `deps`, in order; the
+/// Decode the optional `referenced` section of an admitted manifest, or of any value keeping one
+/// (a list of descriptions, `decode_shape`), into `deps`, in order; the
 /// encoder's post-order makes one forward pass enough. Identical re-registration is a no-op, a
 /// conflicting one throws SchemaConflict, and a mis-ordered hand-built list fails its own
 /// resolution. This overload publishes for the Registry's whole lifetime; prefer the
