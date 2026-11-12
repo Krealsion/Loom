@@ -315,10 +315,12 @@ loom.history.Delivery{seq}               what became of one bus delivery (the fo
 Each row is a record as the Recorder holds it — seq, sender, target, shape, correlation, dispatch
 parent, outcome and refusal, payload state — plus what can be said about its dispatch parent:
 its horizon, and, when that parent is a `loom.link.Crossed` record **said by a link this host
-mounted, to itself**, the crossing's fields read back through the gate (the link, its epoch, the
-far session and established name, the far author and role, the attempt). A record anybody else
-sends itself in that shape is ordinary traffic here. The fields need the record's payload; when
-retention declined or evicted it the row says which and names no field. The reader is declared in
+mounted, to itself**, the crossing read back through the gate (the link, its epoch, the far
+session and established name, the frame's case, the attempt, and for a far delivery its author and
+role). The row's `crossing` is a union: `none`, `unread` with the record's payload state, or `read`
+with those fields. A record anybody else sends itself in that shape is ordinary traffic here, and
+its row's crossing is `none`. The fields need the record's payload; when retention declined or
+evicted it the row says which and names no field. The reader is declared in
 the structural blacklist, so asking never writes history. Who may ask is the grant's business:
 the session door gives its owner's clients these two shapes and run workers neither.
 
