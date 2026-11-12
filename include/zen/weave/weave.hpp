@@ -120,8 +120,9 @@ public:
         Role(Role&&) = delete;
         Role& operator=(Role&&) = delete;
 
-        /// Role-authored direct send. An invalid Ticket means authorship was refused (this weave
-        /// does not hold the role; `RoleAuthorshipDenied` on the tap) and nothing was queued.
+        /// Role-authored direct send. An invalid Ticket queued nothing. `refusal` is
+        /// `RoleAuthorshipDenied` when this weave does not hold the role, and `PendingPerSender`
+        /// when it is at its waiting bound. The tap says the same reason.
         template <class T>
         loom::Ticket send(loom::WeaveId target, const T& msg,
                           std::uint64_t correlation = 0) && {

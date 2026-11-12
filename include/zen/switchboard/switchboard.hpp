@@ -30,66 +30,8 @@
 
 namespace loom {
 
-/// Why a delivery (or a revival) was refused. `GateRefused` carries the gate's `Error`; the
-/// others are the bus's own reasons, which the gate never sees. Each points a weaver at a
-/// different fix, so a new failure gets a new reason rather than a wider old one.
-/// MSG-05; docs/laws/messaging-laws.md
-/// The order these are decided in: docs/reference/messaging.md#the-envelope-and-the-delivery-order
-enum class RefusalReason : std::uint8_t {
-    None = 0,
-    NoSuchTarget,      ///< directed at a WeaveId that is not registered
-    TargetUnavailable, ///< the target is currently dead (awaiting revival)
-    NotAccepted,       ///< the target's accept-set has no schema of this (name, version)
-    GateRefused,       ///< routing passed, but admit() refused — see `error`
-    CapabilityDenied,  ///< the sender's grant does not permit (shape -> target); the gate is
-                       ///< never reached. Authorization, not conformance.
-    /// A lifecycle or answer authority this Loom did not issue, or one expired, already spent,
-    /// or bound to another conversation or incarnation. The sender's grant may be correct: the
-    /// grant says whether it may send this shape, this says whether the authority is its to use.
-    ForeignAuthority,
-    /// A published bound was reached (docs/reference/bounds.md); nothing was forged.
-    Exhausted,
-    /// The message's author died, was removed, or was revived (a new life behind the same
-    /// `WeaveId`) after sending it. The target and the payload are fine.
-    /// MSG-03; docs/laws/messaging-laws.md
-    SenderLifeEnded,
-    /// An authenticated answer arrived for a requester that has since been revived or had its
-    /// code replaced: the address is right, and its occupant is not the one that asked.
-    /// ANS-03; docs/laws/answer-authority-laws.md
-    AnswerTargetChanged,
-    /// A sealed candidate tried to speak to anyone but the coordinator preparing it. The mirror
-    /// is deliberately not symmetrical: a message aimed at a sealed weave by anyone but its
-    /// coordinator is refused as `NoSuchTarget`, so the world cannot learn a candidate exists.
-    /// PR-01; docs/laws/replacement-laws.md
-    SealedSpeech,
-    /// A scheduled admission no longer described the world when it reached the head of the
-    /// queue: a participant died, was reloaded or removed, the role moved, the seal changed
-    /// hands, or its transaction had ended. Nothing changed: this refuses an admission, never an
-    /// activation.
-    /// PR-03 (the drift check), PR-07 (the window it can drift in);
-    /// docs/laws/replacement-laws.md
-    AdmissionRevoked,
-    /// A weave asked to speak as a role it does not hold. Refused when the statement is
-    /// authored: nothing is queued, and it is not sent as personal speech instead.
-    /// MSG-07; docs/laws/messaging-laws.md
-    RoleAuthorshipDenied,
-    /// A loaded weave sent a (name, version) this Loom cannot resolve, so there is no door to
-    /// admit it against. Refused at the library/host seam before anything is queued or any
-    /// target resolved; the sender sees a synchronous refusal, never a later dispatch notice.
-    /// The event carries the claimed name and version, the sending artifact, and a target only
-    /// where one was named.
-    /// MSG-08; docs/laws/messaging-laws.md
-    /// docs/reference/known-seams.md#rejections-at-the-dynamic-seam
-    SeamUnresolved,
-    /// The target is held behind a value a joint operation published under one of its own keys
-    /// and it could not apply: its `claim_published` hook threw or returned `Failed`, or a loaded
-    /// weave's slot answered neither `ZEN_OK` nor `ZEN_CLAIM_DECLINED` (zen/kernel/abi.h).
-    /// Nothing is delivered to it until it is reloaded or removed; `joint_status` and
-    /// `zen.JointApplied` say so.
-    /// SENSE-06; docs/laws/sense-laws.md
-    /// docs/reference/joint-publication.md#the-hold-and-diagnostic-access
-    ApplicationFailed,
-};
+// `RefusalReason` lives on `zen/switchboard/bus.hpp`, beside `Ticket`, which carries one when a
+// send queues nothing.
 
 const char* name_of(RefusalReason r) noexcept;
 
@@ -333,6 +275,9 @@ enum class TxnReason : std::uint8_t {
     /// This transaction's one preparation conversation has already been opened. There is one,
     /// so an answer can never be ambiguous about which ask it answers.
     PreparationAlreadyAsked,
+    /// The coordinator already has `kMaxPendingPerSender` messages waiting, so the preparation
+    /// ask was not queued and the conversation stays unopened. The tap says `PendingPerSender`.
+    PendingPerSender,
     /// The incumbent holds other roles beside the one named, and a replacement moves one role:
     /// the rest would be left on a weave sealed for retirement. Refused, changing nothing, until
     /// a replacement can move a set (MSG-13).
@@ -447,13 +392,20 @@ public:
     WeaveId register_weave(std::unique_ptr<Weave> weave, Grant grant, AcceptMode accept_mode);
 
     /// Enqueue a directed delivery to `target`. Returns a Ticket whose outcome is
-    /// readable after the delivery is pumped.
+    /// readable after the delivery is pumped. At `kMaxPendingPerSender` already waiting for
+    /// this sender, nothing is queued and the Ticket is invalid; the tap says `PendingPerSender`.
     Ticket send(WeaveId target, Message msg) override;
 
     /// Enqueue a delivery to every alive Weave whose accept-set includes the
     /// payload's (name, version), in registration order. Returns the recipient
     /// count (0 is legal, not an error). Each delivery is independently gated.
+    /// When the sender's room under `kMaxPendingPerSender` is smaller than the accepting
+    /// recipients, nothing is queued and the tap names `PendingPerSender` once.
     std::size_t publish(Message msg) override;
+
+    /// Whether the most recent publication on this bus refused a recipient for
+    /// `kMaxPendingPerSender`. The count `publish` returns is still how many were queued.
+    bool publication_met_pending_bound() const noexcept { return publication_pending_bound_; }
 
     /// Send as a specific Weave: `as_sender` is stamped as the sender and the message is
     /// authorized against its grant at delivery, as if it had sent through its own WeaveBus. A
@@ -500,8 +452,8 @@ public:
     // MSG-07, MSG-04; docs/laws/messaging-laws.md
     // docs/reference/messaging.md#role-authorship-role-authored-provenance
 
-    /// Role-authored direct send. An invalid Ticket means authorship was refused and nothing
-    /// was queued; the refusal is on the tap and in the journal.
+    /// Role-authored direct send. An invalid Ticket queued nothing. `refusal` names
+    /// `RoleAuthorshipDenied` or `PendingPerSender`; the tap says the same.
     Ticket role_send_as(WeaveId as_sender, std::string_view as_role, WeaveId target,
                           Message msg);
     /// Role-authored role-addressed send: `as_role` is the role spoken for, verified now;
@@ -725,6 +677,17 @@ public:
     /// The journal is a ring of the last `kJournalCapacity` delivery outcomes, so a bus that runs
     /// for weeks keeps a bounded footprint.
     static constexpr std::size_t kJournalCapacity = 1024;
+
+    /// How many of one sender's own messages may wait on this bus at once. A send past it is
+    /// refused `PendingPerSender` and queues nothing; every other sender is left untouched. The
+    /// same number as `kJournalCapacity`: one sender's waiting speech is one journal window and
+    /// cannot by itself roll that record. Not a turn bound (MSG-09). A dispatch-refusal notice,
+    /// a joint notice and a scheduled admission are not a sender's speech and are not counted.
+    /// MSG-01; docs/laws/messaging-laws.md
+    /// docs/reference/bounds.md
+    static constexpr std::size_t kMaxPendingPerSender = 1024;
+    static_assert(kMaxPendingPerSender == kJournalCapacity,
+                  "one sender's waiting speech is one journal window");
 
     /// How many unfinished deferred conversations one Loom holds at once. A weave asks for this
     /// host-side state, so it is bounded; past it a deferral is refused visibly and the immediate
@@ -1034,6 +997,9 @@ private:
         /// The fence this envelope belongs to (0 for none): the fence of the delivery it was
         /// queued from, or the one a fenced host send opened. Stamped by the bus.
         std::uint64_t fence = 0;
+        /// Counted against `msg.sender`'s `kMaxPendingPerSender`. Set only for a sender's own
+        /// speech; a bus notice or a scheduled admission leaves it false.
+        bool sender_accounted = false;
     };
 
     /// A fence the bus is counting for a host: how many envelopes it names are queued or being
@@ -1044,8 +1010,15 @@ private:
     };
     FenceRecord* find_fence(std::uint64_t id) noexcept;
     const FenceRecord* find_fence(std::uint64_t id) const noexcept;
-    /// Every enqueue funnels through here: the envelope's fence (already stamped) counts it.
+    /// Every enqueue funnels through here: the envelope's fence (already stamped) counts it,
+    /// and a sender's own speech counts against `kMaxPendingPerSender`.
     void queue_back(Envelope env);
+    /// Pop the front envelope and drop its sender count. It is no longer waiting.
+    Envelope take_front();
+    /// True when `sender` already has `kMaxPendingPerSender` of its own messages waiting.
+    bool sender_at_pending_bound(WeaveId sender) const noexcept;
+    /// `PendingPerSender` on the tap and in the journal; nothing queued; an invalid ticket.
+    Ticket refuse_pending_bound(WeaveId target, WeaveId sender, const Message& msg);
     /// The envelope a dispatch just finished with no longer counts toward its fence.
     void fence_dispatched(std::uint64_t id) noexcept;
     /// Open a record for a host's fenced send, or 0 at the bound.
@@ -1167,7 +1140,11 @@ private:
                             Provenance provenance = Provenance{}, TxnId preparation = TxnId{});
     Ticket enqueue_role(std::string role, Message msg, bool gated,
                         Provenance provenance = Provenance{});
-    std::size_t fanout(Message msg, bool gated, Provenance provenance = Provenance{});
+    struct Fanout {
+        std::size_t recipients = 0;
+        bool pending_bound = false;
+    };
+    Fanout fanout(Message msg, bool gated, Provenance provenance = Provenance{});
 
     /// Whether `as_sender` holds `as_role` now: the one membership question every role door
     /// asks (MSG-07), read from the table routing uses.
@@ -1481,6 +1458,10 @@ private:
     std::uint64_t next_weave_id_ = 1;
 
     std::deque<Envelope> queue_;
+    /// Waiting envelopes of each sender's own speech, by `WeaveId::value`. Bus acts are absent.
+    /// Answers are absent: one delivery creates one answer right.
+    std::map<std::uint64_t, std::size_t> pending_by_sender_;
+    bool publication_pending_bound_ = false;
 
     /// One retained outcome, tagged with the seq that owns it: a slot answers only while its
     /// `seq` matches, so an evicted or never-issued seq reads Pending.

@@ -106,6 +106,8 @@ const char* name_of(RefusalReason r) noexcept {
         return "SeamUnresolved";
     case RefusalReason::ApplicationFailed:
         return "ApplicationFailed";
+    case RefusalReason::PendingPerSender:
+        return "PendingPerSender";
     }
     return "?";
 }
@@ -206,6 +208,8 @@ const char* name_of(TxnReason r) noexcept {
         return "PreparationAlreadyAsked";
     case TxnReason::SeveralRoles:
         return "SeveralRoles";
+    case TxnReason::PendingPerSender:
+        return "PendingPerSender";
     }
     return "?";
 }
@@ -271,6 +275,10 @@ std::string Refusal::message() const {
         // participant and which publication.
         return "the target is held behind a published claim it could not apply; "
                "nothing is delivered to it until it is reloaded or removed";
+    case RefusalReason::PendingPerSender:
+        // Names THIS SENDER'S waiting messages. The new send is not queued, and
+        // no other sender's waiting messages are touched.
+        return "this sender already has its bound of messages waiting; nothing was queued";
     }
     return "?";
 }
@@ -701,6 +709,9 @@ void Switchboard::notify_dispatch_refusal(const Envelope& env, const BusEvent& e
 
 Ticket Switchboard::enqueue_directed(WeaveId target, Message msg, bool gated,
                                      Provenance provenance, TxnId preparation) {
+    if (sender_at_pending_bound(msg.sender)) {
+        return refuse_pending_bound(target, msg.sender, msg);
+    }
     const std::uint64_t seq = allocate_sequence();
     journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}}; // Pending, owns seq
     msg.provenance = std::move(provenance);
@@ -717,12 +728,16 @@ Ticket Switchboard::enqueue_directed(WeaveId target, Message msg, bool gated,
     // when nothing was being dispatched.
     env.dispatch_parent = current_dispatch_seq_;
     env.fence = current_dispatch_fence_; // ...and which fence that delivery belongs to
+    env.sender_accounted = true;
     queue_back(std::move(env));
     return Ticket{seq};
 }
 
 Ticket Switchboard::enqueue_role(std::string role, Message msg, bool gated,
                                  Provenance provenance) {
+    if (sender_at_pending_bound(msg.sender)) {
+        return refuse_pending_bound(WeaveId{}, msg.sender, msg);
+    }
     const std::uint64_t seq = allocate_sequence();
     journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}}; // Pending, owns seq
     // The same single assignment that makes provenance unforgeable on the
@@ -735,6 +750,7 @@ Ticket Switchboard::enqueue_role(std::string role, Message msg, bool gated,
     capture_refusal_recipient(env);
     env.dispatch_parent = current_dispatch_seq_; // the delivery this was authored from
     env.fence = current_dispatch_fence_;
+    env.sender_accounted = true;
     queue_back(std::move(env));
     return Ticket{seq};
 }
@@ -2149,12 +2165,33 @@ AuthorityView Switchboard::describe_authority_as(WeaveId caller,
     return view;
 }
 
-std::size_t Switchboard::fanout(Message msg, bool gated, Provenance provenance) {
+Switchboard::Fanout Switchboard::fanout(Message msg, bool gated, Provenance provenance) {
     const std::string name(msg.payload.schema().name());
     const std::uint32_t version = msg.payload.schema().version();
     const std::uint64_t sender_life = gated ? life_of(msg.sender) : 0;
 
-    std::size_t recipients = 0;
+    // Count first. A publication that does not fit is refused whole: queueing the
+    // ones that fit would deliver twice if the sender tried again.
+    std::size_t accepting = 0;
+    for (auto& entry : weaves_) {
+        WeaveRecord& rec = entry.second;
+        if (!rec.alive || rec.sealed_by.valid()) {
+            continue;
+        }
+        if (accept_match(rec, name, version) != nullptr) {
+            ++accepting;
+        }
+    }
+    const auto waiting = pending_by_sender_.find(msg.sender.value);
+    const std::size_t held = waiting == pending_by_sender_.end() ? 0 : waiting->second;
+    const std::size_t room = held >= kMaxPendingPerSender ? 0 : kMaxPendingPerSender - held;
+    if (accepting > room) {
+        (void)refuse_pending_bound(WeaveId{}, msg.sender, msg);
+        publication_pending_bound_ = true;
+        return Fanout{0, true};
+    }
+
+    Fanout out;
     for (auto& entry : weaves_) { // std::map: ascending id == registration order
         WeaveRecord& rec = entry.second;
         if (!rec.alive) {
@@ -2179,10 +2216,12 @@ std::size_t Switchboard::fanout(Message msg, bool gated, Provenance provenance) 
         // produced them all.
         env.dispatch_parent = current_dispatch_seq_;
         env.fence = current_dispatch_fence_; // ...and every one counts in that delivery's fence
+        env.sender_accounted = true;
         queue_back(std::move(env));
-        ++recipients;
+        ++out.recipients;
     }
-    return recipients;
+    publication_pending_bound_ = out.pending_bound;
+    return out;
 }
 
 // Host root authority: held only by the host program, these enqueue ungated.
@@ -2190,7 +2229,9 @@ Ticket Switchboard::send(WeaveId target, Message msg) {
     return enqueue_directed(target, std::move(msg), /*gated=*/false);
 }
 
-std::size_t Switchboard::publish(Message msg) { return fanout(std::move(msg), /*gated=*/false); }
+std::size_t Switchboard::publish(Message msg) {
+    return fanout(std::move(msg), /*gated=*/false).recipients;
+}
 
 // The gated path a Weave's WeaveBus uses, and the host uses to re-enter a
 // child's output: stamp the authoritative sender (a Weave cannot send as anyone
@@ -2207,11 +2248,12 @@ std::size_t Switchboard::publish_as(WeaveId as_sender, Message msg) {
     // "to the coordinator only" version of it. Refused visibly, because a candidate
     // trying to publish is exactly what the weaver wants to know about.
     if (sealed(as_sender)) {
+        publication_pending_bound_ = false;
         (void)refuse_now(WeaveId{}, as_sender, msg, RefusalReason::SealedSpeech);
         return 0;
     }
     msg.sender = as_sender;
-    return fanout(std::move(msg), /*gated=*/true);
+    return fanout(std::move(msg), /*gated=*/true).recipients;
 }
 
 // Role-addressed sends. send_to_role is the host's ungated root authority; the
@@ -2248,7 +2290,7 @@ Ticket Switchboard::refuse_role(WeaveId target, WeaveId as_sender, const Message
     // would downgrade unauthorized role speech into a mystery. Neither is
     // this: the attempt is named, the statement went nowhere.
     (void)refuse_now(target, as_sender, msg, RefusalReason::RoleAuthorshipDenied);
-    return Ticket{};
+    return Ticket{0, RefusalReason::RoleAuthorshipDenied};
 }
 
 Ticket Switchboard::role_send_as(WeaveId as_sender, std::string_view as_role, WeaveId target,
@@ -2287,10 +2329,13 @@ RolePublication Switchboard::role_publish_as(WeaveId as_sender, std::string_view
     // holders, and admission unseals before it binds — so a candidate already
     // failed the membership question above, with the precise reason.
     msg.sender = as_sender;
-    const std::size_t recipients =
-        fanout(std::move(msg), /*gated=*/true,
-               Provenance{}.with_authored_role(std::string(as_role)));
-    return RolePublication{true, recipients};
+    const Fanout sent = fanout(std::move(msg), /*gated=*/true,
+                               Provenance{}.with_authored_role(std::string(as_role)));
+    RolePublication published{true, sent.recipients};
+    if (sent.pending_bound) {
+        published.refusal = RefusalReason::PendingPerSender;
+    }
+    return published;
 }
 
 Ticket Switchboard::role_send(std::string_view as_role, WeaveId target, Message msg) {
@@ -2707,9 +2752,7 @@ void Switchboard::drain_until_idle() {
     const DispatchGuard dispatching(*this);
     stop_requested_ = false;
     while (!queue_.empty() && !stop_requested_) {
-        Envelope env = std::move(queue_.front());
-        queue_.pop_front();
-        deliver_one(std::move(env));
+        deliver_one(take_front());
     }
 }
 
@@ -2733,9 +2776,7 @@ std::size_t Switchboard::dispatch_at_most(std::size_t budget) {
     // already waiting. That is the whole point: the producer this exists to
     // contain is precisely the one that re-arms itself from inside its handler.
     while (dispatched < budget && !queue_.empty() && !stop_requested_) {
-        Envelope env = std::move(queue_.front());
-        queue_.pop_front();
-        deliver_one(std::move(env));
+        deliver_one(take_front());
         ++dispatched;
     }
     return dispatched;
@@ -2783,7 +2824,32 @@ void Switchboard::queue_back(Envelope env) {
     if (FenceRecord* f = find_fence(env.fence)) {
         ++f->queued;
     }
+    if (env.sender_accounted) {
+        ++pending_by_sender_[env.msg.sender.value];
+    }
     queue_.push_back(std::move(env));
+}
+
+Switchboard::Envelope Switchboard::take_front() {
+    Envelope env = std::move(queue_.front());
+    queue_.pop_front();
+    if (env.sender_accounted) {
+        const auto it = pending_by_sender_.find(env.msg.sender.value);
+        if (it != pending_by_sender_.end() && --it->second == 0) {
+            pending_by_sender_.erase(it);
+        }
+    }
+    return env;
+}
+
+bool Switchboard::sender_at_pending_bound(WeaveId sender) const noexcept {
+    const auto it = pending_by_sender_.find(sender.value);
+    return it != pending_by_sender_.end() && it->second >= kMaxPendingPerSender;
+}
+
+Ticket Switchboard::refuse_pending_bound(WeaveId target, WeaveId sender, const Message& msg) {
+    (void)refuse_now(target, sender, msg, RefusalReason::PendingPerSender);
+    return Ticket{0, RefusalReason::PendingPerSender};
 }
 
 void Switchboard::fence_dispatched(std::uint64_t id) noexcept {
@@ -3580,11 +3646,21 @@ TxnResult Switchboard::ask_candidate_to_prepare(TxnId id, Message ask) {
     // gated against its grant, and through the seal only because the sender is the owner. It
     // adds a fact the transaction will recognise, not a right. The correlation is Loom's: the
     // caller's is written over, as `enqueue_answer` writes over an answerer's.
-    const std::uint64_t correlation = next_preparation_correlation_++;
     ask.sender = t->coordinator.who;
     ask.reply_to = WeaveId{};
+    if (sender_at_pending_bound(ask.sender)) {
+        (void)refuse_pending_bound(t->candidate.who, ask.sender, ask);
+        return {false, id, TxnReason::PendingPerSender};
+    }
+    const std::uint64_t correlation = next_preparation_correlation_++;
     ask.correlation = correlation;
-    (void)enqueue_directed(t->candidate.who, std::move(ask), /*gated=*/true, Provenance{}, id);
+    const Ticket queued =
+        enqueue_directed(t->candidate.who, std::move(ask), /*gated=*/true, Provenance{}, id);
+    if (!queued.valid()) {
+        return {false, id, queued.refusal == RefusalReason::PendingPerSender
+                               ? TxnReason::PendingPerSender
+                               : TxnReason::PreconditionFailed};
+    }
 
     t->preparation_correlation = correlation;
     t->conversation = Conversation::Open;

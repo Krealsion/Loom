@@ -393,6 +393,18 @@ static void zen_host_sink(void* ctx, const std::uint8_t* data, std::size_t len) 
     }
 }
 
+/// A queued send is `ZEN_OK`. The waiting bound is its own status. Anything else invalid
+/// on this door is `denied` (authorship on a role door, a generic refusal on an ordinary one).
+static ZenStatus send_status(const loom::Ticket& t, ZenStatus denied) {
+    if (t.valid()) {
+        return ZEN_OK;
+    }
+    if (t.refusal == loom::RefusalReason::PendingPerSender) {
+        return ZEN_ERR_PENDING_PER_SENDER;
+    }
+    return denied;
+}
+
 // A library Weave sends/publishes by handing the host serialized payload bytes.
 // The host admits them through the gate (the DLL-seam boundary) before routing.
 static ZenStatus zen_host_send(void* ctx, std::uint64_t target, std::uint64_t reply_to,
@@ -417,7 +429,7 @@ static ZenStatus zen_host_send(void* ctx, std::uint64_t target, std::uint64_t re
                        loom::Message(std::move(a).value(), loom::WeaveId{},
                                         loom::WeaveId{reply_to}, correlation));
         if (attempt_out != nullptr) { *attempt_out = t.seq; }
-        return t.valid() ? ZEN_OK : ZEN_ERR_REFUSED;
+        return send_status(t, ZEN_ERR_REFUSED);
     });
 }
 
@@ -440,7 +452,7 @@ static ZenStatus zen_host_publish(void* ctx, std::uint64_t reply_to, std::uint64
         }
         h->gated->publish(loom::Message(std::move(a).value(), loom::WeaveId{},
                                            loom::WeaveId{reply_to}, correlation));
-        return ZEN_OK;
+        return h->sb->publication_met_pending_bound() ? ZEN_ERR_PENDING_PER_SENDER : ZEN_OK;
     });
 }
 
@@ -468,7 +480,7 @@ static ZenStatus zen_host_send_to_role(void* ctx, const char* role, std::uint64_
         const loom::Ticket t = h->gated->send_to_role(role, loom::Message(std::move(a).value(), loom::WeaveId{},
                                                       loom::WeaveId{reply_to}, correlation));
         if (attempt_out != nullptr) { *attempt_out = t.seq; }
-        return t.valid() ? ZEN_OK : ZEN_ERR_REFUSED;
+        return send_status(t, ZEN_ERR_REFUSED);
     });
 }
 
@@ -563,10 +575,10 @@ static ZenStatus zen_host_role_send(void* ctx, const char* as_role, std::uint64_
             as_role, loom::WeaveId{target},
             loom::Message(std::move(a).value(), loom::WeaveId{}, loom::WeaveId{reply_to},
                           correlation));
-        // On this door an invalid ticket means exactly one thing: the authorship was
-        // refused (shape and schema failures returned above).
+        // Shape and schema failures returned above. An invalid ticket is authorship
+        // refused, unless its reason is the waiting bound.
         if (attempt_out != nullptr) { *attempt_out = t.seq; }
-        return t.valid() ? ZEN_OK : ZEN_ERR_ROLE_AUTHORSHIP_DENIED;
+        return send_status(t, ZEN_ERR_ROLE_AUTHORSHIP_DENIED);
     });
 }
 
@@ -591,7 +603,7 @@ static ZenStatus zen_host_role_send_to_role(void* ctx, const char* as_role, cons
             loom::Message(std::move(a).value(), loom::WeaveId{}, loom::WeaveId{reply_to},
                           correlation));
         if (attempt_out != nullptr) { *attempt_out = t.seq; }
-        return t.valid() ? ZEN_OK : ZEN_ERR_ROLE_AUTHORSHIP_DENIED;
+        return send_status(t, ZEN_ERR_ROLE_AUTHORSHIP_DENIED);
     });
 }
 
@@ -621,6 +633,9 @@ static ZenStatus zen_host_role_publish(void* ctx, const char* as_role, std::uint
         }
         if (recipients_out != nullptr) {
             *recipients_out = p.recipients;
+        }
+        if (p.refusal == loom::RefusalReason::PendingPerSender) {
+            return ZEN_ERR_PENDING_PER_SENDER;
         }
         return ZEN_OK;
     });

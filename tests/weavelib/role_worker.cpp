@@ -35,7 +35,26 @@ public:
         const WeaveId target{static_cast<std::uint64_t>(cmd.target)};
         role_speech::RoleReport report;
         report.what = cmd.mode;
-        if (cmd.mode == "direct") {
+        if (cmd.mode == "bound-publish") {
+            const RolePublication p =
+                mail.as_role("worker.a").publish(role_speech::WorkerNews{"open"});
+            report.authored = p.authored;
+            report.recipients = static_cast<std::int64_t>(p.recipients);
+            report.seen_role = std::string(name_of(p.refusal));
+            (void)mail.answer(report);
+            return;
+        } else if (cmd.mode == "bound-direct" || cmd.mode == "bound-to-role") {
+            // The report is an answer, so it still leaves while this weave is at its
+            // waiting bound. seen_role carries the ticket's refusal name.
+            const Ticket t = cmd.mode == "bound-direct"
+                                 ? mail.as_role("worker.a").send(target, role_speech::WorkerNews{"direct"})
+                                 : mail.as_role("worker.a").send_to_role("dispatcher",
+                                                                        role_speech::WorkerNews{"to-role"});
+            report.authored = t.valid();
+            report.seen_role = t.valid() ? std::string{} : std::string(name_of(t.refusal));
+            (void)mail.answer(report);
+            return;
+        } else if (cmd.mode == "direct") {
             report.authored =
                 mail.as_role("worker.a").send(target, role_speech::WorkerNews{"direct"}).valid();
         } else if (cmd.mode == "to-role") {
