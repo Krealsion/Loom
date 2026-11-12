@@ -149,6 +149,15 @@ refuses:
 - `doc_links` (`tests/check_doc_links.cmake`) resolves every repository-relative link, and every
   `.md` path in a C/C++ or CMake comment, and refuses a path outside the repository in any
   current-facing text file, whether it is spelled out or reached by climbing above it with `../`.
+- `doc_names` (`tests/check_doc_names.cmake`) reads the routers and the contributor's pages --
+  `AGENTS.md`, `docs/CONTEXT.md`, `docs/README.md`, this page and `docs/contributing/` -- for the
+  names no link holds. A path in backticks, or written bare in the routing table, is a file or
+  folder of the tree: read from the root, from the page's folder, or, when it opens with no
+  top-level folder, as the tail of a path (`test_gate.cpp`, `zen/kernel/control.hpp`). A name the
+  tree does not hold, a file the host writes or a build's tree, is a row of
+  [`tests/doc_names.txt`](tests/doc_names.txt), and a row no page needs is a red. A suite, an
+  entry or a gate named beside that word is one the population files declare, and every law in a
+  range such as `POP-01..05` is declared.
 - `code_values` (`tests/check_code_values.cmake`) holds the values the code owns, as the
   section above says.
 

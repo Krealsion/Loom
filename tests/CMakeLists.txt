@@ -875,10 +875,10 @@ add_test(NAME population COMMAND ${CMAKE_COMMAND}
 
 # ---- The documentation checks -----------------------------------------------------------
 # They read the source tree, not a build, so they register in every configuration: `doc_links`
-# resolves every repository-relative reference, `source_comments` and `doc_standard` hold the
-# comment and document standard (CONTRIBUTING.md#comments-and-documents), and `code_values` the
-# values the code owns. Pure CMake: a verifier may not depend on a tool that merely happens to be
-# installed. The list is text_checks.cmake's, which the documentation lane runs too.
+# resolves every repository-relative reference, `doc_names` the names a router gives with no link,
+# `source_comments` and `doc_standard` hold the comment and document standard, `code_values` the
+# values the code owns (CONTRIBUTING.md#the-checks). Pure CMake: a verifier may not depend on a
+# tool that happens to be installed. The list is text_checks.cmake's, the documentation lane's too.
 include(${CMAKE_CURRENT_SOURCE_DIR}/text_checks.cmake)
 foreach(zen_text_check IN LISTS ZEN_TEXT_CHECKS)
     add_test(NAME ${zen_text_check} COMMAND ${CMAKE_COMMAND}

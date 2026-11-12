@@ -1,0 +1,12 @@
+# One row per name the routers and the contributor's pages give that is no file or folder of this
+# tree, `name kind`: what tests/check_doc_names.cmake reads when a name does not resolve. A row
+# ending in `/` holds every name that opens with it. The kinds: written, a file the host writes or
+# a person authors where it runs; generated, a file a build writes into its own tree; installed,
+# a path of the installed package. A row no page needs is a red, so a name that comes to resolve
+# leaves. ASCII only.
+loom-authority.json     written
+loom-boot.json          written
+loom-tools.json         written
+run.json                written
+session.json            written
+build-*/                generated
