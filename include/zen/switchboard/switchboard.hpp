@@ -399,8 +399,8 @@ public:
     /// Enqueue a delivery to every alive Weave whose accept-set includes the
     /// payload's (name, version), in registration order. Returns the recipient
     /// count (0 is legal, not an error). Each delivery is independently gated.
-    /// A recipient that would put this sender past `kMaxPendingPerSender` is refused
-    /// `PendingPerSender` and is not counted.
+    /// When the sender's room under `kMaxPendingPerSender` is smaller than the accepting
+    /// recipients, nothing is queued and the tap names `PendingPerSender` once.
     std::size_t publish(Message msg) override;
 
     /// Whether the most recent publication on this bus refused a recipient for

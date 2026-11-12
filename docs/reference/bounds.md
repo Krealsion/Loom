@@ -42,7 +42,10 @@ more. What is already waiting stays, in order — dropping the oldest would
 discard a message somebody is owed — and the new send is what is refused.
 
 The count is that sender's own speech: a directed send, a role send, a
-publication's envelopes. An answer is not counted and is never refused here:
+publication's envelopes. A publication whose accepting recipients do not fit the
+sender's remaining room is refused whole: nothing is queued, and the tap names
+the bound once, so the same publication can be sent again. An answer is not
+counted and is never refused here:
 each one spends a right a delivery created, so answers cannot outgrow what was
 delivered. A dispatch-refusal notice, a joint notice and a scheduled admission
 are the bus's own acts. They are not counted, and this bound does not refuse

@@ -6834,6 +6834,34 @@ TEST_CASE("a loaded weave at its waiting bound is told that bound, not that it l
     CHECK(authorship == 0);
 }
 
+TEST_CASE("a loaded publication that does not fit the waiting room is refused whole") {
+    RoleStage s(ZEN_SO_ROLE_WORKER);
+    Registered sink = sbfx::register_probe(s.bus, {sbfx::ping_schema()});
+    role_speech::RoleCommand c;
+    c.mode = "bound-publish";
+    REQUIRE(s.bus.send_as(s.commander, s.worker, Message(to_value(c))).valid());
+    for (std::size_t i = 0; i < Switchboard::kMaxPendingPerSender - 1; ++i) {
+        REQUIRE(s.bus.send_as(s.worker, sink.id, Message(sbfx::ping(1))).valid());
+    }
+    int taps = 0;
+    s.bus.add_observer([&](const BusEvent& ev) {
+        if (ev.kind == EventKind::Refused && ev.sender == s.worker &&
+            ev.refusal.reason == RefusalReason::PendingPerSender) {
+            ++taps;
+        }
+    });
+    const std::size_t before = s.bus.pending();
+    s.bus.drain_until_idle();
+    const auto published = reports_named(*s.commander_log, "bound-publish");
+    REQUIRE(published.size() == 1);
+    CHECK(published[0].authored);
+    CHECK(published[0].recipients == 0);
+    CHECK(published[0].seen_role == "PendingPerSender");
+    CHECK(taps == 1);
+    // The fill and the command were delivered; the publication added nothing.
+    CHECK(s.bus.pending() < before);
+}
+
 TEST_CASE("a loaded weave's answer at its waiting bound is delivered") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());

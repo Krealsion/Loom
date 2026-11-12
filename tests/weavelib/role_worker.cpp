@@ -35,7 +35,15 @@ public:
         const WeaveId target{static_cast<std::uint64_t>(cmd.target)};
         role_speech::RoleReport report;
         report.what = cmd.mode;
-        if (cmd.mode == "bound-direct" || cmd.mode == "bound-to-role") {
+        if (cmd.mode == "bound-publish") {
+            const RolePublication p =
+                mail.as_role("worker.a").publish(role_speech::WorkerNews{"open"});
+            report.authored = p.authored;
+            report.recipients = static_cast<std::int64_t>(p.recipients);
+            report.seen_role = std::string(name_of(p.refusal));
+            (void)mail.answer(report);
+            return;
+        } else if (cmd.mode == "bound-direct" || cmd.mode == "bound-to-role") {
             // The report is an answer, so it still leaves while this weave is at its
             // waiting bound. seen_role carries the ticket's refusal name.
             const Ticket t = cmd.mode == "bound-direct"

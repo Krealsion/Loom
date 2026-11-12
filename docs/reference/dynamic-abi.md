@@ -10,10 +10,12 @@ The C seam a weave library and the host agree on. Current version: **v<!-- value
 
 **v12 names the per-sender waiting bound.** No slot changes. A send that bound refuses
 returns `ZEN_ERR_PENDING_PER_SENDER` on `send`, `send_to_role`, `publish`, `role_send`,
-`role_send_to_role` and `role_publish`. It is not `ZEN_ERR_ROLE_AUTHORSHIP_DENIED` and not
-`ZEN_ERR_REFUSED`. An answer is not this bound: `answer` and `answer_deferred` still return
-`ZEN_ERR_REFUSED` only when there was no answer to spend. A v11 image is refused at load and
-at reload, both versions named, before any callback into it.
+`role_send_to_role` and `role_publish`. A publication that does not fit the sender's
+remaining room is refused whole, so `publish` and `role_publish` return that status and
+queue nothing. It is not `ZEN_ERR_ROLE_AUTHORSHIP_DENIED` and not `ZEN_ERR_REFUSED`. An
+answer is not this bound: `answer` and `answer_deferred` still return `ZEN_ERR_REFUSED`
+only when there was no answer to spend. A v11 image is refused at load and at reload,
+both versions named, before any callback into it.
 
 **v11 names the role doors by role.** The slots a library calls to speak or claim as a role it
 holds are `role_send`, `role_send_to_role`, `role_publish`, `sense_role_claim` and

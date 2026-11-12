@@ -687,6 +687,51 @@ TEST_CASE("a deferred answer from a sender at its waiting bound is delivered") {
     CHECK(asker.weave->handled_values[0] == 9);
 }
 
+TEST_CASE("a publication that does not fit the sender's waiting room is refused whole") {
+    // Three accepters and two slots left: a partial fanout would deliver twice and
+    // leave the third refused, so the same publication cannot be tried again.
+    Switchboard bus;
+    Registered sender = reg(bus, {greet_schema()});
+    Registered sink = reg(bus, {greet_schema()});
+    reg(bus, {ping_schema()});
+    reg(bus, {ping_schema()});
+    reg(bus, {ping_schema()});
+    const std::size_t room = 2;
+    for (std::size_t i = 0; i < Switchboard::kMaxPendingPerSender - room; ++i) {
+        REQUIRE(bus.send_as(sender.id, sink.id, Message(greet("fill"))).valid());
+    }
+    int taps = 0;
+    WeaveId watched = sender.id;
+    bus.add_observer([&](const BusEvent& e) {
+        if (e.kind == EventKind::Refused && e.sender == watched &&
+            e.refusal.reason == RefusalReason::PendingPerSender) {
+            ++taps;
+        }
+    });
+    const std::size_t before = bus.pending();
+    const std::size_t n = bus.publish_as(sender.id, Message(ping(1)));
+    CHECK(n == 0);
+    CHECK(bus.pending() == before);
+    CHECK(taps == 1);
+    CHECK(bus.publication_met_pending_bound());
+
+    auto owned = std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{greet_schema()});
+    WeaveId speaker = bus.register_weave(std::move(owned), Grant{}.allow_any(), std::string("speaker"));
+    for (std::size_t i = 0; i < Switchboard::kMaxPendingPerSender - room; ++i) {
+        REQUIRE(bus.send_as(speaker, sink.id, Message(greet("fill"))).valid());
+    }
+    taps = 0;
+    watched = speaker;
+    const std::size_t role_before = bus.pending();
+    const RolePublication published =
+        bus.role_publish_as(speaker, "speaker", Message(ping(2)));
+    CHECK(published.authored);
+    CHECK(published.recipients == 0);
+    CHECK(published.refusal == RefusalReason::PendingPerSender);
+    CHECK(bus.pending() == role_before);
+    CHECK(taps == 1);
+}
+
 TEST_CASE("a preparation ask from a coordinator at its waiting bound names that bound and stays unopened") {
     ReadinessStage s;
     Registered quiet = reg(s.bus, {ping_schema()});

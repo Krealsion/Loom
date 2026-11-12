@@ -2114,6 +2114,27 @@ Switchboard::Fanout Switchboard::fanout(Message msg, bool gated, Provenance prov
     const std::uint32_t version = msg.payload.schema().version();
     const std::uint64_t sender_life = gated ? life_of(msg.sender) : 0;
 
+    // Count first. A publication that does not fit is refused whole: queueing the
+    // ones that fit would deliver twice if the sender tried again.
+    std::size_t accepting = 0;
+    for (auto& entry : weaves_) {
+        WeaveRecord& rec = entry.second;
+        if (!rec.alive || rec.sealed_by.valid()) {
+            continue;
+        }
+        if (accept_match(rec, name, version) != nullptr) {
+            ++accepting;
+        }
+    }
+    const auto waiting = pending_by_sender_.find(msg.sender.value);
+    const std::size_t held = waiting == pending_by_sender_.end() ? 0 : waiting->second;
+    const std::size_t room = held >= kMaxPendingPerSender ? 0 : kMaxPendingPerSender - held;
+    if (accepting > room) {
+        (void)refuse_pending_bound(WeaveId{}, msg.sender, msg);
+        publication_pending_bound_ = true;
+        return Fanout{0, true};
+    }
+
     Fanout out;
     for (auto& entry : weaves_) { // std::map: ascending id == registration order
         WeaveRecord& rec = entry.second;
@@ -2124,11 +2145,6 @@ Switchboard::Fanout Switchboard::fanout(Message msg, bool gated, Provenance prov
             continue; // a candidate is not in the world; the world's news is not its
         }
         if (accept_match(rec, name, version) == nullptr) {
-            continue;
-        }
-        if (sender_at_pending_bound(msg.sender)) {
-            (void)refuse_pending_bound(rec.id, msg.sender, msg);
-            out.pending_bound = true;
             continue;
         }
         const std::uint64_t seq = allocate_sequence();

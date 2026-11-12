@@ -103,8 +103,9 @@ struct Ticket {
 struct RolePublication {
     bool authored = false;
     std::size_t recipients = 0;
-    /// `PendingPerSender` when the bound stopped a recipient. `None` when the role was not
-    /// held, and when every accepter was queued or there were none.
+    /// `PendingPerSender` when the publication did not fit the sender's waiting room and
+    /// nothing was queued. `None` when the role was not held, and when every accepter was
+    /// queued or there were none.
     RefusalReason refusal = RefusalReason::None;
 
     explicit operator bool() const noexcept { return authored; }
@@ -137,8 +138,8 @@ public:
     virtual Ticket send(WeaveId target, Message msg) = 0;
 
     /// Enqueue a delivery to every accepter of the payload's shape; returns the
-    /// recipient count. A recipient that would put this sender past
-    /// `Switchboard::kMaxPendingPerSender` is refused `PendingPerSender` and is not counted.
+    /// recipient count. When the sender's room under `Switchboard::kMaxPendingPerSender`
+    /// is smaller than that count, nothing is queued and the tap names `PendingPerSender` once.
     virtual std::size_t publish(Message msg) = 0;
 
     /// Enqueue a directed delivery to whichever Weave holds `role`, resolved at delivery, so a
