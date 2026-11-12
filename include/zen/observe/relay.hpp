@@ -71,11 +71,11 @@ inline constexpr std::int64_t kMaxWindow = 4096;     ///< the most a subscriber 
 
 // ---- the descriptor package a Subscribed carries ------------------------------------------------
 
-/// `loom.observe.Shapes`: `zen.SchemaDesc` v1 for each subscribed shape (`shapes`) and the closure
+/// `loom.observe.Shapes`: `zen.SchemaDesc` for each subscribed shape (`shapes`) and the closure
 /// they nest (`referenced`, post-order, so one forward pass resolves it) -- self-description's own
 /// descriptor and closure rule (zen/weave/describe.hpp), under a name that says what these are.
 inline std::shared_ptr<const Schema> shapes_schema() {
-    static const auto s = SchemaBuilder("loom.observe.Shapes", 1)
+    static const auto s = SchemaBuilder("loom.observe.Shapes", 2)
                               .list("referenced", type_message(schema_desc_schema()),
                                     /*required=*/false)
                               .list("shapes", type_message(schema_desc_schema()))

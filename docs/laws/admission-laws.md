@@ -12,7 +12,15 @@ MEANS
   delivery time;
 - kernel-loaded weaves' bytes are re-admitted host-side before anyone sees them;
 - there is no fast path: the content-id shortcut is deliberately untaken so
-  "one gate, every delivery" stays literally true.
+  "one gate, every delivery" stays literally true;
+- the gate is whole: a union holds exactly one of its cases (`NoCase`), and a
+  value an open field (`Kind::Any`) holds is of a shape the registry holds, as one
+  definition with it, and conforms to it — the bus admits every delivery against
+  its own registry, and a gate given none refuses an open field (`UnknownSchema`);
+- a live value is bounded as a decoded one: the gate counts its cells as a
+  decode would and refuses one past `kMaxDecodedCells` (`TooLarge`), a shared part
+  counted at each place it stands, so nothing admitted live is larger than a
+  boundary would take back.
 
 DOES NOT MEAN
 - that authorization happens here — a grant check is a distinct step (GATE-03);
@@ -20,7 +28,8 @@ DOES NOT MEAN
   question again — see [ANS-01](answer-authority-laws.md#ans-01--answer-authority-is-the-delivery)).
 
 PROVEN BY — `src/gate.cpp` (`gate_invocations()` counter); suites `gate`,
-`switchboard` (delivery-gating cases), `kernel` (bytes re-admitted).
+`union` (the cases, the open field, the live budget), `switchboard`
+(delivery-gating cases), `kernel` (bytes re-admitted).
 
 ## GATE-02 — Untrusted until proven
 
@@ -31,6 +40,9 @@ LAW — Unvalidated bytes have no accessor for their data. `parse()` yields
 MEANS
 - there is no road from bytes to a readable `Value` that skips the gate;
 - a gate refusal drops the candidate entirely — no partial acceptance;
+- what was admitted stays what the gate saw: a nested value is made inside its
+  cell, never adopted from a pointer, so no one outside a value holds a way to
+  change it between one recipient's delivery and the next;
 - decoding untrusted bytes costs a **bounded** amount of host structure: one
   shared, host-owned allowance per top-level decode, spent before the structure
   exists, so a compact value cannot command unbounded host allocation
@@ -55,6 +67,10 @@ LAW — A grant check (`CapabilityDenied`) is a distinct step *around* the gate
 MEANS
 - an unauthorized sender's message reaches neither the gate nor role
   resolution — it cannot even learn whether a role is held;
+- a weave nests only a shape it may itself send: every shape an open field of
+  its payload holds, however deep, is asked of its effective authority to the
+  same destination, and one it may not send refuses the whole delivery
+  `CapabilityDenied`;
 - the two refusals are distinct observable reasons, sending a weaver to
   different fixes.
 
@@ -62,7 +78,8 @@ DOES NOT MEAN
 - that holding a grant makes a message conform, or vice versa.
 
 PROVEN BY — `src/switchboard/switchboard.cpp` `deliver_one` (order: sender-life
-→ seal → grant → resolution → gate); suites `capabilities`, `policy`.
+→ seal → grant, the payload's shape and every shape its open fields hold →
+resolution → gate); suites `capabilities`, `policy`, `union`.
 
 ## GATE-04 — Immutable published schemas
 

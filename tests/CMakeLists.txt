@@ -9,6 +9,7 @@
 # suite names out of exactly the sources compiled, so there is no second list to drift.
 set(ZEN_TEST_SOURCES_PORTABLE
     test_schema.cpp
+    test_union.cpp
     test_value.cpp
     test_gate.cpp
     test_registry.cpp

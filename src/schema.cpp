@@ -15,11 +15,17 @@ namespace {
 void validate_typeref(const TypeRef& t) {
     switch (t.kind) {
     case Kind::Message:
+    case Kind::Union:
         if (!t.message) {
-            throw std::invalid_argument("Message type requires a nested schema");
+            throw std::invalid_argument("a nested shape's type requires its schema");
         }
         if (t.element) {
-            throw std::invalid_argument("Message type must not carry a list element");
+            throw std::invalid_argument("a nested shape's type must not carry a list element");
+        }
+        if (t.message->is_union() != (t.kind == Kind::Union)) {
+            throw std::invalid_argument(t.kind == Kind::Union
+                                            ? "a Union type names a union shape"
+                                            : "a Message type names a record shape");
         }
         break;
     case Kind::List:
@@ -46,6 +52,7 @@ void hash_typeref(detail::Fnv1a& h, const TypeRef& t) {
     h.byte(static_cast<std::uint8_t>(t.kind));
     switch (t.kind) {
     case Kind::Message:
+    case Kind::Union:
         h.u64(t.message->content_id());
         break;
     case Kind::List:
@@ -56,15 +63,26 @@ void hash_typeref(detail::Fnv1a& h, const TypeRef& t) {
     }
 }
 
-ContentId compute_content_id(const std::string& name, std::uint32_t version,
+// A record's id folds what it folded before unions existed, so every record keeps its id. A
+// union folds its form first, and for each case whether it carries, then the type it carries.
+ContentId compute_content_id(Form form, const std::string& name, std::uint32_t version,
                              const std::vector<Field>& fields) {
     detail::Fnv1a h;
+    if (form == Form::Union) {
+        h.field("union");
+    }
     h.field(name);
     h.u64(version);
     h.u64(fields.size());
     for (const Field& f : fields) {
         h.field(f.name);
         h.byte(f.required ? 1U : 0U);
+        if (form == Form::Union) {
+            h.byte(f.carries ? 1U : 0U);
+            if (!f.carries) {
+                continue;
+            }
+        }
         hash_typeref(h, f.type);
     }
     return h.value();
@@ -73,7 +91,7 @@ ContentId compute_content_id(const std::string& name, std::uint32_t version,
 } // namespace
 
 TypeRef type_of(Kind k) {
-    if (k == Kind::Message || k == Kind::List) {
+    if (k == Kind::Message || k == Kind::Union || k == Kind::List) {
         throw std::invalid_argument("type_of is for primitive kinds; use type_message/type_list");
     }
     return TypeRef{k, nullptr, nullptr};
@@ -83,7 +101,18 @@ TypeRef type_message(std::shared_ptr<const Schema> schema) {
     if (!schema) {
         throw std::invalid_argument("type_message requires a non-null schema");
     }
-    return TypeRef{Kind::Message, std::move(schema), nullptr};
+    const Kind kind = schema->is_union() ? Kind::Union : Kind::Message;
+    return TypeRef{kind, std::move(schema), nullptr};
+}
+
+TypeRef type_any() { return TypeRef{Kind::Any, nullptr, nullptr}; }
+
+Field case_of(std::string name, TypeRef type) {
+    return Field{std::move(name), std::move(type), /*required=*/true, /*carries=*/true};
+}
+
+Field case_bare(std::string name) {
+    return Field{std::move(name), type_of(Kind::Bool), /*required=*/true, /*carries=*/false};
 }
 
 TypeRef type_list(TypeRef element) {
@@ -91,7 +120,14 @@ TypeRef type_list(TypeRef element) {
 }
 
 Schema::Schema(std::string name, std::uint32_t version, std::vector<Field> fields)
-    : name_(std::move(name)), version_(version), fields_(std::move(fields)), content_id_(0) {
+    : Schema(Form::Record, std::move(name), version, std::move(fields)) {}
+
+Schema::Schema(Form form, std::string name, std::uint32_t version, std::vector<Field> fields)
+    : name_(std::move(name)), version_(version), form_(form), fields_(std::move(fields)),
+      content_id_(0) {
+    if (form_ == Form::Union && fields_.empty()) {
+        throw std::invalid_argument("union '" + name_ + "' declares no case");
+    }
     std::unordered_set<std::string_view> seen;
     seen.reserve(fields_.size());
     for (const Field& f : fields_) {
@@ -101,9 +137,16 @@ Schema::Schema(std::string name, std::uint32_t version, std::vector<Field> field
         if (!seen.insert(f.name).second) {
             throw std::invalid_argument("duplicate field name '" + f.name + "'");
         }
+        if (form_ == Form::Record && !f.carries) {
+            throw std::invalid_argument("field '" + f.name +
+                                        "': only a union's case may carry nothing");
+        }
+        if (form_ == Form::Union && !f.required) {
+            throw std::invalid_argument("case '" + f.name + "': a union's case is never optional");
+        }
         validate_typeref(f.type);
     }
-    content_id_ = compute_content_id(name_, version_, fields_);
+    content_id_ = compute_content_id(form_, name_, version_, fields_);
 }
 
 Schema::Schema(GivenContentId, std::string name, std::uint32_t version, std::vector<Field> fields,
@@ -120,6 +163,7 @@ bool same_type(const TypeRef& a, const TypeRef& b) noexcept {
     }
     switch (a.kind) {
     case Kind::Message:
+    case Kind::Union:
         return same_identity(*a.message, *b.message);
     case Kind::List:
         return same_type(*a.element, *b.element);
@@ -131,6 +175,9 @@ bool same_type(const TypeRef& a, const TypeRef& b) noexcept {
 } // namespace
 
 bool same_structure(const Schema& a, const Schema& b) noexcept {
+    if (a.form() != b.form()) {
+        return false;
+    }
     const std::vector<Field>& fa = a.fields();
     const std::vector<Field>& fb = b.fields();
     if (fa.size() != fb.size()) {
@@ -138,7 +185,10 @@ bool same_structure(const Schema& a, const Schema& b) noexcept {
     }
     for (std::size_t i = 0; i < fa.size(); ++i) {
         if (fa[i].name != fb[i].name || fa[i].required != fb[i].required ||
-            !same_type(fa[i].type, fb[i].type)) {
+            fa[i].carries != fb[i].carries) {
+            return false;
+        }
+        if (fa[i].carries && !same_type(fa[i].type, fb[i].type)) {
             return false;
         }
     }
@@ -158,16 +208,16 @@ SchemaBuilder::SchemaBuilder(std::string name, std::uint32_t version)
     : name_(std::move(name)), version_(version) {}
 
 SchemaBuilder& SchemaBuilder::field(std::string name, Kind kind, bool required) {
-    return add(Field{std::move(name), type_of(kind), required});
+    return add(Field{std::move(name), type_of(kind), required, /*carries=*/true});
 }
 
 SchemaBuilder& SchemaBuilder::message(std::string name, std::shared_ptr<const Schema> schema,
                                       bool required) {
-    return add(Field{std::move(name), type_message(std::move(schema)), required});
+    return add(Field{std::move(name), type_message(std::move(schema)), required, /*carries=*/true});
 }
 
 SchemaBuilder& SchemaBuilder::list(std::string name, TypeRef element, bool required) {
-    return add(Field{std::move(name), type_list(std::move(element)), required});
+    return add(Field{std::move(name), type_list(std::move(element)), required, /*carries=*/true});
 }
 
 SchemaBuilder& SchemaBuilder::add(Field f) {
@@ -184,11 +234,19 @@ std::shared_ptr<const Schema> make_schema(std::string name, std::uint32_t versio
     return std::make_shared<const Schema>(std::move(name), version, std::move(fields));
 }
 
+std::shared_ptr<const Schema> make_union(std::string name, std::uint32_t version,
+                                         std::vector<Field> cases) {
+    return std::make_shared<const Schema>(Form::Union, std::move(name), version,
+                                          std::move(cases));
+}
+
 // ---- the component closure ---------------------------------------------------
 
 void collect_referenced(const Schema& root, std::vector<std::shared_ptr<const Schema>>& out) {
     for (const Field& f : root.fields()) {
-        collect_referenced(f.type, out);
+        if (f.carries) {
+            collect_referenced(f.type, out);
+        }
     }
 }
 
@@ -197,8 +255,8 @@ void collect_referenced(const TypeRef& type, std::vector<std::shared_ptr<const S
         collect_referenced(*type.element, out);
         return;
     }
-    if (type.kind != Kind::Message || !type.message) {
-        return;
+    if ((type.kind != Kind::Message && type.kind != Kind::Union) || !type.message) {
+        return; // an Any field names no shape: what it holds is the registry's
     }
     // Already carried means already expanded, so the identity scan comes before the descent:
     // a schema is appended only after its components (post-order), so finding it means its

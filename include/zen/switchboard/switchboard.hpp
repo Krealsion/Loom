@@ -916,6 +916,11 @@ public:
     /// such as a message emitted across the library boundary.
     std::shared_ptr<const Schema> resolve_schema(std::string_view name,
                                                  std::uint32_t version) const;
+    /// The registry `resolve_schema` reads, to read by: what a host hands the gate when it admits
+    /// bytes whose Any fields name shapes the bus holds (`admit(Unverified, door, open)`), so a
+    /// value crossing a seam is checked as the bus checks it. Reading it publishes and claims
+    /// nothing.
+    const Registry& registry() const noexcept { return registry_; }
     Weave* weave(WeaveId id);
     const Weave* weave(WeaveId id) const;
     bool alive(WeaveId id) const;

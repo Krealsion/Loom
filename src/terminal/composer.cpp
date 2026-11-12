@@ -21,6 +21,9 @@ std::string type_string(const loom::TypeRef& t) {
     case loom::Kind::Message:
         return std::string("Message(") + t.message->name() + " v" +
                std::to_string(t.message->version()) + ")";
+    case loom::Kind::Union:
+        return std::string("Union(") + t.message->name() + " v" +
+               std::to_string(t.message->version()) + ")";
     default:
         return loom::name_of(t.kind);
     }
@@ -137,11 +140,71 @@ ShapeDesc describe_schema(const loom::Schema& schema) {
     ShapeDesc d;
     d.name = schema.name();
     d.version = schema.version();
+    d.is_union = schema.is_union();
     for (const loom::Field& f : schema.fields()) {
-        d.fields.push_back({f.name, type_string(f.type), f.required});
+        d.fields.push_back({f.name, f.carries ? type_string(f.type) : "nothing", f.required});
     }
     return d;
 }
+
+namespace {
+
+// A union is composed from one argument: `case=value` for a case that carries a value, or the
+// name of a case that carries nothing.
+Composition compose_union(Composition result, const std::vector<NArg>& nargs) {
+    const loom::Schema& schema = *result.schema;
+    const auto error = [&](const std::string& m) {
+        result.status = Composition::Status::Error;
+        result.error = m;
+        result.cells.clear();
+        return result;
+    };
+    if (nargs.empty()) {
+        result.status = Composition::Status::NeedsInput;
+        for (const loom::Field& f : schema.fields()) {
+            result.open_fields.push_back(
+                {f.name, f.carries ? type_string(f.type) : "nothing", f.required});
+        }
+        return result;
+    }
+    if (nargs.size() > 1) {
+        return error("union " + schema.name() + " holds exactly one case; " +
+                     std::to_string(nargs.size()) + " were given");
+    }
+    const NArg& a = nargs.front();
+    std::string case_name;
+    if (a.name) {
+        case_name = *a.name;
+    } else if (const auto* text = std::get_if<FieldValue>(&a.payload);
+               text != nullptr && std::holds_alternative<std::string>(*text)) {
+        case_name = std::get<std::string>(*text);
+    }
+    const loom::Field* f = case_name.empty() ? nullptr : schema.find(case_name);
+    if (f == nullptr) {
+        return error("union " + schema.name() + " has no case '" + case_name +
+                     "'; name one: case=value, or a case that carries nothing alone");
+    }
+    if (!f->carries) {
+        if (a.name) {
+            return error("case '" + f->name + "' carries nothing: name it alone");
+        }
+        result.cells.insert_or_assign(f->name, loom::Cell::boolean(true));
+    } else {
+        if (!a.name) {
+            return error("case '" + f->name + "' carries a value: write " + f->name + "=<value>");
+        }
+        std::optional<loom::Cell> cell = place(*f, a);
+        if (!cell) {
+            return error("case '" + f->name + "' (" + type_string(f->type) +
+                         ") cannot take this value");
+        }
+        result.cells.insert_or_assign(f->name, std::move(*cell));
+    }
+    result.status = Composition::Status::Ready;
+    return result;
+}
+
+} // namespace
 
 Composition compose_message(const ComposeSource& source, std::string_view name,
                             std::uint32_t version, const std::vector<Arg>& args) {
@@ -179,6 +242,9 @@ Composition compose_message(const ComposeSource& source, std::string_view name,
             const FieldValue& lit = std::get<FieldValue>(a.value);
             nargs.push_back(NArg{a.name, literal_kind(lit), lit});
         }
+    }
+    if (schema->is_union()) {
+        return compose_union(std::move(result), nargs);
     }
 
     std::map<std::string, loom::Cell> assigned;

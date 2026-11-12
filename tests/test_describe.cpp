@@ -261,7 +261,7 @@ TEST_CASE("the request is fieldless and the answer's grammar is versioned") {
 
     const auto answer = accepted_shapes_schema();
     CHECK(answer->name() == "zen.AcceptedShapes");
-    CHECK(answer->version() == 1u);
+    CHECK(answer->version() == 2u);
     REQUIRE(answer->fields().size() == 2);
     CHECK(answer->fields()[0].name == "referenced");
     CHECK(answer->fields()[0].required == false);
@@ -747,7 +747,7 @@ TEST_CASE("allow_describe_answers adds exactly one rule, for the answer shape on
     REQUIRE(rules.size() == 1);
     CHECK(rules[0].any_shape == false);
     CHECK(rules[0].shape_name == kAcceptedShapesShapeName);
-    CHECK(rules[0].shape_version == 1u);
+    CHECK(rules[0].shape_version == accepted_shapes_schema()->version());
     CHECK(rules[0].any_target == true); // to whoever asked -- the asker is not known in advance
     CHECK(rules[0].target_role.empty());
 

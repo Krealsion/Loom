@@ -242,7 +242,7 @@ std::optional<loom::Cell> TerminalSession::resolve_ref(const Ref& ref, std::stri
                     ") has no field '" + ref.field + "'");
     }
     const loom::Kind k = c->kind();
-    if (k == loom::Kind::Message || k == loom::Kind::List) {
+    if (k == loom::Kind::Message || k == loom::Kind::Union || k == loom::Kind::List) {
         return fail("reference to non-scalar field '" + ref.field + "' is not supported");
     }
     return *c; // copy the scalar Cell out of the immutable received Value

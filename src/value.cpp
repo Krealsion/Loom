@@ -19,10 +19,6 @@ Cell Cell::message(Value v) {
                         std::make_shared<const Value>(std::move(v))});
 }
 
-Cell Cell::message(std::shared_ptr<const Value> v) {
-    return Cell(Storage{std::in_place_type<std::shared_ptr<const Value>>, std::move(v)});
-}
-
 Cell Cell::list(Array v) { return Cell(Storage{std::in_place_type<Array>, std::move(v)}); }
 
 Kind Cell::kind() const noexcept {
@@ -37,8 +33,10 @@ Kind Cell::kind() const noexcept {
         return Kind::Bool;
     case 4:
         return Kind::Bytes;
-    case 5:
-        return Kind::Message;
+    case 5: {
+        const auto& nested = std::get<std::shared_ptr<const Value>>(data_);
+        return nested && nested->schema().is_union() ? Kind::Union : Kind::Message;
+    }
     default:
         return Kind::List;
     }
@@ -58,34 +56,79 @@ Value::Value(std::shared_ptr<const Schema> schema) : schema_(std::move(schema)) 
     if (!schema_) {
         throw std::invalid_argument("Value requires a non-null schema");
     }
-    slots_.resize(schema_->fields().size());
+    slots_.resize(schema_->is_union() ? 1 : schema_->fields().size());
 }
 
-Value& Value::set(std::string_view field, Cell value) {
+std::size_t Value::index_of(std::string_view field) const {
     const auto& fields = schema_->fields();
     for (std::size_t i = 0; i < fields.size(); ++i) {
         if (fields[i].name == field) {
-            slots_[i] = std::move(value);
-            return *this;
+            return i;
         }
     }
-    throw std::out_of_range("field '" + std::string(field) + "' is not declared by schema '" +
+    throw std::out_of_range(std::string(schema_->is_union() ? "case '" : "field '") +
+                            std::string(field) + "' is not declared by schema '" +
                             schema_->name() + "'");
+}
+
+Value& Value::set(std::string_view field, Cell value) {
+    const std::size_t i = index_of(field);
+    if (!schema_->is_union()) {
+        slots_[i] = std::move(value);
+        return *this;
+    }
+    if (!schema_->fields()[i].carries) {
+        throw std::invalid_argument("case '" + std::string(field) + "' of union '" +
+                                    schema_->name() + "' carries nothing; choose it");
+    }
+    case_ = i;
+    slots_[0] = std::move(value);
+    return *this;
+}
+
+Value& Value::choose(std::string_view case_name) {
+    if (!schema_->is_union()) {
+        throw std::out_of_range("'" + schema_->name() + "' is a record, which has no case to choose");
+    }
+    const std::size_t i = index_of(case_name);
+    if (schema_->fields()[i].carries) {
+        throw std::invalid_argument("case '" + std::string(case_name) + "' of union '" +
+                                    schema_->name() + "' carries a value; set it");
+    }
+    case_ = i;
+    slots_[0].reset();
+    return *this;
 }
 
 const Cell* Value::get(std::string_view field) const noexcept {
     const auto& fields = schema_->fields();
     for (std::size_t i = 0; i < fields.size(); ++i) {
         if (fields[i].name == field) {
-            return slots_[i] ? &*slots_[i] : nullptr;
+            return at(i);
         }
     }
     return nullptr;
 }
 
-bool Value::has(std::string_view field) const noexcept { return get(field) != nullptr; }
+bool Value::has(std::string_view field) const noexcept {
+    if (!schema_->is_union()) {
+        return get(field) != nullptr;
+    }
+    const auto& fields = schema_->fields();
+    return case_ != kNoCase && fields[case_].name == field;
+}
+
+std::optional<std::size_t> Value::chosen() const noexcept {
+    if (!schema_->is_union() || case_ == kNoCase) {
+        return std::nullopt;
+    }
+    return case_;
+}
 
 const Cell* Value::at(std::size_t i) const noexcept {
+    if (schema_->is_union()) {
+        return i == case_ && slots_[0] ? &*slots_[0] : nullptr;
+    }
     if (i >= slots_.size()) {
         return nullptr;
     }
@@ -96,9 +139,19 @@ Value construct_blind(std::shared_ptr<const Schema> schema, const CellSource& so
     Value v(schema);
     for (const Field& f : schema->fields()) {
         std::optional<Cell> cell = source(f);
-        if (cell) {
-            v.set(f.name, std::move(*cell));
+        if (!cell) {
+            continue;
         }
+        if (!schema->is_union()) {
+            v.set(f.name, std::move(*cell));
+            continue;
+        }
+        if (f.carries) {
+            v.set(f.name, std::move(*cell));
+        } else {
+            v.choose(f.name);
+        }
+        break; // a union holds the first case answered
     }
     return v;
 }

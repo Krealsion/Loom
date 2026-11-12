@@ -67,11 +67,13 @@ std::string deep_list_descriptor_bytes(int n) {
     Value fd(field_desc_schema());
     fd.set("name", Cell::text("x"));
     fd.set("required", Cell::boolean(true));
+    fd.set("carries", Cell::boolean(true));
     fd.set("type", Cell::list(std::move(tokens)));
 
     Value desc(schema_desc_schema());
     desc.set("name", Cell::text("Evil"));
     desc.set("version", Cell::integer(1));
+    desc.set("union", Cell::boolean(false));
     desc.set("fields", Cell::list({Cell::message(std::move(fd))}));
     return serialize(desc);
 }
@@ -259,10 +261,10 @@ TEST_CASE("decode_schema refuses a pathologically deep type-token stream instead
 
     // THE DECODE-MATERIALIZATION BUDGET IS A SECOND BOUND IN FRONT OF THIS ONE, and the two must
     // meet with no gap (docs/reference/bounds.md#the-decode-materialization-bound). n nested List
-    // tokens materialise 3 (SchemaDesc slots) + 1 (fields element) + 3 (Field slots) + (n+1)
-    // (type-token elements) + 3(n+1) (each TypeToken's slots) = 11 + 4n decoded cells, so the gate
-    // admits a stream only while 11 + 4n fits the budget; above that it never becomes a Value.
-    const int deepest_admissible = static_cast<int>((loom::kMaxDecodedCells - 11) / 4);
+    // tokens materialise 4 (SchemaDesc slots) + 1 (fields element) + 4 (Field slots) + (n+1)
+    // (type-token elements) + 3(n+1) (each TypeToken's slots) = 13 + 4n decoded cells, so the gate
+    // admits a stream only while 13 + 4n fits the budget; above that it never becomes a Value.
+    const int deepest_admissible = static_cast<int>((loom::kMaxDecodedCells - 13) / 4);
 
     SUBCASE("the deepest descriptor the budget still admits is still refused by kMaxTypeDepth") {
         // The deep descriptor at the largest size the budget leaves reachable: the gate admits

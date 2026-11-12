@@ -407,7 +407,7 @@ static ZenStatus zen_host_send(void* ctx, std::uint64_t target, std::uint64_t re
             // The one target the seam CAN honestly name: the library said where.
             return seam_reject(h, u, loom::WeaveId{target}, seam_unresolved());
         }
-        loom::Admission a = loom::admit(u, door); // the DLL-seam gate, host-side
+        loom::Admission a = loom::admit(u, door, h->sb->registry()); // the DLL-seam gate, host-side
         if (!a.ok()) {
             return seam_reject(h, u, loom::WeaveId{target}, seam_gate_refused(a));
         }
@@ -434,7 +434,7 @@ static ZenStatus zen_host_publish(void* ctx, std::uint64_t reply_to, std::uint64
             // listening. See kUnheardPublication.
             return kUnheardPublication;
         }
-        loom::Admission a = loom::admit(u, door);
+        loom::Admission a = loom::admit(u, door, h->sb->registry());
         if (!a.ok()) {
             return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
         }
@@ -461,7 +461,7 @@ static ZenStatus zen_host_send_to_role(void* ctx, const char* role, std::uint64_
             // because the library named it, and it is the whole address a reader has.
             return seam_reject(h, u, loom::WeaveId{}, seam_unresolved(), role);
         }
-        loom::Admission a = loom::admit(u, door);
+        loom::Admission a = loom::admit(u, door, h->sb->registry());
         if (!a.ok()) {
             return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a), role);
         }
@@ -497,7 +497,7 @@ static ZenStatus zen_host_answer_deferred(void* ctx, uint64_t token, const std::
             // The conversation partner is bus-private; the seam never looked it up.
             return seam_reject(h, u, loom::WeaveId{}, seam_unresolved());
         }
-        loom::Admission a = loom::admit(u, door); // the DLL-seam gate, host-side as always
+        loom::Admission a = loom::admit(u, door, h->sb->registry()); // the DLL-seam gate, host-side as always
         if (!a.ok()) {
             return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
         }
@@ -517,7 +517,7 @@ static ZenStatus zen_host_answer(void* ctx, const std::uint8_t* payload, std::si
         if (!door) {
             return seam_reject(h, u, loom::WeaveId{}, seam_unresolved());
         }
-        loom::Admission a = loom::admit(u, door); // the DLL-seam gate, host-side as always
+        loom::Admission a = loom::admit(u, door, h->sb->registry()); // the DLL-seam gate, host-side as always
         if (!a.ok()) {
             return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
         }
@@ -555,7 +555,7 @@ static ZenStatus zen_host_role_send(void* ctx, const char* as_role, std::uint64_
         if (!door) {
             return seam_reject(h, u, loom::WeaveId{target}, seam_unresolved());
         }
-        loom::Admission a = loom::admit(u, door); // the DLL-seam gate, host-side as always
+        loom::Admission a = loom::admit(u, door, h->sb->registry()); // the DLL-seam gate, host-side as always
         if (!a.ok()) {
             return seam_reject(h, u, loom::WeaveId{target}, seam_gate_refused(a));
         }
@@ -582,7 +582,7 @@ static ZenStatus zen_host_role_send_to_role(void* ctx, const char* as_role, cons
         if (!door) {
             return seam_reject(h, u, loom::WeaveId{}, seam_unresolved(), to_role);
         }
-        loom::Admission a = loom::admit(u, door);
+        loom::Admission a = loom::admit(u, door, h->sb->registry());
         if (!a.ok()) {
             return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a), to_role);
         }
@@ -609,7 +609,7 @@ static ZenStatus zen_host_role_publish(void* ctx, const char* as_role, std::uint
         if (!door) {
             return kUnheardPublication; // a role publication is a publication
         }
-        loom::Admission a = loom::admit(u, door);
+        loom::Admission a = loom::admit(u, door, h->sb->registry());
         if (!a.ok()) {
             return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
         }
@@ -690,7 +690,7 @@ static ZenStatus zen_host_sense_claim(void* ctx, const std::uint8_t* payload, st
             // any other, and is observable for the same reason (MSG-08).
             return seam_reject(h, u, loom::WeaveId{}, seam_unresolved());
         }
-        loom::Admission a = loom::admit(u, door);
+        loom::Admission a = loom::admit(u, door, h->sb->registry());
         if (!a.ok()) {
             return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
         }
@@ -713,7 +713,7 @@ static ZenStatus zen_host_sense_role_claim(void* ctx, const char* as_role,
         if (!door) {
             return seam_reject(h, u, loom::WeaveId{}, seam_unresolved());
         }
-        loom::Admission a = loom::admit(u, door);
+        loom::Admission a = loom::admit(u, door, h->sb->registry());
         if (!a.ok()) {
             return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
         }
@@ -739,7 +739,7 @@ static ZenStatus zen_host_sense_offer(void* ctx, std::uint64_t op, const std::ui
         if (!door) {
             return seam_reject(h, u, loom::WeaveId{}, seam_unresolved());
         }
-        loom::Admission a = loom::admit(u, door);
+        loom::Admission a = loom::admit(u, door, h->sb->registry());
         if (!a.ok()) {
             return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
         }
@@ -1002,7 +1002,7 @@ private:
     loom::Value admit_bytes(const std::string& bytes, const std::shared_ptr<const Schema>& door,
                            const char* what) const {
         loom::Unverified u = loom::parse(bytes);
-        loom::Admission a = loom::admit(u, door); // the DLL-seam gate, host-side
+        loom::Admission a = loom::admit(u, door, bus_->registry()); // the DLL-seam gate, host-side
         if (!a.ok()) {
             throw DllBoundaryError(std::string("library ") + what + " refused by the gate: " +
                                    a.first_error().message());

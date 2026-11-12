@@ -973,7 +973,7 @@ void IsolationHost::handle_child_frame(Link& link, const Incoming& frame) {
         if (!door) {
             return; // a schema the system does not know -> drop (cannot be gated)
         }
-        loom::Admission a = loom::admit(u, door);
+        loom::Admission a = loom::admit(u, door, bus_.registry());
         if (!a.ok()) {
             return; // gate-refused (malformed/hostile child output) -> drop
         }
@@ -1007,7 +1007,7 @@ void IsolationHost::handle_child_frame(Link& link, const Incoming& frame) {
         if (!door) {
             return; // a schema the system does not know -> drop (cannot be gated)
         }
-        loom::Admission a = loom::admit(u, door);
+        loom::Admission a = loom::admit(u, door, bus_.registry());
         if (!a.ok()) {
             return; // gate-refused (malformed/hostile child output) -> drop
         }

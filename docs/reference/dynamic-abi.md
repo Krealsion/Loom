@@ -17,6 +17,16 @@ the doors from `zen_host` by these names, so a box built before them imports nam
 not define. The version says it once for both: a v10 image is refused at load with both versions
 named, before any callback into it.
 
+**The manifest describes unions and open fields, and its version is not the ABI's.** A shape's
+description (`zen.SchemaDesc`) says whether it is a union and, for each case (`zen.Field`), whether
+it carries a value; a type token names a `Union` field's shape as it names a `Message` field's,
+and an `Any` field by its kind alone ([values](values-and-admission.md#unions-and-the-open-field)).
+So the descriptor's manifest is the next version of `zen.Manifest`, beside the same ABI version and
+the same tables. An image built against the previous manifest is refused by the gate in
+`reconstruct`, as a v8 image would be without its version below: after its static initializers and
+`create()` have run, with a sentence about a meta-schema (`SchemaMismatch`, pinned in suite
+`schema_codec`). The next break of the ABI's version refuses such an image in `fetch_abi` instead.
+
 **v10 carries the words of a making refused.** `ZenWeaveAbi::create` takes a `ZenByteSink`: a
 weave that makes no instance returns NULL having written why, and `ZEN_EXPORT_WEAVE` writes there
 what its constructor threw (`std::exception::what()`; an exception that is no `std::exception`

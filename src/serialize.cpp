@@ -74,6 +74,8 @@ std::string type_label(const TypeRef& t) {
     switch (t.kind) {
     case Kind::Message:
         return "Message(" + version_label(*t.message) + ")";
+    case Kind::Union:
+        return "Union(" + version_label(*t.message) + ")";
     case Kind::List:
         return "List<" + type_label(*t.element) + ">";
     default:
@@ -104,6 +106,9 @@ struct DecodeBudget {
     }
 };
 
+// The cells entering a value of `s` costs: a record, a slot per declared field; a union, one.
+std::uint64_t entry_cells(const Schema& s) { return s.is_union() ? 1 : s.fields().size(); }
+
 std::string budget_exhausted_detail() {
     return "decoded structure exceeds the materialization budget of " +
            std::to_string(kMaxDecodedCells) + " cells (shared by the whole value)";
@@ -125,6 +130,24 @@ void bin_encode_value(const Cell& c, const TypeRef& t, std::string& out);
 
 void bin_encode_body(const Value& v, std::string& out) {
     const auto& fields = v.schema().fields();
+    if (v.schema().is_union()) {
+        // A union's body is its case's index, then that case's value; a case that carries
+        // nothing has no value.
+        const std::optional<std::size_t> chosen = v.chosen();
+        if (!chosen) {
+            throw std::invalid_argument("serialize: union '" + v.schema().name() +
+                                        "' holds no case (validate before serializing)");
+        }
+        detail::put_uvarint(out, *chosen);
+        if (fields[*chosen].carries) {
+            const Cell* c = v.at(*chosen);
+            if (c == nullptr) {
+                throw std::invalid_argument("serialize: a union's case carries no value");
+            }
+            bin_encode_value(*c, fields[*chosen].type, out);
+        }
+        return;
+    }
     const std::size_t n = fields.size();
     const std::size_t mask_bytes = (n + 7) / 8;
     const std::size_t mask_pos = out.size();
@@ -170,14 +193,32 @@ void bin_encode_value(const Cell& c, const TypeRef& t, std::string& out) {
         out.append(reinterpret_cast<const char*>(b.data()), b.size());
         break;
     }
-    case Kind::Message: {
-        bin_require_kind(c, Kind::Message);
+    case Kind::Message:
+    case Kind::Union: {
+        bin_require_kind(c, t.kind);
         const std::shared_ptr<const Value>& nested = c.as_message();
         if (!nested) {
             throw std::invalid_argument(
                 "serialize: a present Message field is null (validate before serializing)");
         }
         bin_encode_body(*nested, out); // inline, no per-nested header
+        break;
+    }
+    case Kind::Any: {
+        // The value names its own shape: the name, the version and the content id, then its body.
+        if (c.kind() != Kind::Message && c.kind() != Kind::Union) {
+            throw std::invalid_argument(std::string("serialize: an Any field holds ") +
+                                        name_of(c.kind()) + ", not a value of a shape");
+        }
+        const Schema& s = c.as_message()->schema();
+        if (s.name().size() > 0xFFFF) {
+            throw std::invalid_argument("serialize: schema name exceeds 65535 bytes");
+        }
+        detail::put_uvarint(out, s.name().size());
+        out.append(s.name());
+        detail::put_u32le(out, s.version());
+        detail::put_u64le(out, s.content_id());
+        bin_encode_body(*c.as_message(), out);
         break;
     }
     case Kind::List: {
@@ -203,10 +244,12 @@ void bin_encode_value(const Cell& c, const TypeRef& t, std::string& out) {
 struct BinaryDecoder {
     detail::BinReader& r;
     DecodeBudget& budget; ///< shared by the whole top-level decode
+    const Registry* open; ///< resolves an Any field's shape; null: no registry was given
     std::vector<Error> errs;
     bool fatal = false;
 
-    BinaryDecoder(detail::BinReader& reader, DecodeBudget& b) : r(reader), budget(b) {}
+    BinaryDecoder(detail::BinReader& reader, DecodeBudget& b, const Registry* o)
+        : r(reader), budget(b), open(o) {}
 
     void fail(ErrorKind kind, std::string path, std::string expected, std::string detail) {
         errs.push_back(Error{kind, std::move(path), std::move(expected), "binary", std::move(detail)});
@@ -234,6 +277,10 @@ struct BinaryDecoder {
         }
         const auto& fields = door.fields();
         const std::size_t n = fields.size();
+        if (door.is_union()) {
+            union_body(door, out, base, depth);
+            return;
+        }
         const std::size_t mask_bytes = (n + 7) / 8;
 
         std::string_view mask;
@@ -265,6 +312,78 @@ struct BinaryDecoder {
                 out.set(fields[i].name, std::move(c));
             }
         }
+    }
+
+    void union_body(const Schema& door, Value& out, const std::string& base, int depth) {
+        const auto& cases = door.fields();
+        std::uint64_t index = 0;
+        if (!r.uvarint(index)) {
+            fail(ErrorKind::MalformedField, base, version_label(door),
+                 "truncated or non-minimal case index");
+            return;
+        }
+        if (index >= cases.size()) {
+            fail(ErrorKind::MalformedField, base, version_label(door),
+                 "case index " + std::to_string(index) + " is past the last of " +
+                     std::to_string(cases.size()) + " cases");
+            return;
+        }
+        const Field& f = cases[static_cast<std::size_t>(index)];
+        if (!f.carries) {
+            out.choose(f.name);
+            return;
+        }
+        const std::string path = base.empty() ? f.name : base + "." + f.name;
+        Cell c = Cell::boolean(false);
+        if (value(f.type, c, path, depth)) {
+            out.set(f.name, std::move(c));
+        }
+    }
+
+    // An Any field: the shape's name, version and content id, then its body, decoded under the
+    // registry's definition of that name and version.
+    bool open_value(Cell& out, const std::string& path, int depth) {
+        std::uint64_t name_len = 0;
+        if (!r.uvarint(name_len) || name_len > 0xFFFF || name_len > r.remaining()) {
+            fail(ErrorKind::MalformedField, path, "Any", "truncated or oversized shape name");
+            return false;
+        }
+        std::string_view name;
+        r.take(static_cast<std::size_t>(name_len), name);
+        std::uint32_t version = 0;
+        std::uint64_t content_id = 0;
+        if (!detail::valid_utf8(name) || !r.u32le(version) || !r.u64le(content_id)) {
+            fail(ErrorKind::MalformedField, path, "Any", "malformed shape identity");
+            return false;
+        }
+        const std::string label = std::string(name) + " v" + std::to_string(version);
+        if (open == nullptr) {
+            fail(ErrorKind::UnknownSchema, path, "Any",
+                 label + ": an open field is admitted against a registry, and none was given");
+            return false;
+        }
+        std::shared_ptr<const Schema> shape = open->lookup(std::string(name), version);
+        if (!shape) {
+            fail(ErrorKind::UnknownSchema, path, "a registered shape",
+                 label + ": no such schema is registered");
+            return false;
+        }
+        if (shape->content_id() != content_id) {
+            fail(ErrorKind::SchemaMismatch, path, format_content_id(shape->content_id()),
+                 label + " was written against another shape of this name and version (" +
+                     format_content_id(content_id) + ")");
+            return false;
+        }
+        if (!afford(entry_cells(*shape), path, "Any")) {
+            return false;
+        }
+        Value nested(shape);
+        body(*shape, nested, path, depth + 1);
+        if (fatal) {
+            return false;
+        }
+        out = Cell::message(std::move(nested));
+        return true;
     }
 
     bool value(const TypeRef& t, Cell& out, const std::string& path, int depth) {
@@ -343,10 +462,11 @@ struct BinaryDecoder {
             out = Cell::bytes(Bytes(begin, begin + sv.size()));
             return true;
         }
-        case Kind::Message: {
-            // A Value allocates one slot per DECLARED field, present or not, so
-            // the slot vector is charged before it exists.
-            if (!afford(t.message->fields().size(), path, type_label(t))) {
+        case Kind::Message:
+        case Kind::Union: {
+            // A record's Value allocates one slot per DECLARED field, present or not, so the
+            // slot vector is charged before it exists; a union's holds one.
+            if (!afford(entry_cells(*t.message), path, type_label(t))) {
                 return false;
             }
             Value nested(t.message);
@@ -357,6 +477,8 @@ struct BinaryDecoder {
             out = Cell::message(std::move(nested));
             return true;
         }
+        case Kind::Any:
+            return open_value(out, path, depth);
         case Kind::List: {
             std::uint64_t count = 0;
             if (!r.uvarint(count)) {
@@ -491,12 +613,32 @@ void json_encode_float(double v, std::string& out) {
     out.append(buf.data(), res.ptr);
 }
 
-void json_encode_cell(const Cell& c, std::string& out);
+// `t` is the type the cell's field declares, or null where the cell does not hold it: an Any
+// field's value is written with the identity of its shape, and every other cell by its kind.
+void json_encode_cell(const Cell& c, const TypeRef* t, std::string& out);
 
 void json_encode_fields(const Value& v, std::string& out) {
+    const auto& fields = v.schema().fields();
+    if (v.schema().is_union()) {
+        // A union is an object with one member, its case's name and value; a case that carries
+        // nothing is its name alone. One holding no case is written as an empty object, which
+        // the decoder refuses as NoCase.
+        const std::optional<std::size_t> chosen = v.chosen();
+        if (chosen && !fields[*chosen].carries) {
+            detail::json_quote(fields[*chosen].name, out);
+            return;
+        }
+        out.push_back('{');
+        if (chosen && v.at(*chosen) != nullptr) {
+            detail::json_quote(fields[*chosen].name, out);
+            out.push_back(':');
+            json_encode_cell(*v.at(*chosen), &fields[*chosen].type, out);
+        }
+        out.push_back('}');
+        return;
+    }
     out.push_back('{');
     bool first = true;
-    const auto& fields = v.schema().fields();
     for (std::size_t i = 0; i < fields.size(); ++i) {
         const Cell* c = v.at(i);
         if (c == nullptr) {
@@ -508,12 +650,26 @@ void json_encode_fields(const Value& v, std::string& out) {
         first = false;
         detail::json_quote(fields[i].name, out);
         out.push_back(':');
-        json_encode_cell(*c, out);
+        json_encode_cell(*c, &fields[i].type, out);
     }
     out.push_back('}');
 }
 
-void json_encode_cell(const Cell& c, std::string& out) {
+// An Any field's value: the envelope's identity members, and the value's own fields.
+void json_encode_open(const Value& v, std::string& out) {
+    const Schema& s = v.schema();
+    out += "{\"schema\":";
+    detail::json_quote(s.name(), out);
+    out += ",\"version\":";
+    out += std::to_string(s.version());
+    out += ",\"content_id\":";
+    detail::json_quote(format_content_id(s.content_id()), out);
+    out += ",\"fields\":";
+    json_encode_fields(v, out);
+    out.push_back('}');
+}
+
+void json_encode_cell(const Cell& c, const TypeRef* t, std::string& out) {
     switch (c.kind()) {
     case Kind::Int:
         json_encode_int(c.as_int(), out);
@@ -530,16 +686,20 @@ void json_encode_cell(const Cell& c, std::string& out) {
     case Kind::Bytes:
         detail::json_quote(detail::base64_encode(c.as_bytes()), out);
         break;
-    case Kind::Message: {
+    case Kind::Message:
+    case Kind::Union: {
         const std::shared_ptr<const Value>& nested = c.as_message();
-        if (nested) {
-            json_encode_fields(*nested, out);
-        } else {
+        if (!nested) {
             out += "null";
+        } else if (t != nullptr && t->kind == Kind::Any) {
+            json_encode_open(*nested, out);
+        } else {
+            json_encode_fields(*nested, out);
         }
         break;
     }
     case Kind::List: {
+        const TypeRef* element = t != nullptr && t->kind == Kind::List ? t->element.get() : nullptr;
         out.push_back('[');
         bool first = true;
         for (const Cell& e : c.as_list()) {
@@ -547,11 +707,13 @@ void json_encode_cell(const Cell& c, std::string& out) {
                 out.push_back(',');
             }
             first = false;
-            json_encode_cell(e, out);
+            json_encode_cell(e, element, out);
         }
         out.push_back(']');
         break;
     }
+    case Kind::Any:
+        break; // a cell's own kind is never Any: an Any field holds a Message or a Union
     }
 }
 
@@ -562,6 +724,7 @@ struct JsonDecoder {
     std::vector<Error>& errs;
     bool collect_all;
     DecodeBudget& budget;  ///< the SAME budget domain as native
+    const Registry* open;  ///< resolves an Any field's shape; null: no registry was given
     bool exhausted = false; ///< budget exhaustion halts collection: no coherent candidate
 
     bool stop() const { return exhausted || (!collect_all && !errs.empty()); }
@@ -585,8 +748,143 @@ struct JsonDecoder {
 
     bool cell(const detail::JsonValue& node, const TypeRef& t, Cell& out, const std::string& path);
 
+    // A union: an object with exactly one member naming its case, or a bare case's name alone.
+    void union_case(const detail::JsonValue& node, const Schema& door, Value& out,
+                    const std::string& base) {
+        using JT = detail::JsonValue::Type;
+        auto at = [&](const std::string& name) { return base.empty() ? name : base + "." + name; };
+        if (node.type == JT::String) {
+            const Field* f = door.find(node.text);
+            if (f == nullptr) {
+                push(ErrorKind::UnknownField, at(node.text), case_names(door), node.text,
+                     "the union declares no such case");
+                return;
+            }
+            if (f->carries) {
+                push(ErrorKind::MissingField, at(f->name), type_label(f->type), "absent",
+                     "the case carries a value: write {\"" + f->name + "\": <value>}");
+                return;
+            }
+            out.choose(f->name);
+            return;
+        }
+        if (node.type != JT::Object) {
+            push(ErrorKind::TypeMismatch, base, case_names(door), json_type_name(node));
+            return;
+        }
+        if (node.members.empty()) {
+            push(ErrorKind::NoCase, base, case_names(door), "no case",
+                 "a union holds exactly one case");
+            return;
+        }
+        if (node.members.size() > 1) {
+            std::string named;
+            for (const auto& m : node.members) {
+                named += (named.empty() ? "" : " ") + m.first;
+            }
+            push(ErrorKind::SeveralCases, base, case_names(door), named,
+                 "a union holds exactly one case");
+            return;
+        }
+        const auto& member = node.members.front();
+        const Field* f = door.find(member.first);
+        if (f == nullptr) {
+            push(ErrorKind::UnknownField, at(member.first), case_names(door), member.first,
+                 "the union declares no such case");
+            return;
+        }
+        if (!f->carries) {
+            push(ErrorKind::TypeMismatch, at(f->name), "the case's name alone",
+                 json_type_name(member.second), "the case carries nothing");
+            return;
+        }
+        Cell c = Cell::boolean(false);
+        if (cell(member.second, f->type, c, at(f->name))) {
+            out.set(f->name, std::move(c));
+        }
+    }
+
+    static std::string case_names(const Schema& door) {
+        std::string s = "one of";
+        for (const Field& f : door.fields()) {
+            s += " " + f.name;
+        }
+        return s;
+    }
+
+    // An Any field: {"schema", "version", "content_id" (optional), "fields"}, decoded under the
+    // registry's definition of that name and version.
+    bool open_value(const detail::JsonValue& node, Cell& out, const std::string& path) {
+        using JT = detail::JsonValue::Type;
+        if (node.type != JT::Object) {
+            push(ErrorKind::TypeMismatch, path, "Any", json_type_name(node));
+            return false;
+        }
+        for (const auto& member : node.members) {
+            const std::string& k = member.first;
+            if (k != "schema" && k != "version" && k != "content_id" && k != "fields") {
+                push(ErrorKind::UnknownField, path + "." + k, "Any", k,
+                     "an open field holds schema, version, content_id and fields");
+                return false;
+            }
+        }
+        const detail::JsonValue* name = node.find("schema");
+        const detail::JsonValue* version = node.find("version");
+        const detail::JsonValue* fields_node = node.find("fields");
+        std::uint32_t ver = 0;
+        if (name == nullptr || name->type != JT::String || version == nullptr ||
+            version->type != JT::Number || !json_parse_u32(version->text, ver) ||
+            fields_node == nullptr) {
+            push(ErrorKind::MalformedField, path, "Any", json_type_name(node),
+                 "an open field names its shape by schema and version, and holds its fields");
+            return false;
+        }
+        const std::string label = name->text + " v" + std::to_string(ver);
+        if (open == nullptr) {
+            push(ErrorKind::UnknownSchema, path, "Any", label,
+                 "an open field is admitted against a registry, and none was given");
+            return false;
+        }
+        std::shared_ptr<const Schema> shape = open->lookup(name->text, ver);
+        if (!shape) {
+            push(ErrorKind::UnknownSchema, path, "a registered shape", label,
+                 "no such schema is registered");
+            return false;
+        }
+        if (const detail::JsonValue* cid = node.find("content_id")) {
+            ContentId id = 0;
+            if (cid->type != JT::String || !json_parse_content_id(cid->text, id)) {
+                push(ErrorKind::MalformedField, path + ".content_id", "a hex string",
+                     json_type_name(*cid));
+                return false;
+            }
+            if (id != shape->content_id()) {
+                push(ErrorKind::SchemaMismatch, path, format_content_id(shape->content_id()),
+                     format_content_id(id),
+                     label + " was written against another shape of this name and version");
+                return false;
+            }
+        }
+        if (!shape->is_union() && fields_node->type != JT::Object) {
+            push(ErrorKind::TypeMismatch, path + ".fields", version_label(*shape),
+                 json_type_name(*fields_node));
+            return false;
+        }
+        if (!afford(entry_cells(*shape), path, "Any")) {
+            return false;
+        }
+        Value nested(shape);
+        fields(*fields_node, *shape, nested, path);
+        out = Cell::message(std::move(nested));
+        return true;
+    }
+
     void fields(const detail::JsonValue& obj, const Schema& door, Value& out,
                 const std::string& base) {
+        if (door.is_union()) {
+            union_case(obj, door, out, base);
+            return;
+        }
         // Strict: every member must name a declared field.
         for (const auto& member : obj.members) {
             if (stop()) {
@@ -696,12 +994,14 @@ bool JsonDecoder::cell(const detail::JsonValue& node, const TypeRef& t, Cell& ou
         out = Cell::bytes(std::move(b));
         return true;
     }
-    case Kind::Message: {
-        if (node.type != JT::Object) {
+    case Kind::Message:
+    case Kind::Union: {
+        const bool fits = node.type == JT::Object || (t.kind == Kind::Union && node.type == JT::String);
+        if (!fits) {
             push(ErrorKind::TypeMismatch, path, type_label(t), json_type_name(node));
             return false;
         }
-        if (!afford(t.message->fields().size(), path, type_label(t))) {
+        if (!afford(entry_cells(*t.message), path, type_label(t))) {
             return false;
         }
         Value nested(t.message);
@@ -709,6 +1009,8 @@ bool JsonDecoder::cell(const detail::JsonValue& node, const TypeRef& t, Cell& ou
         out = Cell::message(std::move(nested));
         return true; // shape errors (if any) were recorded; the gate will also see them
     }
+    case Kind::Any:
+        return open_value(node, out, path);
     case Kind::List: {
         if (node.type != JT::Array) {
             push(ErrorKind::TypeMismatch, path, type_label(t), json_type_name(node));
@@ -743,12 +1045,12 @@ bool JsonDecoder::cell(const detail::JsonValue& node, const TypeRef& t, Cell& ou
 // desync) is authoritative on its own and skips the gate — there is no coherent
 // candidate to judge. Otherwise validate_into is the conformance authority.
 Admission finish(Value candidate, std::vector<Error> decode_errs, bool fatal, const Schema& door,
-                 bool collect_all) {
+                 bool collect_all, const Registry* open) {
     if (fatal) {
         return Admission::reject(std::move(decode_errs));
     }
 
-    std::vector<Error> verrs = detail::validate_into(candidate, door, collect_all);
+    std::vector<Error> verrs = detail::validate_into(candidate, door, collect_all, open);
 
     if (!collect_all) {
         if (!decode_errs.empty()) {
@@ -778,7 +1080,7 @@ Admission finish(Value candidate, std::vector<Error> decode_errs, bool fatal, co
 }
 
 Admission admit_against(const Unverified::Impl& impl, const std::shared_ptr<const Schema>& door,
-                        bool collect_all) {
+                        bool collect_all, const Registry* open) {
     // Question 1 (identity): the claim must name this exact door.
     if (impl.name != door->name() || impl.version != door->version()) {
         return Admission::reject(Error{ErrorKind::SchemaMismatch, "", version_label(*door),
@@ -797,7 +1099,7 @@ Admission admit_against(const Unverified::Impl& impl, const std::shared_ptr<cons
     // isolation manifests/snapshots/emissions, Bridge frames, persistence loads),
     // in both encodings. No transport carries its own copy of this law.
     DecodeBudget budget;
-    if (!budget.take(door->fields().size())) {
+    if (!budget.take(entry_cells(*door))) {
         return Admission::reject(Error{ErrorKind::MalformedBytes, "", version_label(*door), "",
                                        budget_exhausted_detail()});
     }
@@ -805,20 +1107,27 @@ Admission admit_against(const Unverified::Impl& impl, const std::shared_ptr<cons
 
     if (impl.format == Unverified::Impl::Format::Native) {
         detail::BinReader reader(impl.body);
-        BinaryDecoder dec(reader, budget);
+        BinaryDecoder dec(reader, budget, open);
         dec.body(*door, candidate, "", 0);
         if (!dec.fatal && !reader.at_end()) {
             dec.fail(ErrorKind::MalformedBytes, "", "", "trailing bytes after the value");
         }
-        return finish(std::move(candidate), std::move(dec.errs), dec.fatal, *door, collect_all);
+        return finish(std::move(candidate), std::move(dec.errs), dec.fatal, *door, collect_all,
+                      open);
     }
 
+    using JT = detail::JsonValue::Type;
+    if (!door->is_union() && impl.json_fields.type != JT::Object) {
+        return Admission::reject(Error{ErrorKind::MalformedBytes, "", version_label(*door), "",
+                                       "'fields' is not an object"});
+    }
     std::vector<Error> decode_errs;
-    JsonDecoder dec{decode_errs, collect_all, budget};
+    JsonDecoder dec{decode_errs, collect_all, budget, open};
     dec.fields(impl.json_fields, *door, candidate, "");
     // Exhaustion is fatal in both encodings: there is no coherent candidate to
     // judge, so no partial value reaches validate_into and none can be accepted.
-    return finish(std::move(candidate), std::move(decode_errs), dec.exhausted, *door, collect_all);
+    return finish(std::move(candidate), std::move(decode_errs), dec.exhausted, *door, collect_all,
+                  open);
 }
 
 Error envelope_error_of(const Unverified& u, const std::shared_ptr<const Unverified::Impl>& impl) {
@@ -927,7 +1236,18 @@ Admission admit(const Unverified& unverified, std::shared_ptr<const Schema> door
     if (!unverified.impl_ || !unverified.impl_->ok) {
         return Admission::reject(envelope_error_of(unverified, unverified.impl_));
     }
-    return admit_against(*unverified.impl_, door, report == Report::Full);
+    return admit_against(*unverified.impl_, door, report == Report::Full, nullptr);
+}
+
+Admission admit(const Unverified& unverified, std::shared_ptr<const Schema> door,
+                const Registry& open, Report report) {
+    if (!door) {
+        throw std::invalid_argument("admit(Unverified, door, open): door must be non-null");
+    }
+    if (!unverified.impl_ || !unverified.impl_->ok) {
+        return Admission::reject(envelope_error_of(unverified, unverified.impl_));
+    }
+    return admit_against(*unverified.impl_, door, report == Report::Full, &open);
 }
 
 Admission admit(const Unverified& unverified, const Registry& registry, Report report) {
@@ -941,7 +1261,7 @@ Admission admit(const Unverified& unverified, const Registry& registry, Report r
                                        impl.name + " v" + std::to_string(impl.version), "",
                                        "no such schema is registered"});
     }
-    return admit_against(impl, door, report == Report::Full);
+    return admit_against(impl, door, report == Report::Full, &registry);
 }
 
 // ---- Compatibility (JSON) -------------------------------------------------
@@ -1020,9 +1340,11 @@ Unverified parse(std::string_view bytes) noexcept {
     if (!json_parse_u32(version->text, ver)) {
         return malformed("'version' is not a 32-bit unsigned integer");
     }
+    // A record's fields are an object; a union's are an object or a bare case's name, which the
+    // door decides when the body is decoded.
     const detail::JsonValue* fields = root.find("fields");
-    if (fields == nullptr || fields->type != JT::Object) {
-        return malformed("missing or non-object 'fields'");
+    if (fields == nullptr || (fields->type != JT::Object && fields->type != JT::String)) {
+        return malformed("missing 'fields', or neither an object nor a case's name");
     }
 
     impl->name = schema->text;

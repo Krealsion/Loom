@@ -475,7 +475,7 @@ std::optional<loom::Cell> resolve_ref_from(const Console& console, const Ref& re
                     ref.field + "'");
     }
     const loom::Kind k = c->kind();
-    if (k == loom::Kind::Message || k == loom::Kind::List) {
+    if (k == loom::Kind::Message || k == loom::Kind::Union || k == loom::Kind::List) {
         return fail("reference to non-scalar field '" + ref.field + "' is not supported");
     }
     return *c; // copy the scalar Cell out of the immutable buffered Value

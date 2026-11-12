@@ -15,13 +15,19 @@
 
 #include <vector>
 
+namespace loom {
+class Registry;
+}
+
 namespace loom::detail {
 
 /// Validate that `claimant` claims `door`'s identity and is a well-formed
-/// instance of it. Returns the errors found (empty == conforms). When
+/// instance of it, each value an Any field holds checked against `open` (refused when null).
+/// Returns the errors found (empty == conforms). When
 /// `collect_all` is false, stops at the first error. Increments the process
 /// gate-invocation counter (see loom::gate_invocations()).
-std::vector<Error> validate_into(const Value& claimant, const Schema& door, bool collect_all);
+std::vector<Error> validate_into(const Value& claimant, const Schema& door, bool collect_all,
+                                 const Registry* open);
 
 } // namespace loom::detail
 

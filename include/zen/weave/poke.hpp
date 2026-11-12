@@ -193,7 +193,8 @@ inline bool poke_parse(std::string_view text, std::string& out) {
 inline std::string poke_type_name(const TypeRef& t) {
     switch (t.kind) {
     case Kind::Message:
-        return t.message ? t.message->name() : "Message";
+    case Kind::Union:
+        return t.message ? t.message->name() : name_of(t.kind);
     case Kind::List:
         return t.element ? "List<" + poke_type_name(*t.element) + ">" : "List";
     default:

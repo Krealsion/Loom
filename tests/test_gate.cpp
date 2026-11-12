@@ -122,15 +122,24 @@ TEST_CASE("a list element of the wrong type is refused at its index") {
     CHECK(a.first_error().path == "items[1]");
 }
 
-TEST_CASE("a null nested message is refused") {
+// A nested value is made, never adopted: no cell takes a pointer, so no cell is null and nobody
+// outside a cell holds a way to change what it holds.
+template <class P>
+concept AdoptsPointer = requires(P p) { Cell::message(p); };
+static_assert(!AdoptsPointer<std::shared_ptr<Value>>);
+static_assert(!AdoptsPointer<std::shared_ptr<const Value>>);
+
+TEST_CASE("a nested value is the cell's own: changing the original after placing it changes "
+          "nothing placed") {
+    Value leader = good_player(3);
     Value squad(fx::Squad());
     squad.set("name", Cell::text("Alpha"));
-    squad.set("leader", Cell::message(std::shared_ptr<Value>{}));
+    squad.set("leader", Cell::message(leader));
     squad.set("members", Cell::list({}));
+    leader.set("hp", Cell::text("not a number")); // the sender's own copy, changed after
     Admission a = admit(std::move(squad), *fx::Squad());
-    REQUIRE_FALSE(a.ok());
-    CHECK(a.first_error().kind == ErrorKind::NullMessage);
-    CHECK(a.first_error().path == "leader");
+    REQUIRE(a.ok());
+    CHECK(a.value().get("leader")->as_message()->get("hp")->as_int() == 3);
 }
 
 TEST_CASE("optional fields may be absent") {

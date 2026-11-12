@@ -663,7 +663,7 @@ void BridgeServer::on_frame(Conn& c, const BridgeIncoming& f) {
                              std::to_string(u.claimed_version()));
             break; // a schema the system does not know -> cannot be gated
         }
-        loom::Admission a = loom::admit(u, door);
+        loom::Admission a = loom::admit(u, door, bus_.registry());
         if (!a.ok()) {
             send_refused(c, correlation, "gate refused: " + a.first_error().message());
             break; // gate-refused (malformed/hostile output)

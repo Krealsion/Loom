@@ -380,7 +380,7 @@ Depth and size caps make hostile input total (see
 | `kMaxBinaryDepth` | <!-- value kMaxBinaryDepth -->64<!-- /value --> | one nesting chain | `MalformedBytes` |
 | `kMaxListCount` | <!-- value kMaxListCount pow2 -->2^20<!-- /value --> | **one** list | `MalformedField`, "list count exceeds cap" |
 | `kMaxFieldBytes` | <!-- value kMaxFieldBytes pow2 -->2^28<!-- /value --> | **one** `Text`/`Bytes` | `MalformedField` (also capped by remaining input) |
-| `kMaxDecodedCells` | **<!-- value kMaxDecodedCells grouped -->65,536<!-- /value -->** | **the whole decoded value** | `MalformedBytes`, "…exceeds the materialization budget…" |
+| `kMaxDecodedCells` | **<!-- value kMaxDecodedCells grouped -->65,536<!-- /value -->** | **the whole decoded value**, and the whole live value the gate admits | decoded: `MalformedBytes`, "…exceeds the materialization budget…"; live: `TooLarge` |
 | `kMaxTypeDepth` | <!-- value kMaxTypeDepth -->64<!-- /value --> | one schema descriptor's type | thrown refusal from `decode_schema` |
 
 ### The decode-materialization bound
@@ -396,11 +396,13 @@ compact value may legitimately represent many values; it may not command
 effectively unbounded host work.
 
 - **Unit** — one *decoded cell*: one `Cell`-sized slot the decoder
-  materialises. One per **declared** field of every message it enters (a `Value`
-  allocates exactly that many `std::optional<Cell>` slots, present or not) and
-  one per element of every list it decodes. So a message of *n* fields costs *n*
-  whether or not those fields arrive; a list of *k* elements costs *k*, plus
-  whatever each element then costs. `Text`/`Bytes` **payload** bytes are not
+  materialises. One per **declared** field of every record it enters (a `Value`
+  allocates exactly that many `std::optional<Cell>` slots, present or not), one
+  per union it enters (a union's value holds one slot, its case) and one per
+  element of every list it decodes. So a message of *n* fields costs *n*
+  whether or not those fields arrive; a union costs one and what its case costs;
+  a list of *k* elements costs *k*, plus whatever each element then costs. An
+  open field's value costs what a value of its shape costs. `Text`/`Bytes` **payload** bytes are not
   counted — a 1 MiB `Bytes` field is one cell (its size is `kMaxFieldBytes`'
   business).
 - **Scope** — one allowance per **top-level decode**, shared by every nested
@@ -423,9 +425,16 @@ effectively unbounded host work.
   data against the allowance names that constant rather than copying the number.
 
 65,536 cells is roughly 6 MiB of worst-case decoded structure — an order of
-magnitude above the largest value any current consumer sends. A value larger
-than the bound cannot cross a serialized boundary at all: an in-process `Value`
-may exceed it, but nothing will re-admit its bytes.
+magnitude above the largest value any current consumer sends.
+
+**The live gate keeps the same bound.** A value the bus delivers in process
+never crosses bytes, so the gate counts it as a decode would — the same unit,
+the same inclusive boundary — and refuses one past it with `TooLarge`: no live
+value is larger than any boundary would re-admit. A nested value is immutable
+and may be shared by many fields; it is counted at each place it stands, a
+visit, so a value whose parts are shared many times over is bounded by the walk
+it costs, and the walk stops at the bound. An in-process `Value` may still be
+*built* larger; it is refused at the gate, before anyone is handed it.
 
 ## A weave's making
 
