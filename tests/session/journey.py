@@ -1187,8 +1187,18 @@ def main():
                 os.path.join(abrupt, "loom-tools.json"))
     killed_host = start_host(args, abrupt, APPROVALS + ["start runs %s loom.runs" % args.runs])
     worker_pid = 0
-    if check("R0 a host of its own is serving, for a death nothing else has to survive",
-             until(lambda: Session.attach(abrupt).close() or True, 30, "the third host")):
+
+    def abrupt_serving():
+        # Serving with the run manager loaded, as A1 asks: the session door opens before the
+        # console's `start runs` line has loaded the manager, and a run asked for before it has
+        # names a shape this host does not yet resolve.
+        with Session.attach(abrupt) as probe:
+            probe.tools()
+            return True
+
+    if check("R0 a host of its own is serving, with the run manager loaded, for a death nothing "
+             "else has to survive",
+             until(abrupt_serving, 30, "the third host and its run manager")):
         with Session.attach(abrupt) as s:
             s.start("lifecycle/linger", "outlives", {"seconds": 300})
             s.wait("outlives", timeout=60)
