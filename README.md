@@ -183,7 +183,7 @@ it through the real kernel.
 
 Your own weaves live wherever you keep them; nothing here assumes a layout.
 [Zengine](https://github.com/Krealsion/Zengine) is the first consumer: the default set of weaves
-(Timer, Input, Surface and others), which builds against an installed Loom through
+(Timer, Input, Graphics and others), which builds against an installed Loom through
 `find_package`, exactly as a stranger would. Its packages and their laws are its own; this
 repository documents Loom alone.
 
