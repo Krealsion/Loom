@@ -1,0 +1,17 @@
+# The census: numbers the tree holds, each pinned by a row, read by tests/check_census.cmake, which
+# is red where the tree and a row differ in either direction. A row marked `falls` may only fall: a
+# change that raises one is red whatever else it says. A change that moves a number moves its row in
+# the same change, where review sees it.
+#
+#   lines <file> <count>      the lines of a file
+#   members <class> <count>   the member functions of a class defined in src/, one a definition
+#   doors <struct> <count>    the function-pointer slots of a struct in include/zen/kernel/abi.h
+#
+# The bus's file and its class are marked to fall: a subject the bus takes on is written as a unit
+# the bus consults, not as more of them. The host table grows by appending a door, so its row moves
+# with each one. `cmake -DZEN_CENSUS_WRITE=<file> -P tests/check_census.cmake` writes the rows as
+# the tree stands, to diff. ASCII only.
+
+lines src/switchboard/switchboard.cpp 4107 falls
+members Switchboard 154 falls
+doors ZenHostApi 15

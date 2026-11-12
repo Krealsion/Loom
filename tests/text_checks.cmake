@@ -4,11 +4,11 @@
 # The text checks and the documentation lane's reach (AGENTS.md, the documentation lane). Each
 # check is `tests/check_<name>.cmake`, run as `cmake -DZEN_REPO=<root> -P` by CTest and the lane
 # alike; tests/CMakeLists.txt registers them from this list, so the two cannot drift.
-set(ZEN_TEXT_CHECKS doc_links source_comments doc_standard code_values)
+set(ZEN_TEXT_CHECKS doc_links source_comments doc_standard code_values census)
 
 # Besides Markdown and the images under docs/, what a documentation-only change may touch: the
 # text checks themselves and the files only they read.
-set(ZEN_TEXT_ONLY_FILES tests/code_values.txt tests/private_ids.cmake)
+set(ZEN_TEXT_ONLY_FILES tests/code_values.txt tests/private_ids.cmake tests/census.txt)
 
 # And what it may not: the Markdown a compiled case reads, whose change only a build and a run
 # can judge. Suite `weave` compares the copied-weave guide's quoted refusal with the one a mount
