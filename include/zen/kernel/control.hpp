@@ -55,7 +55,9 @@ struct LoadLibrary {
     std::string name;
     std::string path;
     std::vector<std::string> roles; ///< in binding order; empty = bind no role
-    std::string creation;           ///< the value's JSON form; empty = made with none
+    /// The value's JSON form; empty = made with none. Defaulted, so a load built by position
+    /// with three fields still compiles.
+    std::string creation{};
     ZEN_SHAPE(LoadLibrary, 4, ZEN_FIELD(name), ZEN_FIELD(path), ZEN_FIELD(roles),
               ZEN_FIELD(creation));
 };

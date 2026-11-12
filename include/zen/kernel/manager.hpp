@@ -82,7 +82,9 @@ struct LoadWeave {
     std::string name;
     std::string path;
     std::vector<std::string> roles; ///< in binding order; empty = bind no role
-    std::string creation;           ///< the value's JSON form; empty = made with none
+    /// The value's JSON form; empty = made with none. Defaulted, so a load built by position
+    /// with three fields still compiles.
+    std::string creation{};
     using ZenSelf = LoadWeave;
     static constexpr const char* zen_name = "zen.LoadWeave";
     static constexpr std::uint32_t zen_version = 3;

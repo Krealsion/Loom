@@ -374,49 +374,6 @@ void* create_instance(const LoadedLibrary& lib, const ZenWeaveAbi* abi, MakingWo
     return instance;
 }
 
-void zen_creation_sink(void* ctx, const std::uint8_t* data, std::size_t len) {
-    try {
-        static_cast<std::string*>(ctx)->append(reinterpret_cast<const char*>(data), len);
-    } catch (...) {
-        static_cast<std::string*>(ctx)->clear(); // read as no declaration the gate passes
-    }
-}
-
-/// What an image declares it is made with, as its `describe_creation` wrote it: empty for one
-/// made with none. False with `error` when the door failed.
-bool declared_creation(const LoadedLibrary& lib, const ZenWeaveAbi* abi, std::string& bytes,
-                       std::string& error) {
-    if (lib.describe_creation(abi, ZenByteSink{&bytes, &zen_creation_sink}) != ZEN_OK) {
-        error = "library describe_creation() failed";
-        return false;
-    }
-    return true;
-}
-
-/// Make an instance as a load names it (docs/reference/dynamic-abi.md#the-creation-value): with
-/// no value when the image declares none and the load names none, and otherwise with the value
-/// the gate admitted against the declared shape, before any of the weave's code has run. Null,
-/// with `error`, when the two do not meet or the gate refuses; null with `error` empty when the
-/// weave refused its making, its words in `words`. `made` holds the admitted value.
-void* make_instance(const LoadedLibrary& lib, const ZenWeaveAbi* abi, const Creation& creation,
-                    MakingWords& words, std::optional<Value>& made, std::string& error) {
-    std::string declared;
-    if (!declared_creation(lib, abi, declared, error) ||
-        !judge_creation(declared, creation, made, error)) {
-        made.reset();
-        return nullptr;
-    }
-    if (!made) {
-        return create_instance(lib, abi, words);
-    }
-    void* instance = lib.create_with(abi, words.sink(), serialize(*made));
-    if (instance != nullptr) {
-        ++ledger().instances_created;
-    } else {
-        made.reset();
-    }
-    return instance;
-}
 
 } // namespace
 
@@ -466,6 +423,49 @@ static void zen_host_sink(void* ctx, const std::uint8_t* data, std::size_t len) 
     } catch (...) {
         out->lost = true;
     }
+}
+
+/// What an image declares it is made with, as its `describe_creation` wrote it: empty for one
+/// made with none. False with `error` when the door failed or the host could not hold what it
+/// wrote, which is never read as a declaration of none.
+bool declared_creation(const LoadedLibrary& lib, const ZenWeaveAbi* abi, std::string& bytes,
+                       std::string& error) {
+    HostBytes out;
+    if (lib.describe_creation(abi, ZenByteSink{&out, &zen_host_sink}) != ZEN_OK) {
+        error = "library describe_creation() failed";
+        return false;
+    }
+    if (out.lost) {
+        error = "the host could not hold the creation shape the library wrote";
+        return false;
+    }
+    bytes = std::move(out.bytes);
+    return true;
+}
+
+/// Make an instance as a load names it (docs/reference/dynamic-abi.md#the-creation-value): with
+/// no value when the image declares none and the load names none, and otherwise with the value
+/// the gate admitted against the declared shape, before any of the weave's code has run. Null,
+/// with `error`, when the two do not meet or the gate refuses; null with `error` empty when the
+/// weave refused its making, its words in `words`. `made` holds the admitted value.
+void* make_instance(const LoadedLibrary& lib, const ZenWeaveAbi* abi, const Creation& creation,
+                    MakingWords& words, std::optional<Value>& made, std::string& error) {
+    std::string declared;
+    if (!declared_creation(lib, abi, declared, error) ||
+        !judge_creation(declared, creation, made, error)) {
+        made.reset();
+        return nullptr;
+    }
+    if (!made) {
+        return create_instance(lib, abi, words);
+    }
+    void* instance = lib.create_with(abi, words.sink(), serialize(*made));
+    if (instance != nullptr) {
+        ++ledger().instances_created;
+    } else {
+        made.reset();
+    }
+    return instance;
 }
 
 /// A queued send is `ZEN_OK`. The waiting bound is its own status. Anything else invalid
