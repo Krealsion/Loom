@@ -103,30 +103,15 @@ public:
     std::size_t expectations() const noexcept { return expectations_.size(); }
     BridgeServer* server() noexcept { return server_.get(); }
 
-    /// THE I/O HALF, once per host turn: accept, read, dispatch, flush -- and sever the sessions
-    /// of any registrar that is no longer on the bus.
+    /// THE I/O HALF, once per host turn: sever the sessions of any registrar that is no longer
+    /// on the bus, then accept, read, dispatch, flush. Severed first, so nothing a severed session
+    /// sent is read, however long the host rested since its registrar left.
     void service() {
         if (!server_) {
             return;
         }
+        sever_orphans();
         server_->service();
-        if (expectations_.empty() || bus_ == nullptr) {
-            return;
-        }
-        std::set<std::uint64_t> live;
-        for (const WeaveId id : bus_->list_weaves()) {
-            live.insert(id.value);
-        }
-        for (std::size_t i = 0; i < expectations_.size();) {
-            if (live.count(expectations_[i].registrar.value) != 0) {
-                ++i;
-                continue;
-            }
-            if (expectations_[i].connection != 0 && server_->disconnect(expectations_[i].connection)) {
-                ++state_.severed;
-            }
-            expectations_.erase(expectations_.begin() + static_cast<std::ptrdiff_t>(i));
-        }
     }
 
     // ---- the role ----------------------------------------------------------------------------
@@ -439,6 +424,27 @@ private:
     const AuthorityStore* store_ = nullptr;
     const HostWarden* warden_ = nullptr;
     Switchboard* bus_ = nullptr;
+    /// Sever every run session whose registrar has left the bus, and forget its registration.
+    void sever_orphans() {
+        if (expectations_.empty() || bus_ == nullptr) {
+            return;
+        }
+        std::set<std::uint64_t> live;
+        for (const WeaveId id : bus_->list_weaves()) {
+            live.insert(id.value);
+        }
+        for (std::size_t i = 0; i < expectations_.size();) {
+            if (live.count(expectations_[i].registrar.value) != 0) {
+                ++i;
+                continue;
+            }
+            if (expectations_[i].connection != 0 && server_->disconnect(expectations_[i].connection)) {
+                ++state_.severed;
+            }
+            expectations_.erase(expectations_.begin() + static_cast<std::ptrdiff_t>(i));
+        }
+    }
+
     std::unique_ptr<BridgeServer> server_;
     std::uint16_t port_ = 0;
     std::function<std::vector<session::LinkRow>()> links_;

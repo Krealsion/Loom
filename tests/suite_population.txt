@@ -54,14 +54,13 @@ policy             posix     23
 
 host_policy        portable  38
 host_input         portable  13
-host_reactor       portable  10
+host_reactor       portable  20
 dispatch_refusal   portable  15
 dispatch_loaded    kernel    9
 admission          kernel    21
 joint              kernel    24
-session            portable  12
+session            portable  13
 observe            portable  15
 runs               runs      12
 windows_loader     windows   8
-host_nap           windows   1
 box                box       12

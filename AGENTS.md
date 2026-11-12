@@ -146,10 +146,12 @@ prerequisites: `docs/guides/tools.md`.
    it is live. Because it lives in the door, the boot walk, `start`, `reload` and an ordinary
    `zen.LoadWeave` all produce the same governed participant, and no host call site adopts
    anything.
-3. The loop is `pump_pending()` plus a line read with a deadline (`include/zen/host/line_input.hpp`), never
-   `drain_until_idle()`: one approved self-addressed message would otherwise make `stop` and `quit`
-   unreadable forever. The deadline holds while a line is **half typed**: a Windows console cannot
-   be asked whether a line is finished, so it is read on its own thread. What the reader holds and
+3. The loop is `pump_pending()` plus the one wait (`include/zen/host/reactor.hpp`) over the console
+   (`include/zen/host/line_input.hpp`) and, serving, the door, never `drain_until_idle()`: one
+   approved self-addressed message would otherwise make `stop` and `quit` unreadable forever. A
+   busy bus only looks; an idle host rests until a line, a client or its own deadline comes. That
+   holds while a line is **half typed**: a Windows console cannot be asked whether a line is
+   finished, so it is read on its own thread, which ends the wait once the line is whole. What the reader holds and
    refuses is one rule on every platform (`loom::host::HeldInput`): at most `kHeldInputBytes`
    waiting, and a line over `kMaxCommandBytes` refused whole, never run shortened or split
    (`docs/reference/bounds.md`).

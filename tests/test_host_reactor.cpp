@@ -2,10 +2,10 @@
 // Copyright (c) 2026 Joshua DeMoss
 
 // THE HOST'S ONE WAIT (zen/host/reactor.hpp), over real handles -- an event on Windows, a pipe on
-// POSIX, a crossing's sockets: a trusted role's claim held and woken, an untrusted one never
-// read, the bound told, a closed handle and an untaken wake let go rather than spun on, the
-// deadline kept, and a crossing's answer queued in a turn ending the wait at once. Times are bounds
-// far from either answer, so a busy machine moves no verdict.
+// POSIX, a crossing's sockets: claims held, woken, refused or let go; the deadline kept; a source's
+// time kept on a clock that moves only when told, and once on the machine's; the first version of
+// the claim answered in kind; and what the host serves itself. Times on the machine's clock are
+// bounds far from either answer, so a busy machine moves no verdict.
 
 #include <doctest.h>
 
@@ -40,6 +40,7 @@
 #endif
 
 using namespace loom;
+using loom::host::ManualClock;
 using loom::host::Reactor;
 using loom::host::WaitSet;
 using loom::host::Waited;
@@ -181,6 +182,31 @@ WaitSet of(std::vector<std::int64_t> handles) {
     return s;
 }
 
+/// A claim of a time and nothing else.
+WaitSet until(std::int64_t at) {
+    WaitSet s;
+    s.until_ms = at;
+    return s;
+}
+
+/// A SOURCE BUILT BEFORE TIMES: it claims the first version of `WaitSet` and accepts the first
+/// version of `Waited`.
+class SourceV1 final
+    : public WeaveBase<SourceV1, SourceState, Accept<ClaimYourWait, loom::host::WaitedV1>, Emit<>,
+                       Claims<loom::host::WaitSetV1>> {
+public:
+    void on(const ClaimYourWait&, Mail& mail) { (void)mail.as_role(role).claim(set); }
+    void on(const loom::host::WaitedV1& w, Mail& mail) {
+        if (!mail.sender().valid()) {
+            heard.push_back(w);
+        }
+    }
+
+    std::string role;
+    loom::host::WaitSetV1 set;
+    std::vector<loom::host::WaitedV1> heard;
+};
+
 using Clock = std::chrono::steady_clock;
 
 std::int64_t ms_since(Clock::time_point t) {
@@ -262,8 +288,9 @@ TEST_CASE("a Waited from any participant but the host is nothing to its source")
     auto forger = std::make_unique<Source>();
     forger->role = "test.forger";
     const WeaveId fid =
-        bus.register_weave(std::move(forger), Grant{}.allow_to_role("loom.host.Waited", 1,
-                                                                   "test.source"),
+        bus.register_weave(std::move(forger),
+                           Grant{}.allow_to_role(Waited::zen_name, Waited::zen_version,
+                                                 "test.source"),
                            "test.forger");
     Waited w;
     w.held = true;
@@ -471,6 +498,259 @@ TEST_CASE("a crossing is waited on: a connection, its Hello and an answer queued
         }
     }
     CHECK(delivered);
+}
+
+TEST_CASE("a source due at a time is woken then and told the time, and nothing is queued for it "
+          "meanwhile") {
+    Switchboard bus;
+    ManualClock clock(1000);
+    Source* src = mount(bus, "test.timer", [] { return until(1500); });
+    Reactor wait(bus, clock);
+    wait.trust("test.timer");
+    Reactor::Woke woke;
+    (void)turn(bus, wait, 0, &woke); // the claim is made in this turn and read after it
+    (void)bus.pump_pending();        // ...and the source hears that it is held, and the time
+    REQUIRE(src->held());
+    CHECK(src->heard.back().now_ms == 1000);
+    CHECK_FALSE(src->heard.back().due);
+    REQUIRE(wait.sources().front().until_ms.has_value());
+    CHECK(*wait.sources().front().until_ms == 1500);
+
+    // Between the claim and its time the bus holds nothing for it.
+    CHECK(bus.pending() == 0);
+    CHECK(bus.pump_pending() == 0); // a turn finds nothing to deliver
+
+    // The host's own deadline comes first: the clock moves to it, and the source is not due.
+    woke = wait.after_turn(100);
+    CHECK(woke.deadline);
+    CHECK(woke.due == 0);
+    CHECK(clock.now_ms() == 1100);
+    CHECK(bus.pending() == 0);
+
+    // With no deadline of the host's, the wait moves the clock to the source's time and wakes it.
+    woke = wait.after_turn();
+    CHECK_FALSE(woke.deadline);
+    CHECK(woke.due == 1);
+    CHECK(woke.roles == 0);
+    CHECK(woke.now_ms == 1500);
+    CHECK(clock.now_ms() == 1500);
+    (void)bus.pump_pending();
+    REQUIRE(src->heard.back().due);
+    CHECK_FALSE(src->heard.back().ready);
+    CHECK(src->heard.back().now_ms == 1500);
+    CHECK(src->heard.back().revision ==
+          static_cast<std::int64_t>(wait.sources().front().revision));
+}
+
+TEST_CASE("on the machine's clock the wait ends at a source's time, before the host's deadline") {
+    Switchboard bus;
+    loom::host::MachineClock machine;
+    const std::int64_t at = machine.now_ms() + 50;
+    Source* src = mount(bus, "test.timer", [at] { return until(at); });
+    Reactor wait(bus);
+    wait.trust("test.timer");
+    (void)turn(bus, wait, 0);
+    (void)bus.pump_pending();
+    REQUIRE(src->held());
+    Reactor::Woke woke;
+    const std::int64_t took = turn(bus, wait, 5000, &woke);
+    CHECK(took >= 30);
+    CHECK(took < 2500);
+    CHECK(woke.due == 1);
+    CHECK_FALSE(woke.deadline);
+    CHECK(woke.now_ms >= at);
+    (void)bus.pump_pending();
+    REQUIRE(src->heard.back().due);
+    CHECK(src->heard.back().now_ms >= at);
+}
+
+TEST_CASE("a time is due once: a time already past is told at the next wait, and a source that "
+          "does not claim again is neither told again nor spun on") {
+    Switchboard bus;
+    ManualClock clock(100);
+    Source* src = mount(bus, "test.timer", [] { return until(0); }); // "what time is it?"
+    src->takes_wakes = false;
+    Reactor wait(bus, clock);
+    wait.trust("test.timer");
+    Reactor::Woke woke;
+    (void)turn(bus, wait, 0, &woke);
+    CHECK(woke.due == 1); // read after the turn that claimed it, and already past
+    CHECK(clock.now_ms() == 100);
+    (void)bus.pump_pending();
+    REQUIRE(src->heard.back().due);
+    CHECK(src->heard.back().now_ms == 100);
+
+    // Told once: nothing waits on it now, so a wait with no deadline returns at once.
+    woke = wait.after_turn();
+    CHECK(woke.due == 0);
+    CHECK(clock.now_ms() == 100);
+    CHECK_FALSE(wait.sources().front().until_ms.has_value());
+    CHECK(wait.sources().front().held); // the claim stands; only its time is spent
+    woke = wait.after_turn(50);
+    CHECK(woke.deadline);
+    CHECK(woke.due == 0);
+    CHECK(clock.now_ms() == 150);
+
+    // Claiming again asks again.
+    bus.send_to_role("test.timer", Message(to_value(ClaimYourWait{})));
+    (void)bus.pump_pending();
+    woke = wait.after_turn();
+    CHECK(woke.due == 1);
+}
+
+TEST_CASE("a new claim's time replaces the one before it, and a later time is what the wait "
+          "keeps") {
+    Switchboard bus;
+    ManualClock clock(0);
+    std::int64_t at = 500;
+    Source* src = mount(bus, "test.timer", [&at] { return until(at); });
+    Reactor wait(bus, clock);
+    wait.trust("test.timer");
+    (void)turn(bus, wait, 0);
+    (void)bus.pump_pending();
+    REQUIRE(src->held());
+    const std::uint64_t first = wait.sources().front().revision;
+    at = 900;
+    bus.send_to_role("test.timer", Message(to_value(ClaimYourWait{})));
+    (void)bus.pump_pending();
+    const Reactor::Woke woke = wait.after_turn();
+    CHECK(woke.due == 1);
+    CHECK(clock.now_ms() == 900); // never stopped at the first claim's 500
+    (void)bus.pump_pending();
+    REQUIRE(src->heard.back().due);
+    CHECK(src->heard.back().revision > static_cast<std::int64_t>(first));
+    CHECK(src->heard.back().revision ==
+          static_cast<std::int64_t>(wait.sources().front().revision));
+}
+
+TEST_CASE("a time claimed by a role the host did not trust is never kept, and moves no clock") {
+    Switchboard bus;
+    ManualClock clock(0);
+    Source* src = mount(bus, "test.stranger", [] { return until(10); });
+    Reactor wait(bus, clock);
+    wait.trust("test.timer");
+    (void)turn(bus, wait, 0);
+    Reactor::Woke woke = wait.after_turn(100);
+    CHECK(woke.deadline);
+    CHECK(woke.due == 0);
+    CHECK(clock.now_ms() == 100); // the host's deadline, never the stranger's 10
+    woke = wait.after_turn();
+    CHECK(clock.now_ms() == 100);
+    (void)bus.pump_pending();
+    CHECK(src->heard.empty());
+}
+
+TEST_CASE("a role's next holder is waited on for its own time, never its predecessor's") {
+    Switchboard bus;
+    ManualClock clock(0);
+    (void)mount(bus, "test.timer", [] { return until(300); });
+    Reactor wait(bus, clock);
+    wait.trust("test.timer");
+    (void)turn(bus, wait, 0);
+    (void)bus.pump_pending();
+    (void)bus.unregister_weave(bus.role_holder("test.timer"));
+    Source* next = mount(bus, "test.timer", [] { return WaitSet{}; });
+    (void)turn(bus, wait, 0);
+    (void)bus.pump_pending();
+    REQUIRE(next->held());
+    const Reactor::Woke woke = wait.after_turn();
+    CHECK(woke.due == 0);
+    CHECK(clock.now_ms() == 0); // nothing was due, so nothing moved it
+}
+
+TEST_CASE("on a clock that moves only when told, a ready source ends the look and moves nothing") {
+    Switchboard bus;
+    ManualClock clock(0);
+    Signal sig;
+    Source* src = mount(bus, "test.both", [&sig] {
+        WaitSet s = of({sig.handle()});
+        s.until_ms = 1000;
+        return s;
+    });
+    src->on_ready = [&sig] { sig.clear(); };
+    Reactor wait(bus, clock);
+    wait.trust("test.both");
+    (void)turn(bus, wait, 0);
+    (void)bus.pump_pending();
+    REQUIRE(src->held());
+    sig.set();
+    Reactor::Woke woke = wait.after_turn();
+    CHECK(woke.roles == 1);
+    CHECK(woke.due == 0);
+    CHECK(clock.now_ms() == 0);
+    (void)bus.pump_pending(); // the source takes it and claims anew
+    woke = wait.after_turn();
+    CHECK(woke.roles == 0);
+    CHECK(woke.due == 1);
+    CHECK(clock.now_ms() == 1000);
+}
+
+TEST_CASE("a source that claims the first version is held and answered in the first version") {
+    Switchboard bus;
+    Signal sig;
+    auto owned = std::make_unique<SourceV1>();
+    SourceV1* src = owned.get();
+    src->role = "test.old";
+    src->set.handles = {sig.handle()};
+    const WeaveId id = bus.register_weave(std::move(owned), Grant{}, "test.old");
+    src->zen_set_self(id);
+    bus.send(id, Message(to_value(ClaimYourWait{})));
+    Reactor wait(bus);
+    wait.trust("test.old");
+    (void)turn(bus, wait, 0);
+    (void)bus.pump_pending();
+    REQUIRE_FALSE(src->heard.empty());
+    CHECK(src->heard.back().held);
+    CHECK(wait.sources().front().version == loom::host::WaitSetV1::zen_version);
+    sig.set();
+    Reactor::Woke woke;
+    (void)turn(bus, wait, 5000, &woke);
+    CHECK(woke.roles == 1);
+    (void)bus.pump_pending();
+    CHECK(src->heard.back().ready);
+    CHECK(src->heard.size() == 2); // every answer reached it, in the version it accepts
+}
+
+TEST_CASE("what the host serves itself ends the wait when ready, and a handle the OS refuses is "
+          "waited on no more while it is named") {
+    Switchboard bus;
+    Signal sig;
+    Reactor wait(bus);
+    const std::int64_t handle = sig.handle(); // named after it closes, as a stale set would
+    wait.watch_own([handle] { return of({handle}); });
+    Reactor::Woke woke;
+    CHECK(turn(bus, wait, 60, &woke) >= 40);
+    CHECK(woke.deadline);
+    CHECK_FALSE(woke.own);
+
+    std::thread setter([&sig] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        sig.set();
+    });
+    const std::int64_t took = turn(bus, wait, 5000, &woke);
+    setter.join();
+    CHECK(took < 2500);
+    CHECK(woke.own);
+    CHECK_FALSE(woke.deadline);
+    sig.clear();
+
+    sig.close(); // still named
+    CHECK(turn(bus, wait, 5000, &woke) < 2500); // refused at once
+    CHECK(turn(bus, wait, 60, &woke) >= 40);   // and the next wait is an ordinary one
+    CHECK(woke.deadline);
+    CHECK_FALSE(woke.own);
+}
+
+TEST_CASE("a wait with nothing to wait on and no deadline returns at once") {
+    Switchboard bus;
+    Reactor wait(bus);
+    Reactor::Woke woke;
+    const Clock::time_point t = Clock::now();
+    woke = wait.after_turn();
+    CHECK(ms_since(t) < 2500);
+    CHECK_FALSE(woke.deadline);
+    CHECK(woke.roles == 0);
+    CHECK(woke.due == 0);
 }
 
 } // TEST_SUITE("host_reactor")

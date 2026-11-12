@@ -421,6 +421,39 @@ TEST_CASE("door: ForgetRun severs the run's session; another registrar cannot; a
     CHECK(h.door->expectations() == 0);
 }
 
+TEST_CASE("door: a registrar gone, its run's session is severed before anything it sent is read, "
+          "however long the host rested") {
+    DoorHost h;
+    WeaveId a_id{};
+    Registrar* a = h.registrar("runs-a", {"SessEcho v1 -> role echo"}, &a_id);
+    h.kick(a_id, Kick{"expect", "one", host::credential_digest("cred-one"),
+                      {"SessEcho v1 -> role echo"}});
+    REQUIRE(until([&] { h.turn(); return a->expected.size() == 1; }));
+    auto one = attach(h, "w", "cred-one");
+    REQUIRE(one->admitted());
+    // The grant is real: while the registrar is on the bus, the same send is heard.
+    REQUIRE(ask(h, *one, "echo", to_value(SessEcho{"before"}), 76).size() == 1);
+    REQUIRE(h.echo->heard() == 1);
+    // The registrar leaves in a turn; the worker speaks, within its grant, while the host rests,
+    // before the door's next service.
+    std::unique_ptr<Weave> gone = h.bus.unregister_weave(a_id);
+    REQUIRE(gone != nullptr);
+    one->send_to_role("echo", 77, compat::serialize(to_value(SessEcho{"after"})));
+    one->flush();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100)); // the bytes reach the door
+    REQUIRE(until([&] {
+        h.turn();
+        std::vector<BridgeEvent> ev;
+        one->poll(ev);
+        return one->disconnected();
+    }));
+    for (int i = 0; i < 4; ++i) {
+        h.turn();
+    }
+    CHECK(h.echo->heard() == 1); // the second never read, so never delivered
+    CHECK(h.door->expectations() == 0);
+}
+
 TEST_CASE("door: Describe lists who is attached as what; Shutdown is the one word that ends the lifetime") {
     DoorHost h;
     WeaveId mgr_id{};
