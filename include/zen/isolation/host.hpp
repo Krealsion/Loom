@@ -14,6 +14,7 @@
 #include <zen/isolation/channel.hpp>
 #include <zen/isolation/grant_record.hpp>
 #include <zen/isolation/sandbox.hpp>
+#include <zen/kernel/creation.hpp>
 #include <zen/kernel/schema_codec.hpp>
 #include <zen/registry.hpp>
 #include <zen/switchboard/switchboard.hpp>
@@ -75,6 +76,14 @@ public:
     /// the pipe, as for one.
     OutOfProcessResult mount(const std::string& name, const std::string& so_path,
                              loom::Grant grant, const std::vector<std::string>& roles);
+
+    /// As above, the weave made with `creation`: the child says the shape its image declares
+    /// before it is made, this host admits the value against it, and the child is made with the
+    /// admitted value, as a loaded weave is (docs/reference/dynamic-abi.md#the-creation-value). A
+    /// respawned child is made with the same value.
+    OutOfProcessResult mount(const std::string& name, const std::string& so_path,
+                             loom::Grant grant, const std::vector<std::string>& roles,
+                             const loom::Creation& creation);
 
     /// Mount the StorageBroker out of process with host-granted FsAccess::WriteScoped to
     /// `storage_root` only (created if absent), permission to reply StorageValue to any mod, and
@@ -177,6 +186,9 @@ private:
         std::string snapshot_bytes;          // its canonical bytes, for revival
         std::optional<Value> policy_value;
         std::optional<loom::CapabilityAsk> requested_caps; // the manifest's ask (advice)
+        /// The value the child is made with: what the mount named, then, once admitted, the
+        /// admitted value, which every respawn is made with too.
+        loom::Creation creation;
         OutOfProcessWeave* proxy = nullptr;
         std::vector<CapabilityResolution> resolutions; // per-capability, resolved at mount
         MountPlan fs_plan;     // precomputed restricted-view plan (empty if fs not sandboxed)

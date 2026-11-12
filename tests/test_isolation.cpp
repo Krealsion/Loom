@@ -15,6 +15,7 @@
 #include "enforcement_gate.hpp"
 #include "switchboard_fixtures.hpp"
 #include "weavelib/addressed_protocol.hpp"
+#include "weavelib/made_protocol.hpp"
 #include "weavelib/role_protocol.hpp"
 
 #include <zen/isolation/channel.hpp>
@@ -299,6 +300,35 @@ TEST_CASE("an isolated weave reads the role a delivery was addressed to, as a na
     bus.send(door.id, Message(to_value(addressed::AddressedKnock{2})));
     REQUIRE(host.run_until([&] { return knocks() == 2; }, 2000));
     CHECK(heard().get("addressed")->as_text().empty());
+}
+
+TEST_CASE("an isolated weave is made with the value its mount names, admitted by this host against "
+          "the shape the child says it is made with, and refused when it does not admit") {
+    Switchboard bus;
+    IsolationHost host(bus, kHostExe);
+    Grant g;
+    g.allow_to_any(made::MadeTold::zen_name, made::MadeTold::zen_version);
+    OutOfProcessResult m = host.mount("m", ZEN_SO_MADE, std::move(g), {},
+                                      Creation::of(to_value(made::MadeSetup{"north", 3})));
+    REQUIRE_MESSAGE(m.ok, m.error);
+    std::vector<made::MadeTold> told;
+    Registered asker = register_probe(bus, {schema_of<made::MadeTold>()});
+    asker.weave->on_handle = [&](const Message& in, Bus&, ProbeWeave&) {
+        told.push_back(from_value<made::MadeTold>(in.payload));
+    };
+    bus.send(m.id, Message(to_value(made::MadeAsk{1}), asker.id, asker.id));
+    REQUIRE(host.run_until([&] { return !told.empty(); }, 2000));
+    CHECK(told[0].place == "north");
+    CHECK(told[0].limit == 3);
+
+    // Refused before the child is made, in the gate's words; and a load naming none.
+    OutOfProcessResult wrong = host.mount("wrong", ZEN_SO_MADE, Grant{}, {},
+                                          Creation::of(to_value(addressed::AddressedKnock{1})));
+    CHECK_FALSE(wrong.ok);
+    CHECK(wrong.error.find("the creation value is refused by the gate") != std::string::npos);
+    OutOfProcessResult none = host.mount("none", ZEN_SO_MADE, Grant{});
+    CHECK_FALSE(none.ok);
+    CHECK(none.error.find("names no value") != std::string::npos);
 }
 
 TEST_CASE("the sender of a child's emitted message is stamped from the connection") {

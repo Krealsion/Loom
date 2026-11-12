@@ -27,12 +27,16 @@ enum class Op : std::uint8_t {
     EmitRole = 4, ///< [bytes role][u64 reply_to][u64 correlation][bytes payload] — NO sender
                   ///< on the wire; the host stamps it from link.id and routes via role
     Refused = 5,  ///< [u8 cut][bytes words]: the weave refused its making, in place of Hello
+    Creation = 6, ///< [bytes declared]: the shape the weave is made with (zen.Creation), empty
+                  ///< for none, said before it is made
     // parent -> child
     Deliver = 16,  ///< [bytes facts][bytes payload]; facts = [u64 sender][u64 reply_to]
                    ///< [u64 correlation][bytes addressed role], appended to and read as far as
                    ///< a reader knows
     Revive = 17,   ///< [bytes state]
     Shutdown = 18, ///< (empty)
+    Make = 19,     ///< [u8 with][bytes value]: make the weave, with the value the parent admitted
+                   ///< against the declared shape, or with none
 };
 
 // The wire primitives (put_u8/u32/u64, put_bytes, Cursor, kMaxFrameLen, the send kinds) are in

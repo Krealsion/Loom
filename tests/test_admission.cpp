@@ -384,7 +384,7 @@ TEST_CASE("the message-driven door spends the policy, and the asker hears the po
             reasons.push_back(why->as_text());
         }
     };
-    Value ask = to_value(LoadWeave{"t", ZEN_SO_WEAVE, {}});
+    Value ask = to_value(LoadWeave{"t", ZEN_SO_WEAVE, {}, {}});
     bus.send_as(asker.id, manager, Message(std::move(ask), WeaveId{}, asker.id, 1));
     bus.drain_until_idle();
 
@@ -482,7 +482,7 @@ TEST_CASE("a policy that never asks which build it is makes no door read the fil
     Registered asker =
         register_probe(bus, {schema_of<Refused>()}, 2, true,
                        Grant{}.allow(LoadWeave::zen_name, LoadWeave::zen_version, manager));
-    Value ask = to_value(LoadWeave{"by-message", ZEN_SO_WEAVE_B, {}});
+    Value ask = to_value(LoadWeave{"by-message", ZEN_SO_WEAVE_B, {}, {}});
     bus.send_as(asker.id, manager, Message(std::move(ask), WeaveId{}, asker.id, 1));
     bus.drain_until_idle();
     REQUIRE(kernel.is_loaded("by-message"));

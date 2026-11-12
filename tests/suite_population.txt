@@ -59,6 +59,7 @@ host_reactor       portable  20
 dispatch_refusal   portable  15
 dispatch_loaded    kernel    10
 seam               kernel    8
+creation           kernel    9
 admission          kernel    21
 joint              kernel    24
 session            portable  13

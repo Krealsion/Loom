@@ -91,6 +91,12 @@ its own `Grant` (`mount_granted`), and then decides for itself whether those
 answers may leave. Speak only through the `Mail` you are handed — it stamps your
 identity and authorizes every send against your grant.
 
+A weave that needs something before its first turn is made with it: declare
+`ZEN_MADE_WITH(Setup);` and a constructor taking `const Setup&`, and the host's load names the
+value, admitted by the gate against `Setup` before the weave is made. In process,
+`loom::mount_made<Responder>(bus, loom::to_value(Setup{...}), why)` makes it through the same
+gate. It is data, never a door ([the creation value](../reference/dynamic-abi.md#the-creation-value)).
+
 `mail.reply` sends to the reply address the incoming message carried, or else to its sender.
 This `Ping` comes from the host with neither, so the `Pong` is refused `NoSuchTarget`; give the
 host's send a reply address (`loom::Message(value, {}, listener)`) and it reaches `listener`.

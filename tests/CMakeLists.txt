@@ -53,6 +53,8 @@ set(ZEN_TEST_SOURCES_KERNEL
     # The seam that grows: the sizes its tables say, what a host refuses by them, and the
     # addressed role a loaded weave reads.
     test_seam.cpp
+    # The creation value: a weave made with one gated value, from each door a load comes through.
+    test_creation.cpp
     test_handoff.cpp
     test_manager.cpp
     test_capabilities.cpp
@@ -109,7 +111,7 @@ set(LOOM_WASM_MODULES "" CACHE PATH
 set(zen_box_module_names
     box_probe box_probe_path_open box_probe_env box_stale_abi box_counter box_counter_reaching
     box_defers box_senses box_role_worker box_dispatch box_joint box_versioned_v1
-    box_versioned_v2 box_addressed)
+    box_versioned_v2 box_addressed box_made)
 set(zen_box_modules "")
 if(LOOM_WASI_SDK)
     set(zen_box_modules "${CMAKE_BINARY_DIR}/wasm")
@@ -142,12 +144,14 @@ if(LOOM_WASI_SDK)
                     SOURCES weavelib/versioned_service.cpp DEFINITIONS ZEN_VERSIONED_CANDIDATE)
     loom_wasm_weave(zen_box_addressed_wasm OUTPUT "${zen_box_modules}/box_addressed.wasm"
                     SOURCES weavelib/addressed_probe.cpp)
+    loom_wasm_weave(zen_box_made_wasm OUTPUT "${zen_box_modules}/box_made.wasm"
+                    SOURCES weavelib/made_probe.cpp)
     add_custom_target(loom-wasm-modules DEPENDS
         zen_box_probe_wasm zen_box_probe_path_open_wasm zen_box_probe_env_wasm
         zen_box_stale_abi_wasm zen_box_counter_wasm zen_box_counter_reaching_wasm
         zen_box_defers_wasm zen_box_senses_wasm zen_box_role_worker_wasm zen_box_dispatch_wasm
         zen_box_joint_wasm zen_box_versioned_v1_wasm zen_box_versioned_v2_wasm
-        zen_box_addressed_wasm)
+        zen_box_addressed_wasm zen_box_made_wasm)
 elseif(LOOM_WASM_MODULES)
     set(zen_box_modules "${LOOM_WASM_MODULES}")
 endif()
@@ -193,6 +197,7 @@ if(LOOM_ENABLE_WASM AND TARGET zen-kernel)
         "ZEN_BOX_VERSIONED_V1=\"${zen_box_modules}/box_versioned_v1.wasm\""
         "ZEN_BOX_VERSIONED_V2=\"${zen_box_modules}/box_versioned_v2.wasm\""
         "ZEN_BOX_ADDRESSED=\"${zen_box_modules}/box_addressed.wasm\""
+        "ZEN_BOX_MADE=\"${zen_box_modules}/box_made.wasm\""
         "ZEN_SO_BOX_COUNTER=\"$<TARGET_FILE:zen_box_counter>\"")
     loom_wasm_runtime_beside(zen-tests)
     # The demo, and its run as a CTest entry: one live weave reloaded into its module and back
@@ -518,6 +523,21 @@ target_link_libraries(zen_test_addressed_smaller PRIVATE loom zen-switchboard ze
                                                          zen-sanitize)
 loom_weave_build_contract(zen_test_addressed_smaller)
 
+# The made-with probe (weavelib/made_probe.cpp).
+add_library(zen_test_made SHARED weavelib/made_probe.cpp)
+target_link_libraries(zen_test_made PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
+loom_weave_build_contract(zen_test_made)
+
+# The addressed-role probe compiled against ABI 13's kept header, which the export macro builds
+# for as it builds for this one: an image from before the creation value, loading and working on
+# this host.
+add_library(zen_test_abi_v13_image SHARED weavelib/addressed_probe.cpp)
+target_include_directories(zen_test_abi_v13_image BEFORE PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/abi_kept/v13")
+target_link_libraries(zen_test_abi_v13_image PRIVATE loom zen-switchboard zen-warnings
+                                                     zen-sanitize)
+loom_weave_build_contract(zen_test_abi_v13_image)
+
 # The build contract's own pair: one source, two artifacts, one through
 # loom_weave_build_contract() and one deliberately bypassing it. The bypass twin is the positive
 # control that keeps the question askable, as the stale-ABI fixture keeps "the previous ABI
@@ -558,7 +578,7 @@ set(ZEN_KERNEL_WEAVE_LIBS zen_test_weave zen_test_weave_b zen_test_weave_badsnap
     zen_test_contract_applied zen_test_contract_bypass zen_test_weave_asks
     zen_test_abi_v12_image zen_test_needs_next_version zen_test_needs_larger_host
     zen_test_needs_unread_manifest zen_test_needs_short_descriptor zen_test_addressed
-    zen_test_addressed_smaller)
+    zen_test_addressed_smaller zen_test_made zen_test_abi_v13_image)
 add_dependencies(zen-tests ${ZEN_KERNEL_WEAVE_LIBS})
 
 # Hand the portable fixtures' paths to the tests as string macros.
@@ -589,6 +609,8 @@ target_compile_definitions(zen-tests PRIVATE
     "ZEN_SO_NEEDS_SHORT_DESCRIPTOR=\"$<TARGET_FILE:zen_test_needs_short_descriptor>\""
     "ZEN_SO_ADDRESSED=\"$<TARGET_FILE:zen_test_addressed>\""
     "ZEN_SO_ADDRESSED_SMALLER=\"$<TARGET_FILE:zen_test_addressed_smaller>\""
+    "ZEN_SO_MADE=\"$<TARGET_FILE:zen_test_made>\""
+    "ZEN_SO_ABI_V13_IMAGE=\"$<TARGET_FILE:zen_test_abi_v13_image>\""
     "ZEN_SO_CONTRACT_APPLIED=\"$<TARGET_FILE:zen_test_contract_applied>\""
     "ZEN_SO_CONTRACT_BYPASS=\"$<TARGET_FILE:zen_test_contract_bypass>\""
     "ZEN_SO_DEFERS=\"$<TARGET_FILE:zen_test_weave_defers>\""

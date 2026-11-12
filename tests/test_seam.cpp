@@ -146,7 +146,9 @@ TEST_CASE("a host reads a descriptor's slots as far as its size reaches, and a s
                                         .policy = nullptr,
                                         .revive = nullptr,
                                         .handle = nullptr,
-                                        .claim_published = nullptr};
+                                        .claim_published = nullptr,
+        .describe_creation = nullptr,
+        .create_with = nullptr};
         return &abi;
     }();
     ZenWeaveAbi shorter = *full;
@@ -213,7 +215,7 @@ TEST_CASE("an image needing what this host lacks is refused before any slot of i
     SUBCASE("the next ABI version") {
         refused_before_any_slot(ZEN_SO_NEEDS_NEXT_VERSION,
                                 {"needs abi_version " + std::to_string(ZEN_ABI_VERSION + 1u),
-                                 "host supports " + std::to_string(ZEN_ABI_VERSION)});
+                                 "host supports " + std::to_string(ZEN_ABI_OLDEST)});
     }
     SUBCASE("a larger host table") {
         refused_before_any_slot(

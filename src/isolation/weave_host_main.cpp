@@ -179,8 +179,46 @@ int main(int argc, char** argv) {
         return 5;
     }
     const ZenWeaveAbi* abi = &descriptor;
+    // What it is made with, said to the parent before anything of the weave runs; the parent
+    // answers with the value it admitted against that shape, or with none.
+    std::string declared;
+    if (abi->describe_creation != nullptr) {
+        ZenByteSink ds{&declared, &sink_to_string};
+        if (abi->describe_creation(ds) != ZEN_OK) {
+            return 7;
+        }
+    }
+    {
+        std::string said;
+        put_bytes(said, declared);
+        send_frame(Op::Creation, said);
+    }
+    std::string made_with;
+    bool with = false;
+    {
+        Op op = Op::Make;
+        std::string payload;
+        if (!read_frame(op, payload) || op != Op::Make) {
+            return 8;
+        }
+        Cursor cursor(payload);
+        std::uint8_t has = 0;
+        std::string_view value;
+        if (!cursor.u8(has) || !cursor.bytes(value)) {
+            return 8;
+        }
+        with = has != 0;
+        made_with.assign(value);
+    }
     loom::MakingWords words;
-    void* instance = abi->create(words.sink());
+    void* instance = nullptr;
+    if (!with) {
+        instance = abi->create(words.sink());
+    } else if (abi->create_with != nullptr) {
+        instance = abi->create_with(words.sink(),
+                                    reinterpret_cast<const std::uint8_t*>(made_with.data()),
+                                    made_with.size());
+    }
     if (instance == nullptr) {
         // ...SAID TO THE PARENT before the exit, so its refusal is the weave's own words.
         std::string refused;

@@ -224,8 +224,14 @@ Two things about the code, because they are the two a first weave gets wrong:
 A list, not a graph: the order is yours to state, and a host that inferred it would be
 making a decision you cannot see. Each row takes `name`, `path`, an optional `role` (or
 `roles`, a list, for a weave that answers to several names, bound all or none),
-an optional `"enabled": false`, and an optional `"on_failure": "stop"` — which leaves
-every later row *pending* and says so, instead of continuing past a row you needed.
+an optional `"enabled": false`, an optional `"on_failure": "stop"` — which leaves
+every later row *pending* and says so, instead of continuing past a row you needed — and an
+optional `"creation"`, the value the weave is made with, written as that value's JSON form in
+a string (`"{\"zen\":1,\"schema\":\"Setup\",\"version\":1,\"fields\":{...}}"`). A weave
+that declares it is made with a value is refused at its row without one, and a value its shape
+does not admit refuses the row in the gate's words
+([the creation value](../reference/dynamic-abi.md#the-creation-value)). At the console,
+`start <name> <path> [role ...] --with '<the value as JSON>'` does the same.
 
 Run it again:
 

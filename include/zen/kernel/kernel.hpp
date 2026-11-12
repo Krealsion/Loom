@@ -6,12 +6,14 @@
 
 #include <zen/kernel/abi.h>
 #include <zen/kernel/admission.hpp>
+#include <zen/kernel/creation.hpp>
 #include <zen/registry.hpp>
 #include <zen/switchboard/switchboard.hpp>
 
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -167,6 +169,19 @@ public:
     LoadResult load(const std::string& name, const std::string& path,
                     const std::vector<std::string>& roles, Grant grant);
 
+    /// As `load`, the weave made with `creation`: admitted by the gate against the shape the
+    /// artifact declares (`describe_creation`) before the weave is made, and refused with the load,
+    /// in the gate's words, when it does not admit, when the artifact declares a shape and the
+    /// load names none, or when it declares none and the load names one.
+    LoadResult load(const std::string& name, const std::string& path,
+                    const std::vector<std::string>& roles, const Creation& creation);
+    LoadResult load(const std::string& name, const std::string& path,
+                    const std::vector<std::string>& roles, const Creation& creation, Grant grant);
+
+    /// The value `name` was made with, as the gate admitted it; empty for one made with none or
+    /// not loaded.
+    std::optional<loom::Value> made_with(const std::string& name) const;
+
     /// Hot-reload `name` from `new_path`: snapshot the live Weave, swap the library behind the
     /// same WeaveId, and revive from the snapshot through the gate.
     ///
@@ -202,6 +217,11 @@ public:
     /// As `load_candidate`, with the host's grant and no policy, as the four-argument `load`.
     LoadResult load_candidate(const std::string& name, const std::string& path,
                               loom::WeaveId coordinator, Grant grant);
+
+    /// As `load_candidate`, the candidate made with `creation` as `load` makes one: a prepared
+    /// replacement is a new weave, so it names its own value.
+    LoadResult load_candidate(const std::string& name, const std::string& path,
+                              loom::WeaveId coordinator, const Creation& creation);
 
     /// Unseal `candidate_name` and move `role` to it, as one change to what delivery can see
     /// (PR-07). False, changing nothing, unless the candidate is a live sealed weave and
@@ -293,6 +313,8 @@ private:
         /// The grant it was admitted with, which never changes for its life (GATE-05): what a
         /// reload's new image is mounted under.
         Grant grant;
+        /// The value it was made with, as admitted: what a reload's new image is made with too.
+        std::optional<loom::Value> made_with;
     };
 
     struct Manifest {
@@ -332,11 +354,12 @@ private:
     /// stages; non-null is the host's grant and the policy is not consulted.
     LoadResult load_impl(const std::string& name, const std::string& path,
                          const std::vector<std::string>& roles, AdmissionKind kind,
-                         const Grant* explicit_grant);
+                         const Grant* explicit_grant, const Creation& creation);
 
     /// `load_impl` plus the seal.
     LoadResult candidate_impl(const std::string& name, const std::string& path,
-                              loom::WeaveId coordinator, const Grant* explicit_grant);
+                              loom::WeaveId coordinator, const Grant* explicit_grant,
+                              const Creation& creation);
 
     /// Put the admission question to the installed policy, in one place for all three doors.
     /// True when admitted; on a refusal `*why` gets the sentence to report. `build` is the

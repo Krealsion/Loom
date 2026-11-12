@@ -15,6 +15,7 @@
 #include <zen/serialize.hpp>
 #include <zen/switchboard/weave_contract.hpp>
 #include <zen/value.hpp>
+#include <zen/weave/weave.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -409,16 +410,74 @@ loom::Admission admit_declared(const S& s, const loom::Unverified& u,
     return loom::admit(u, door, own);
 }
 
+/// What a weave's constructor threw, as the words of a refused making.
+inline void say_refusal(ZenByteSink refusal, std::string_view words) {
+    if (refusal.write != nullptr && !words.empty()) {
+        refusal.write(refusal.ctx, reinterpret_cast<const std::uint8_t*>(words.data()),
+                      words.size());
+    }
+}
+
 template <class S>
 void* do_create(ZenByteSink refusal) {
     try {
-        return static_cast<void*>(new S());
+        if constexpr (std::is_default_constructible_v<S>) {
+            return static_cast<void*>(new S());
+        } else {
+            // A weave made with a value is never made from nothing: the host gates a load's value
+            // against its declared shape and calls `create_with`, and refuses a load naming none.
+            say_refusal(refusal, "this weave is made with a value, and none was given");
+            return nullptr;
+        }
     } catch (const std::exception& e) {
         const std::string_view words = e.what();
         if (refusal.write != nullptr && !words.empty()) {
             refusal.write(refusal.ctx, reinterpret_cast<const std::uint8_t*>(words.data()),
                           words.size());
         }
+        return nullptr;
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+/// The shape the weave declares it is made with, as zen.Creation, or nothing for one made with
+/// none. Reads the declaration alone: no instance, and no value.
+template <class S>
+ZenStatus do_describe_creation(ZenByteSink sink) {
+    try {
+        using T = loom::made_with_t<S>;
+        if constexpr (!std::is_void_v<T>) {
+            sink_write(sink, loom::serialize(loom::encode_creation(*loom::schema_of<T>())));
+        }
+        return ZEN_OK;
+    } catch (...) {
+        return ZEN_ERR;
+    }
+}
+
+/// Make the weave from the value the host admitted against its declared shape, re-admitted here
+/// against this library's own definition, as `do_revive` does state. A weave made with none is
+/// made with nothing, and refuses a value.
+template <class S>
+void* do_create_with(ZenByteSink refusal, const std::uint8_t* value, std::size_t len) {
+    try {
+        using T = loom::made_with_t<S>;
+        if constexpr (std::is_void_v<T>) {
+            (void)value, (void)len;
+            say_refusal(refusal, "this weave is made with no value, and one was given");
+            return nullptr;
+        } else {
+            loom::Admission a = loom::admit(loom::parse(as_view(value, len)), loom::schema_of<T>());
+            if (!a.ok()) {
+                say_refusal(refusal, "the creation value is refused by this weave's gate: " +
+                                         a.first_error().message());
+                return nullptr;
+            }
+            return static_cast<void*>(new S(loom::from_value<T>(a.value())));
+        }
+    } catch (const std::exception& e) {
+        say_refusal(refusal, e.what());
         return nullptr;
     } catch (...) {
         return nullptr;
@@ -608,6 +667,23 @@ ZenStatus do_handle(void* instance, const ZenDelivery* d, const std::uint8_t* pa
 
 } // namespace loom::detail
 
+// The slots each version appended, filled where the header this image is built against has them,
+// so the macro builds an image against any header a host still loads.
+#if ZEN_ABI_VERSION >= 14
+#define ZEN_DETAIL_CREATION_THUNKS(WeaveClass)                                                     \
+    static ZenStatus zen__abi_describe_creation(ZenByteSink s) {                                   \
+        return ::loom::detail::do_describe_creation<WeaveClass>(s);                                \
+    }                                                                                              \
+    static void* zen__abi_create_with(ZenByteSink r, const uint8_t* v, size_t n) {                 \
+        return ::loom::detail::do_create_with<WeaveClass>(r, v, n);                                \
+    }
+#define ZEN_DETAIL_CREATION_SLOTS                                                                  \
+    , .describe_creation = zen__abi_describe_creation, .create_with = zen__abi_create_with
+#else
+#define ZEN_DETAIL_CREATION_THUNKS(WeaveClass)
+#define ZEN_DETAIL_CREATION_SLOTS
+#endif
+
 // Generate the C ABI for a Weave class: thunks with C linkage forwarding to the helpers above.
 // Exactly one ZEN_EXPORT_WEAVE per library.
 //
@@ -639,6 +715,7 @@ ZenStatus do_handle(void* instance, const ZenDelivery* d, const std::uint8_t* pa
     static ZenStatus zen__abi_claim_published(void* i, const uint8_t* v, size_t n) {              \
         return ::loom::detail::do_claim_published<WeaveClass>(i, v, n);                     \
     }                                                                                              \
+    ZEN_DETAIL_CREATION_THUNKS(WeaveClass)                                                          \
     ZEN_KERNEL_EXPORT const ZenWeaveAbi* zen_weave_abi(void) {                                      \
         static const ZenWeaveAbi abi = {.abi_version     = ZEN_ABI_VERSION,                         \
                                         .size            = sizeof(ZenWeaveAbi),                    \
@@ -651,7 +728,8 @@ ZenStatus do_handle(void* instance, const ZenDelivery* d, const std::uint8_t* pa
                                         .policy          = zen__abi_policy,                        \
                                         .revive          = zen__abi_revive,                        \
                                         .handle          = zen__abi_handle,                        \
-                                        .claim_published = zen__abi_claim_published};              \
+                                        .claim_published = zen__abi_claim_published               \
+                                        ZEN_DETAIL_CREATION_SLOTS};                                \
         return &abi;                                                                               \
     }                                                                                              \
     }

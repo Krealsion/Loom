@@ -297,6 +297,34 @@ inline Value encode_manifest(const std::vector<std::shared_ptr<const Schema>>& a
     return m;
 }
 
+/// The shape a weave declares it is made with, as `describe_creation` writes it: the shapes it
+/// nests, listed before what references them, and the shape. A weave made with none writes
+/// nothing. Its version is its own, apart from the manifest's.
+inline std::shared_ptr<const Schema> creation_schema() {
+    static const auto s = SchemaBuilder("zen.Creation", 1)
+                              .list("referenced", type_message(shape_desc_schema()),
+                                    /*required=*/false)
+                              .message("shape", shape_desc_schema())
+                              .build();
+    return s;
+}
+
+inline Value encode_creation(const Schema& shape) {
+    Value c(creation_schema());
+    std::vector<std::shared_ptr<const Schema>> referenced;
+    collect_referenced(shape, referenced);
+    if (!referenced.empty()) {
+        std::vector<Cell> refs;
+        refs.reserve(referenced.size());
+        for (const auto& s : referenced) {
+            refs.push_back(Cell::message(encode_shape(*s)));
+        }
+        c.set("referenced", Cell::list(std::move(refs)));
+    }
+    c.set("shape", Cell::message(encode_shape(shape)));
+    return c;
+}
+
 // ---- decode (admitted descriptor Value -> Schema) ----------------------------
 // Precondition: `desc` has passed the gate against the meta-schema. Reconstruction can still
 // fail (an unresolved nested schema, a malformed type); that throws, and the host refuses the

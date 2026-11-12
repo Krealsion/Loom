@@ -14,7 +14,9 @@
 #include <zen/weave/dispatch_refusal.hpp>
 #include <zen/weave/poke.hpp>
 #include <zen/weave/shape.hpp>
+#include <zen/kernel/creation.hpp>
 #include <zen/kernel/schema_codec.hpp>
+#include <zen/serialize.hpp>
 #include <zen/switchboard.hpp>
 
 #include <cstddef>
@@ -664,7 +666,53 @@ loom::WeaveId mount_granted(loom::Switchboard& bus, loom::Grant grant, Args&&...
     return id;
 }
 
+/// The shape a Weave declares it is made with (`ZEN_MADE_WITH`), or void for one made with none.
+template <class Self>
+struct made_with {
+    using type = void;
+};
+template <class Self>
+    requires requires { typename Self::zen_made_with; }
+struct made_with<Self> {
+    using type = typename Self::zen_made_with;
+};
+template <class Self>
+using made_with_t = typename made_with<Self>::type;
+
+/// The value a weave is made with, admitted by the gate against the shape it declares, as a
+/// load's is (docs/reference/dynamic-abi.md#the-creation-value): `why` says the gate's words
+/// when it does not admit. A value is data, never a door.
+template <class T>
+std::optional<T> admit_creation(const loom::Value& creation, std::string& why) {
+    const std::string declared = loom::serialize(loom::encode_creation(*schema_of<T>()));
+    std::optional<loom::Value> admitted;
+    if (!loom::judge_creation(declared, loom::Creation::of(creation), admitted, why)) {
+        return std::nullopt;
+    }
+    return from_value<T>(*admitted);
+}
+
+/// As mount(), for a Weave declaring `ZEN_MADE_WITH(T)`: made with `creation` once the gate admits
+/// it against T, by the door a load's value takes. An invalid id, with `why`, when it does not.
+template <class Self>
+loom::WeaveId mount_made(loom::Switchboard& bus, const loom::Value& creation, std::string& why) {
+    using T = made_with_t<Self>;
+    static_assert(!std::is_void_v<T>, "loom: mount_made needs a Weave declaring ZEN_MADE_WITH");
+    std::optional<T> value = admit_creation<T>(creation, why);
+    if (!value) {
+        return loom::WeaveId{};
+    }
+    return mount<Self>(bus, *value);
+}
+
 } // namespace loom
+
+/// Declare the value a Weave is made with, `ZEN_MADE_WITH(Setup);` in the class beside a
+/// constructor taking `const Setup&`: a load names the value, the gate admits it against Setup's
+/// shape before the weave is made, and a load naming none is refused. Data, never doors.
+#define ZEN_MADE_WITH(T)                                                                            \
+    using zen_made_with = T;                                                                        \
+    static_assert(true, "") /* swallow the trailing semicolon */
 
 /// Declare the capabilities a Weave asks the host for, shadowing WeaveBase::ask_config:
 ///   ZEN_ASK(.network = true, .filesystem = "write-scoped", .roles = {"storage"});

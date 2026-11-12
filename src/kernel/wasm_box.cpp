@@ -123,6 +123,8 @@ Engine& engine() {
 class BoxModule {
 public:
     explicit BoxModule(wasmtime_module_t* module) noexcept : module_(module) {}
+    /// The ABI version the module's weave was built against, read when it was opened.
+    std::uint32_t version = 0;
     ~BoxModule() { wasmtime_module_delete(module_); }
     BoxModule(const BoxModule&) = delete;
     BoxModule& operator=(const BoxModule&) = delete;
@@ -181,7 +183,10 @@ void keep(const std::string& digest, std::shared_ptr<BoxModule> module) {
 /// module glue (cmake/loom-wasm-glue.cpp).
 struct Exports {
     wasmtime_func_t initialize{}, abi_version{}, alloc{}, free{}, create{}, destroy{}, describe{},
-        snapshot{}, policy{}, revive{}, handle{}, claim_published{}, sink_deliver{}, manifest_version{};
+        snapshot{}, policy{}, revive{}, handle{}, claim_published{}, sink_deliver{}, manifest_version{},
+        describe_creation{}, create_with{};
+    /// Whether the module exports the two creation doors (ABI 14 on).
+    bool creation = false;
 };
 
 struct Box {
@@ -209,8 +214,13 @@ struct Box {
     std::int64_t reloads = 0;
     bool quarantined = false;
     std::string last_trap;
-    /// The exports a module being judged lacks, refused once its version is read.
+    /// The exports a module being judged lacks, refused once its version is read, and the
+    /// creation doors it lacks, refused only for a module built after they were appended.
     std::string missing;
+    std::string missing_creation;
+    /// The value the weave was made with, the bytes the host admitted; a remaking uses it again.
+    std::string made_with;
+    bool made = false;
     /// What the module wrote to its standard output and error in this entry, and what was dropped.
     std::string log;
     std::size_t log_dropped = 0;
@@ -990,6 +1000,16 @@ bool instantiate(Box& b, std::string& why, bool judging = false) {
         return false;
     }
     b.missing = missing;
+    // The doors appended at 14: an older module lacks them, and is made with no value.
+    std::string missing_creation;
+    for (const auto& [name, slot] : {std::pair{"zw_describe_creation", &Exports::describe_creation},
+                                     std::pair{"zw_create_with", &Exports::create_with}}) {
+        if (!export_func(b, name, b.fn.*slot)) {
+            missing_creation += (missing_creation.empty() ? "" : ", ") + std::string(name);
+        }
+    }
+    b.fn.creation = missing_creation.empty();
+    b.missing_creation = missing_creation;
     if (!call(b.cx, b.fn.initialize, nullptr, 0, nullptr, 0, why)) {
         why = "the module trapped in its static initialisation: " + why;
         return false;
@@ -1040,10 +1060,27 @@ bool emit(Box& b, const wasmtime_func_t& f, std::string& out, std::string& why) 
 /// Make the weave in the box's instance; its refusal's words go to `refusal`.
 bool make_weave(Box& b, ZenByteSink refusal, std::string& why) {
     refuel(b);
-    b.sink = refusal;
-    wasmtime_val_t a = i32v(0);
     wasmtime_val_t r;
-    const bool ok = call(b.cx, b.fn.create, &a, 1, &r, 1, why);
+    bool ok = false;
+    if (!b.made) {
+        b.sink = refusal;
+        wasmtime_val_t a = i32v(0);
+        ok = call(b.cx, b.fn.create, &a, 1, &r, 1, why);
+    } else {
+        const std::int32_t p = copy_in(b, reinterpret_cast<const std::uint8_t*>(b.made_with.data()),
+                                       b.made_with.size(), why);
+        if (p == 0) {
+            why = "the value it is made with could not be handed to the module: " + why;
+            return false;
+        }
+        b.sink = refusal;
+        wasmtime_val_t a[3] = {i32v(0), i32v(p),
+                               i32v(static_cast<std::int32_t>(b.made_with.size()))};
+        ok = call(b.cx, b.fn.create_with, a, 3, &r, 1, why);
+        if (ok) {
+            free_in(b, p);
+        }
+    }
     b.sink = ZenByteSink{};
     if (!ok) {
         why = "the module trapped while making its weave: " + why;
@@ -1321,7 +1358,9 @@ const ZenWeaveAbi kBoxAbi = {.abi_version     = ZEN_ABI_VERSION,
                              .policy          = box_slot_policy,
                              .revive          = box_slot_revive,
                              .handle          = box_slot_handle,
-                             .claim_published = box_slot_claim_published};
+                             .claim_published = box_slot_claim_published,
+        .describe_creation = nullptr,
+        .create_with = nullptr};
 
 bool read_file(const std::string& path, std::string& bytes, std::string& error) {
     std::ifstream in(path, std::ios::binary);
@@ -1392,23 +1431,73 @@ std::shared_ptr<BoxModule> box_open(const std::string& path, std::string& error)
         read = manifest_version_of(probe, said.manifest_version, why) &&
                detail::read_descriptor(&said, judged, why);
     }
+    if (read && said.abi_version >= 14u && !probe.missing_creation.empty()) {
+        why = "the module does not export the weave table a box drives: " + probe.missing_creation;
+        read = false;
+    }
     drop_store(probe);
     if (!read) {
         error = why;
         return nullptr;
     }
+    module->version = said.abi_version;
     keep(digest, module);
     return module;
 }
 
 const ZenWeaveAbi* box_abi() noexcept { return &kBoxAbi; }
 
+void* box_make(const std::shared_ptr<BoxModule>& module, ZenByteSink refusal,
+               const std::uint8_t* value, std::size_t len, bool with);
+
+void* box_create_with(const std::shared_ptr<BoxModule>& module, ZenByteSink refusal,
+                      const std::uint8_t* value, std::size_t len) {
+    return box_make(module, refusal, value, len, /*with=*/true);
+}
+
 void* box_create(const std::shared_ptr<BoxModule>& module, ZenByteSink refusal) {
+    return box_make(module, refusal, nullptr, 0, /*with=*/false);
+}
+
+ZenStatus box_describe_creation(const std::shared_ptr<BoxModule>& module, ZenByteSink sink) {
+    Box probe;
+    probe.module = module;
+    std::string why;
+    ZenStatus st = ZEN_ERR;
+    if (instantiate(probe, why)) {
+        if (!probe.fn.creation) {
+            st = ZEN_OK; // a module built before the creation value is made with none
+        } else {
+            refuel(probe);
+            probe.sink = sink;
+            wasmtime_val_t a = i32v(0);
+            wasmtime_val_t r;
+            if (call(probe.cx, probe.fn.describe_creation, &a, 1, &r, 1, why)) {
+                st = r.of.i32;
+            }
+            probe.sink = ZenByteSink{};
+        }
+    }
+    drop_store(probe);
+    return st;
+}
+
+void* box_make(const std::shared_ptr<BoxModule>& module, ZenByteSink refusal,
+               const std::uint8_t* value, std::size_t len, bool with) {
     auto b = std::make_unique<Box>();
     b->module = module;
+    if (with) {
+        b->made = true;
+        b->made_with.assign(reinterpret_cast<const char*>(value), len);
+    }
     std::string why;
     std::string words;
-    bool made = instantiate(*b, why) && make_weave(*b, ZenByteSink{&words, &str_write}, why);
+    bool made = instantiate(*b, why);
+    if (made && with && !b->fn.creation) {
+        why = "the module was built before a weave could be made with a value";
+        made = false;
+    }
+    made = made && make_weave(*b, ZenByteSink{&words, &str_write}, why);
     if (made) {
         b->max_reloads = max_reloads_of(*b, why);
         if (!why.empty()) {

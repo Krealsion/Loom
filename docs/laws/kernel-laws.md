@@ -90,7 +90,11 @@ MEANS
 - out-of-process children get null capability doors and fail closed rather
   than pretending;
 - a weave that refuses its making is refused at load, and at a replacement, in the words it
-  wrote, kept to `kMaxMakingWordsBytes`; one that wrote none, as making nothing.
+  wrote, kept to `kMaxMakingWordsBytes`; one that wrote none, as making nothing;
+- a weave is made with one value, or none: the value its load names, admitted by the gate against
+  the shape the image declares before any of the weave's code runs, and a value, never a door; a
+  value the shape does not admit, a value for a weave made with none and none for a weave made
+  with one each refuse the load with nothing made.
 
 DOES NOT MEAN
 - that a version number is observable *within* one self-consistent build — it
@@ -101,7 +105,9 @@ PROVEN BY — the descriptor's reading (`zen/kernel/descriptor.hpp`); suite `sea
 read as far as its size, a host door past the table's size never called, each refusal by what an
 image needs, the ABI 12 image at load and at reload, an image saying smaller tables loading and
 working); suite `kernel` (stale-ABI case, the refused making's cases); suite `box` (a module
-refused by its version); suite `isolation` (an isolated weave whose making is refused).
+refused by its version); suite `isolation` (an isolated weave whose making is refused, and one
+made with its value); suite `creation` (the value through each door, its refusals, a reload and a
+candidate, the v13 image made with none).
 
 ## KERN-05 — A weave's statics live and die with it, and its C++ runtime is its own
 

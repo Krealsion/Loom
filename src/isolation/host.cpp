@@ -79,7 +79,7 @@ bool wait_for_hello(Channel& ch, Incoming& out, int timeout_ms) {
     for (;;) {
         ch.poll(frames);
         for (auto& f : frames) {
-            if (f.op == Op::Hello || f.op == Op::Refused) {
+            if (f.op == Op::Hello || f.op == Op::Refused || f.op == Op::Creation) {
                 out = std::move(f);
                 return true;
             }
@@ -524,6 +524,33 @@ bool IsolationHost::spawn_and_handshake(Link& link, std::string* manifest, std::
         return false; // caller tears down
     }
 
+    if (hello.op == Op::Creation) {
+        // THE CHILD SAYS WHAT IT IS MADE WITH before it is made, and is made with what this
+        // host admits against that, or not at all.
+        Cursor said(hello.payload);
+        std::string_view declared;
+        if (!said.bytes(declared)) {
+            error = "malformed Creation frame";
+            return false;
+        }
+        std::optional<Value> admitted;
+        if (!judge_creation(declared, link.creation, admitted, error)) {
+            return false; // caller tears down
+        }
+        std::string make;
+        put_u8(make, admitted ? 1 : 0);
+        put_bytes(make, admitted ? serialize(*admitted) : std::string{});
+        link.channel->queue(Op::Make, make);
+        link.channel->flush();
+        if (admitted) {
+            link.creation = Creation::of(*admitted);
+        }
+        if (!wait_for_hello(*link.channel, hello, kHandshakeTimeoutMs) || hello.op == Op::Creation) {
+            error = "child did not complete the handshake";
+            return false;
+        }
+    }
+
     if (hello.op == Op::Refused) {
         // THE WEAVE REFUSED ITS MAKING, and the child said why before it exited.
         Cursor said(hello.payload);
@@ -769,12 +796,19 @@ OutOfProcessResult IsolationHost::mount(const std::string& name, const std::stri
 OutOfProcessResult IsolationHost::mount(const std::string& name, const std::string& so_path,
                                         loom::Grant grant,
                                         const std::vector<std::string>& roles) {
+    return mount(name, so_path, std::move(grant), roles, Creation{});
+}
+
+OutOfProcessResult IsolationHost::mount(const std::string& name, const std::string& so_path,
+                                        loom::Grant grant, const std::vector<std::string>& roles,
+                                        const Creation& creation) {
     if (links_.count(name) != 0) {
         return {false, {}, "already mounted: " + name};
     }
     auto link = std::make_unique<Link>();
     link->name = name;
     link->so_path = so_path;
+    link->creation = creation;
 
     // Resolve each OS capability from the grant and what this host can enforce, recording an
     // outcome per capability. The default grant withholds Network, so the default is a
