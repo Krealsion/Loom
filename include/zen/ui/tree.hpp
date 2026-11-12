@@ -33,9 +33,6 @@ enum class WidgetKind : std::uint8_t { VStack, HStack, Region, List, Log, Text, 
 /// Stable spelling of a widget kind — the vocabulary's public contract (it is the wire spelling
 /// a serialized component carries; see component.hpp). Do not rename these.
 const char* name_of(WidgetKind k) noexcept;
-/// Parse a stable spelling back to its kind; nullopt for an unknown spelling (the decode path
-/// REFUSES unknown kinds — there is no silent-blank fate from the wire).
-std::optional<WidgetKind> widget_kind_from(std::string_view spelling) noexcept;
 
 /// Cross-cutting overflow POLICY (how content exceeding its area behaves), resolved per-renderer
 /// in that medium's own units (rows for the terminal, pixels for a GUI). It is a policy, NEVER a
@@ -44,8 +41,6 @@ enum class Overflow : std::uint8_t { Grow, Scroll, Wrap, Truncate };
 
 /// Stable spelling of an overflow policy (the wire spelling; see component.hpp).
 const char* name_of(Overflow o) noexcept;
-/// Parse a stable spelling back to its policy; nullopt for an unknown spelling.
-std::optional<Overflow> overflow_from(std::string_view spelling) noexcept;
 
 /// One node of the widget tree: a copyable value with a defaulted, deep ==, so a whole tree is
 /// one value, compared in tests and diffed by region for partial redraw. Build it only through

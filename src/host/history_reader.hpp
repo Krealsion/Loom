@@ -102,40 +102,37 @@ public:
         }
         const HistoryRecord& parent = *p.record;
         row.parent_shape = parent.shape;
-        row.crossing = parent.shape == link::Crossed::zen_name && parent.sender == parent.target &&
-                       links_.count(parent.sender.value) != 0;
-        if (!row.crossing) {
+        const bool crossing = parent.shape == link::Crossed::zen_name &&
+                              parent.sender == parent.target &&
+                              links_.count(parent.sender.value) != 0;
+        if (!crossing) {
             return row;
         }
         const PayloadLookup bytes = recorder_->payload(parent.record_seq);
-        row.crossing_payload = payload_word(bytes.state);
         if (bytes.state != PayloadState::Retained) {
+            row.crossing.is = session::CrossingUnread{payload_word(bytes.state)};
             return row;
         }
         Admission a = admit(loom::parse(bytes.bytes), schema_of<link::Crossed>());
         if (!a.ok()) {
-            row.crossing_payload = "unreadable";
+            row.crossing.is = session::CrossingUnread{"unreadable"};
             return row;
         }
-        const Value& v = a.value();
-        const auto text = [&v](const char* f) {
-            const Cell* c = v.get(f);
-            return c != nullptr ? c->as_text() : std::string();
-        };
-        const auto number = [&v](const char* f) {
-            const Cell* c = v.get(f);
-            return c != nullptr ? c->as_int() : std::int64_t{0};
-        };
-        row.link = text("link");
-        row.epoch = number("epoch");
-        row.far_session = number("session");
-        row.established = text("established");
-        row.kind = text("kind");
-        row.attempt = number("attempt");
-        row.far_sender = number("far_sender");
-        row.far_role = text("far_role");
-        row.far_shape = text("shape");
-        row.far_version = number("version");
+        const link::Crossed x = from_value<link::Crossed>(a.value());
+        session::CrossingRead read;
+        read.link = x.link;
+        read.epoch = x.epoch;
+        read.far_session = x.session;
+        read.established = x.established;
+        read.kind = schema_of<link::Frame>()->fields()[x.frame()].name;
+        read.attempt = x.attempt();
+        if (const link::FarWord* w = x.word()) {
+            read.far_sender = w->far_sender;
+            read.far_role = w->far_role;
+            read.far_shape = w->shape;
+            read.far_version = w->version;
+        }
+        row.crossing.is = std::move(read);
         return row;
     }
 

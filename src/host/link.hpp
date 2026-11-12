@@ -146,30 +146,35 @@ public:
                 end_session("denied: " + e.reason);
                 break;
             case BridgeEvent::Kind::Delivered: {
-                link::Crossed x = record(e.dispatch_refused ? link::kCrossedDispatchRefused
-                                         : e.answers_ask    ? link::kCrossedAnswer
-                                                            : link::kCrossedMessage);
-                x.attempt = static_cast<std::int64_t>(e.correlation);
-                x.far_sender = static_cast<std::int64_t>(e.sender);
-                x.far_role = e.authored_role;
+                link::FarWord w;
+                w.attempt = static_cast<std::int64_t>(e.correlation);
+                w.far_sender = static_cast<std::int64_t>(e.sender);
+                w.far_role = e.authored_role;
                 loom::Unverified u = loom::parse(e.payload);
-                x.shape = u.claimed_name();
-                x.version = static_cast<std::int64_t>(u.claimed_version());
-                x.payload.assign(e.payload.begin(), e.payload.end());
-                tell_self(std::move(x));
+                w.shape = u.claimed_name();
+                w.version = static_cast<std::int64_t>(u.claimed_version());
+                w.payload.assign(e.payload.begin(), e.payload.end());
+                link::Frame f;
+                if (e.dispatch_refused) {
+                    f.is.emplace<link::kFrameDispatchRefused>(std::move(w));
+                } else if (e.answers_ask) {
+                    f.is.emplace<link::kFrameAnswer>(std::move(w));
+                } else {
+                    f.is.emplace<link::kFrameMessage>(std::move(w));
+                }
+                tell_self(record(std::move(f)));
                 break;
             }
             case BridgeEvent::Kind::SendRefused: {
-                link::Crossed x = record(link::kCrossedSendRefused);
-                x.attempt = static_cast<std::int64_t>(e.correlation);
-                x.reason = e.reason;
-                tell_self(std::move(x));
+                link::Frame f;
+                f.is = link::SendRefused{static_cast<std::int64_t>(e.correlation), e.reason};
+                tell_self(record(std::move(f)));
                 break;
             }
             case BridgeEvent::Kind::Settled: {
-                link::Crossed x = record(link::kCrossedSettled);
-                x.attempt = static_cast<std::int64_t>(e.correlation);
-                tell_self(std::move(x));
+                link::Frame f;
+                f.is = link::Settled{static_cast<std::int64_t>(e.correlation)};
+                tell_self(record(std::move(f)));
                 break;
             }
             case BridgeEvent::Kind::Disconnected:
@@ -339,13 +344,13 @@ public:
             ++state_.ignored; // somebody else's account of a crossing is not the link's
             return;
         }
-        if (x.kind == link::kCrossedMessage && observation(x.shape)) {
+        if (x.frame() == link::kFrameMessage && observation(x.word()->shape)) {
             observed(x);
             return;
         }
-        if (x.kind == link::kCrossedEnded) {
+        if (const auto* ended = std::get_if<link::SessionEnded>(&x.what.is)) {
             const std::uint64_t epoch = static_cast<std::uint64_t>(x.epoch);
-            end_watches(epoch, x.session, x.reason);
+            end_watches(epoch, x.session, ended->reason);
             for (std::size_t i = 0; i < open_.size();) {
                 if (open_[i].epoch != epoch) {
                     ++i;
@@ -355,8 +360,8 @@ public:
                     open_[i].held.has_value() || open_[i].held_outcome.has_value()
                         ? "the far owner had answered, but the session ended before the far host "
                           "said what the ask set in motion had settled; the answer is in this "
-                          "host's history: " + x.reason
-                        : x.reason;
+                          "host's history: " + ended->reason
+                        : ended->reason;
                 finish_with(i, outcome_of(link::kOutcomeLost, why, open_[i].shape,
                                           open_[i].version,
                                           static_cast<std::int64_t>(open_[i].attempt)),
@@ -367,24 +372,24 @@ public:
         if (released(x)) {
             return; // the far relay's word about a release this link asked for its gone asker
         }
-        const std::size_t i = find(static_cast<std::uint64_t>(x.attempt),
+        const std::size_t i = find(static_cast<std::uint64_t>(x.attempt()),
                                    static_cast<std::uint64_t>(x.epoch));
         if (i == open_.size()) {
             ++state_.ignored; // late, duplicate, from an ended session, or never ours
             return;
         }
         Crossing& c = open_[i];
-        if (x.kind == link::kCrossedMessage) {
+        if (x.frame() == link::kFrameMessage) {
             ++state_.ignored; // ordinary far speech is not the answer, whatever it names
             return;
         }
-        if (x.kind == link::kCrossedSendRefused) {
-            finish_with(i, outcome_of(link::kOutcomeRefused, x.reason, c.shape, c.version,
-                                      x.attempt),
+        if (const auto* refused = std::get_if<link::SendRefused>(&x.what.is)) {
+            finish_with(i, outcome_of(link::kOutcomeRefused, refused->reason, c.shape, c.version,
+                                      x.attempt()),
                         mail);
             return;
         }
-        if (x.kind == link::kCrossedSettled) {
+        if (x.frame() == link::kFrameSettled) {
             c.settled = true;
             complete_if_ready(i, mail);
             return;
@@ -393,25 +398,26 @@ public:
             ++state_.ignored; // one answer per crossing: a second attested word is not another
             return;
         }
-        if (x.kind == link::kCrossedDispatchRefused) {
+        if (x.frame() == link::kFrameDispatchRefused) {
             c.held_outcome = outcome_of(link::kOutcomeDispatchRefused,
-                                        refusal_reason(x.payload), c.shape, c.version, x.attempt);
+                                        refusal_reason(x.word()->payload), c.shape, c.version,
+                                        x.attempt());
             complete_if_ready(i, mail);
             return;
         }
-        if (x.kind != link::kCrossedAnswer) {
+        if (x.frame() != link::kFrameAnswer) {
             ++state_.ignored;
             return;
         }
         // THE FAR OWNER'S ANSWER, RE-ADMITTED THROUGH THIS BUS'S GATE: only against a shape this
         // bus knows (the asker declared it), and never in the link's own vocabulary.
         loom::Unverified u = loom::parse(std::string_view(
-            reinterpret_cast<const char*>(x.payload.data()), x.payload.size()));
+            reinterpret_cast<const char*>(x.word()->payload.data()), x.word()->payload.size()));
         if (u.claimed_name().rfind("loom.link.", 0) == 0) {
             c.held_outcome = outcome_of(link::kOutcomeRefused,
                                         "the far host answered with " + u.claimed_name() +
                                             ", which is this link's own vocabulary",
-                                        c.shape, c.version, x.attempt);
+                                        c.shape, c.version, x.attempt());
             complete_if_ready(i, mail);
             return;
         }
@@ -422,7 +428,7 @@ public:
                 link::kOutcomeRefused,
                 "the far host answered with " + u.claimed_name() + " v" +
                     std::to_string(u.claimed_version()) + ", a shape nothing here declares",
-                c.shape, c.version, x.attempt);
+                c.shape, c.version, x.attempt());
             complete_if_ready(i, mail);
             return;
         }
@@ -431,7 +437,7 @@ public:
             c.held_outcome = outcome_of(link::kOutcomeRefused,
                                         "the far host's answer did not pass this bus's gate: " +
                                             a.first_error().message(),
-                                        c.shape, c.version, x.attempt);
+                                        c.shape, c.version, x.attempt());
             complete_if_ready(i, mail);
             return;
         }
@@ -526,14 +532,14 @@ private:
         return reason;
     }
 
-    /// A `Crossed` for the session as it stands now.
-    link::Crossed record(const char* kind) const {
+    /// A `Crossed` of one frame, for the session as it stands now.
+    link::Crossed record(link::Frame what) const {
         link::Crossed x;
         x.link = name_;
         x.epoch = static_cast<std::int64_t>(epoch_);
         x.session = static_cast<std::int64_t>(session());
         x.established = established_name();
-        x.kind = kind;
+        x.what = std::move(what);
         return x;
     }
 
@@ -560,9 +566,9 @@ private:
         if (!any) {
             return;
         }
-        link::Crossed x = record(link::kCrossedEnded);
-        x.reason = why;
-        tell_self(std::move(x));
+        link::Frame f;
+        f.is = link::SessionEnded{why};
+        tell_self(record(std::move(f)));
     }
 
     std::size_t find(std::uint64_t attempt, std::uint64_t epoch) const {
@@ -645,7 +651,7 @@ private:
             w.subscription = sub->as_int();
             w.relay = relay->as_text();
             w.epoch = c.epoch;
-            w.far_sender = x.far_sender;
+            w.far_sender = x.word() != nullptr ? x.word()->far_sender : 0;
             w.subscriber = c.asker;
             watches_.push_back(std::move(w));
         } else if (name == observe::Ended::zen_name) {
@@ -746,15 +752,15 @@ private:
     bool released(const link::Crossed& x) {
         for (Watch& w : watches_) {
             if (!w.retiring || w.release == 0 ||
-                w.release != static_cast<std::uint64_t>(x.attempt) ||
+                w.release != static_cast<std::uint64_t>(x.attempt()) ||
                 w.epoch != static_cast<std::uint64_t>(x.epoch)) {
                 continue;
             }
-            if (x.kind == link::kCrossedAnswer) {
+            if (x.frame() == link::kFrameAnswer) {
                 unwatch(&w);
                 return true;
             }
-            if (x.kind == link::kCrossedSendRefused || x.kind == link::kCrossedDispatchRefused) {
+            if (x.frame() == link::kFrameSendRefused || x.frame() == link::kFrameDispatchRefused) {
                 w.release = 0;
                 return true;
             }
@@ -768,7 +774,7 @@ private:
     /// link holds, is heard.
     void observed(const link::Crossed& x) {
         loom::Unverified u = loom::parse(std::string_view(
-            reinterpret_cast<const char*>(x.payload.data()), x.payload.size()));
+            reinterpret_cast<const char*>(x.word()->payload.data()), x.word()->payload.size()));
         std::shared_ptr<const Schema> door =
             bus_->resolve_schema(u.claimed_name(), u.claimed_version());
         if (!door) {
@@ -789,7 +795,7 @@ private:
                        ? watch_for(sub->as_int(), relay->as_text(),
                                    static_cast<std::uint64_t>(x.epoch))
                        : nullptr;
-        if (w == nullptr || w->far_sender != x.far_sender) {
+        if (w == nullptr || w->far_sender != x.word()->far_sender) {
             ++state_.ignored; // not a subscription this link holds, or not its relay speaking
             ++strays_;
             return;

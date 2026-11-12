@@ -747,9 +747,10 @@ confirmed.
 
 **What the history keeps of a crossing.** Every frame the far host ships to the link's session
 becomes a `loom.link.Crossed` record the link says to itself before it acts on it: the far
-session and the name the far host established, the far bus's stamp and role, the crossing's
-attempt, what kind of frame it was (`answer`, `dispatch-refused`, `message`, `send-refused`,
-`settled`, `ended`) and the bytes. Your Recorder and Logger hold it as the ordinary delivery it
+session and the name the far host established, and the one frame it was — `answer`,
+`dispatch-refused` or `message` (each with the far bus's stamp and role, the crossing's attempt
+and the bytes), `send-refused` (its attempt and the far host's sentence), `settled` (its attempt)
+or `ended` (why). Your Recorder and Logger hold it as the ordinary delivery it
 is — the link's account of what arrived, never an observation of the far execution — and the
 answer the link then hands your weave names that record as its dispatch parent.
 

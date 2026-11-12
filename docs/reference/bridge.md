@@ -211,8 +211,10 @@ reply can reach, so equal correlations from separate askers, replies in any
 order, duplicates and late words from an ended session each land where they
 belong or nowhere. With `settle` the answer is held until the far host's
 `Settled`. Every far frame becomes a `loom.link.Crossed` record the link says
-to itself — far session and established name, far stamp and role, attempt,
-kind, bytes — which is how the host's history holds the crossing, and what the
+to itself — the far session and established name, and exactly one frame (a
+union): an answer, a dispatch refusal or a message, each with the far stamp and
+role, attempt and bytes; a send refusal with its reason; a settlement; or the
+session's end — which is how the host's history holds the crossing, and what the
 link acts on (only its own record acts). The supplied host mounts one such link
 per `links` row of its boot plan
 ([running-loom § 10](../guides/running-loom.md#10-link-to-another-host)).
