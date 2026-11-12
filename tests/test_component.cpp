@@ -65,15 +65,15 @@ Widget task_card_tree() {
 // children by the arity rule; a stack may carry any — hostile child wiring uses stacks.
 UiNode leaf_node(std::string content) {
     UiNode n;
-    n.kind = "Text";
+    n.kind = WidgetKind::Text;
     n.content = std::move(content);
-    n.overflow = "Grow";
+    n.overflow = Overflow::Grow;
     return n;
 }
 UiNode stack_node() {
     UiNode n;
-    n.kind = "VStack";
-    n.overflow = "Grow";
+    n.kind = WidgetKind::VStack;
+    n.overflow = Overflow::Grow;
     return n;
 }
 
@@ -124,9 +124,21 @@ struct CaptureBackend final : loom::TerminalBackend {
 TEST_SUITE("component") {
 
 TEST_CASE("the zen.ui.* schemas are byte-identical to hand-built twins (same door, same content-id)") {
-    // zen.ui.Node — the flat wire node. Field order is the frozen v1 contract.
-    const auto hand_node = loom::SchemaBuilder("zen.ui.Node", 1)
-                               .field("kind", loom::Kind::Text)
+    // zen.ui.Node — the flat wire node, its kind and overflow policy two enumerations whose
+    // cases are the enumerators' spellings, in declared order.
+    const auto hand_kind = loom::make_union(
+        "WidgetKind", 1,
+        {loom::case_bare("VStack"), loom::case_bare("HStack"), loom::case_bare("Region"),
+         loom::case_bare("List"), loom::case_bare("Log"), loom::case_bare("Text"),
+         loom::case_bare("Field"), loom::case_bare("Slot")});
+    const auto hand_overflow = loom::make_union(
+        "Overflow", 1,
+        {loom::case_bare("Grow"), loom::case_bare("Scroll"), loom::case_bare("Wrap"),
+         loom::case_bare("Truncate")});
+    CHECK(loom::schema_of<WidgetKind>()->content_id() == hand_kind->content_id());
+    CHECK(loom::schema_of<Overflow>()->content_id() == hand_overflow->content_id());
+    const auto hand_node = loom::SchemaBuilder("zen.ui.Node", 2)
+                               .message("kind", hand_kind)
                                .field("region_id", loom::Kind::Text)
                                .field("title", loom::Kind::Text)
                                .field("content", loom::Kind::Text)
@@ -140,7 +152,7 @@ TEST_CASE("the zen.ui.* schemas are byte-identical to hand-built twins (same doo
                                .field("reorderable", loom::Kind::Bool)
                                .field("focused", loom::Kind::Bool)
                                .field("weight", loom::Kind::Int)
-                               .field("overflow", loom::Kind::Text)
+                               .message("overflow", hand_overflow)
                                .field("from_field", loom::Kind::Text)
                                .field("route_to", loom::Kind::Text)
                                .field("slot_name", loom::Kind::Text)
@@ -150,7 +162,7 @@ TEST_CASE("the zen.ui.* schemas are byte-identical to hand-built twins (same doo
     CHECK(loom::schema_of<UiNode>()->content_id() == hand_node->content_id());
 
     // zen.ui.Component — the schematic: identity/address, contract, the flat tree.
-    const auto hand_component = loom::SchemaBuilder("zen.ui.Component", 1)
+    const auto hand_component = loom::SchemaBuilder("zen.ui.Component", 2)
                                     .field("name", loom::Kind::Text)
                                     .field("contract_name", loom::Kind::Text)
                                     .field("contract_version", loom::Kind::Int)
@@ -164,6 +176,36 @@ TEST_CASE("the zen.ui.* schemas are byte-identical to hand-built twins (same doo
                                     .field("source_role", loom::Kind::Text)
                                     .build();
     CHECK(loom::schema_of<UiPresenter>()->content_id() == hand_presenter->content_id());
+}
+
+TEST_CASE("a kind or a policy no case names is refused at the gate, before tree_of sees it") {
+    UiComponent c;
+    c.name = "card";
+    UiNode n;
+    n.kind = WidgetKind::Text;
+    c.nodes.push_back(n);
+    std::string text = loom::compat::serialize(loom::to_value(c));
+    const std::string said = "\"kind\":\"Text\"";
+    REQUIRE(text.find(said) != std::string::npos);
+    text.replace(text.find(said), said.size(), "\"kind\":\"Blob\"");
+    const loom::Admission a =
+        loom::admit(loom::compat::parse(text), loom::schema_of<UiComponent>());
+    REQUIRE_FALSE(a.ok());
+    CHECK(a.first_error().kind == loom::ErrorKind::UnknownField);
+    CHECK(a.first_error().path == "nodes[0].kind.Blob");
+    // A node built in memory holding a value no enumerator names cannot be written at all, and
+    // tree_of refuses it with its reason.
+    UiComponent kind_off = c;
+    kind_off.nodes[0].kind = static_cast<WidgetKind>(200);
+    CHECK_THROWS_AS(loom::serialize(loom::to_value(kind_off)), std::invalid_argument);
+    TreeResult r = tree_of(kind_off);
+    CHECK_FALSE(r.root.has_value());
+    CHECK(r.error.find("a kind no widget has") != std::string::npos);
+    UiComponent policy_off = c;
+    policy_off.nodes[0].overflow = static_cast<Overflow>(200);
+    r = tree_of(policy_off);
+    CHECK_FALSE(r.root.has_value());
+    CHECK(r.error.find("an overflow policy that is none of them") != std::string::npos);
 }
 
 TEST_CASE("a schematic is data: a component round-trips through the gate and rebuilds the identical tree") {
@@ -298,16 +340,6 @@ TEST_CASE("EVERY malformed-frame class passes the real gate and is refused by tr
         c.nodes[1].children.push_back(0);
         expect = "reached twice";
     }
-    SUBCASE("an unknown kind spelling") {
-        c.nodes.push_back(leaf_node("root"));
-        c.nodes[0].kind = "Blob";
-        expect = "unknown kind 'Blob'";
-    }
-    SUBCASE("an unknown overflow spelling") {
-        c.nodes.push_back(leaf_node("root"));
-        c.nodes[0].overflow = "Explode";
-        expect = "unknown overflow 'Explode'";
-    }
     SUBCASE("selected_index below -1") {
         c.nodes.push_back(leaf_node("root"));
         c.nodes[0].selected_index = -5;
@@ -330,9 +362,9 @@ TEST_CASE("EVERY malformed-frame class passes the real gate and is refused by tr
     }
     SUBCASE("a Region wrapping two children (the TUI draws one, the outline both — refused)") {
         UiNode r;
-        r.kind = "Region";
+        r.kind = WidgetKind::Region;
         r.title = "R";
-        r.overflow = "Grow";
+        r.overflow = Overflow::Grow;
         r.children.push_back(1);
         r.children.push_back(2);
         c.nodes.push_back(r);
@@ -342,9 +374,9 @@ TEST_CASE("EVERY malformed-frame class passes the real gate and is refused by tr
     }
     SUBCASE("a Region wrapping nothing") {
         UiNode r;
-        r.kind = "Region";
+        r.kind = WidgetKind::Region;
         r.title = "R";
-        r.overflow = "Grow";
+        r.overflow = Overflow::Grow;
         c.nodes.push_back(r);
         expect = "exactly one child";
     }

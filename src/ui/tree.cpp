@@ -121,17 +121,6 @@ const char* name_of(WidgetKind k) noexcept {
     return "?";
 }
 
-std::optional<WidgetKind> widget_kind_from(std::string_view spelling) noexcept {
-    for (WidgetKind k : {WidgetKind::VStack, WidgetKind::HStack, WidgetKind::Region,
-                         WidgetKind::List, WidgetKind::Log, WidgetKind::Text, WidgetKind::Field,
-                         WidgetKind::Slot}) {
-        if (spelling == name_of(k)) {
-            return k;
-        }
-    }
-    return std::nullopt;
-}
-
 const char* name_of(Overflow o) noexcept {
     switch (o) {
     case Overflow::Grow:
@@ -144,15 +133,6 @@ const char* name_of(Overflow o) noexcept {
         return "Truncate";
     } // no default (exhaustive by -Wswitch under -Werror)
     return "?";
-}
-
-std::optional<Overflow> overflow_from(std::string_view spelling) noexcept {
-    for (Overflow o : {Overflow::Grow, Overflow::Scroll, Overflow::Wrap, Overflow::Truncate}) {
-        if (spelling == name_of(o)) {
-            return o;
-        }
-    }
-    return std::nullopt;
 }
 
 // ---- The headless outline renderer ----

@@ -27,12 +27,16 @@ namespace loom {
 // ---- The wire shapes: registered by hand, like the standard reply shapes, so their names carry
 // ---- the "zen." prefix a macro-declared struct cannot have -----------------------------------
 
+// A widget's kind and its overflow policy cross the wire as enumerations, their cases the
+// enumerators' own spellings (name_of): the gate refuses a kind or a policy no case names.
+ZEN_ENUM(WidgetKind, 1, VStack, HStack, Region, List, Log, Text, Field, Slot);
+ZEN_ENUM(Overflow, 1, Grow, Scroll, Wrap, Truncate);
+
 /// One tree node, flat on the wire: a schema cannot contain itself, so a component carries a
 /// flat node list whose `children` are indices into it (node 0 is the root). Otherwise it is
-/// field-for-field `loom::Widget`, with enums as their spellings and integers as Int, both
-/// checked back by tree_of().
+/// field-for-field `loom::Widget`, its integers as Int, checked back by tree_of().
 struct UiNode {
-    std::string kind;                   ///< name_of(WidgetKind) spelling
+    WidgetKind kind = WidgetKind::Text;
     std::string region_id;
     std::string title;
     std::string content;                ///< Text body / design-time placeholder
@@ -47,7 +51,7 @@ struct UiNode {
     bool focused = false;               ///< the focus MARKER (live trees carry it; schematics
                                         ///< conventionally default it)
     std::int64_t weight = 0;            ///< relative grow hint [0, 65535]; never a size
-    std::string overflow;               ///< name_of(Overflow) spelling — a policy, never a size
+    Overflow overflow = Overflow::Grow; ///< a policy, never a size
     std::string from_field;             ///< data binding: contract field feeding this node
     std::string route_to;               ///< navigation intent: a view address ("" = none)
     std::string slot_name;              ///< Slot: the open hole's name
@@ -56,7 +60,7 @@ struct UiNode {
 
     using ZenSelf = UiNode;
     static constexpr const char* zen_name = "zen.ui.Node";
-    static constexpr std::uint32_t zen_version = 1;
+    static constexpr std::uint32_t zen_version = 2;
     static auto zen_fields() {
         return std::make_tuple(
             ZEN_FIELD(kind), ZEN_FIELD(region_id), ZEN_FIELD(title), ZEN_FIELD(content),
@@ -91,7 +95,7 @@ struct UiComponent {
 
     using ZenSelf = UiComponent;
     static constexpr const char* zen_name = "zen.ui.Component";
-    static constexpr std::uint32_t zen_version = 1;
+    static constexpr std::uint32_t zen_version = 2;
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(name), ZEN_FIELD(contract_name),
                                ZEN_FIELD(contract_version), ZEN_FIELD(nodes));

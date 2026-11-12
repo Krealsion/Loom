@@ -27,7 +27,7 @@ namespace {
 
 UiNode node_of(const Widget& w) {
     UiNode n;
-    n.kind = name_of(w.kind);
+    n.kind = w.kind;
     n.region_id = w.region_id;
     n.title = w.title;
     n.content = w.content;
@@ -41,7 +41,7 @@ UiNode node_of(const Widget& w) {
     n.reorderable = w.reorderable;
     n.focused = w.focused;
     n.weight = w.weight;
-    n.overflow = name_of(w.overflow);
+    n.overflow = w.overflow;
     n.from_field = w.from_field;
     n.route_to = w.route_to;
     n.slot_name = w.slot_name;
@@ -103,14 +103,16 @@ bool build_node(const std::vector<UiNode>& nodes, std::size_t index, int depth,
     visited[index] = true;
     const UiNode& n = nodes[index];
 
-    const std::optional<WidgetKind> kind = widget_kind_from(n.kind);
-    if (!kind) {
-        error = at(index) + ": unknown kind '" + n.kind + "'";
+    // The wire's gate refuses a kind or a policy no case names; a node built in memory from a
+    // value no enumerator holds is refused here as well.
+    const WidgetKind kind = n.kind;
+    if (std::string_view(name_of(kind)) == "?") {
+        error = at(index) + ": a kind no widget has";
         return false;
     }
-    const std::optional<Overflow> overflow = overflow_from(n.overflow);
-    if (!overflow) {
-        error = at(index) + ": unknown overflow '" + n.overflow + "'";
+    const Overflow overflow = n.overflow;
+    if (std::string_view(name_of(overflow)) == "?") {
+        error = at(index) + ": an overflow policy that is none of them";
         return false;
     }
     if (n.selected_index < -1 || n.selected_index > INT_MAX) {
@@ -131,7 +133,7 @@ bool build_node(const std::vector<UiNode>& nodes, std::size_t index, int depth,
     // exactly the silent-fate class this decode layer exists to refuse. The honest constructors
     // cannot express these; the wire could.
     const std::size_t child_count = n.children.size();
-    switch (*kind) {
+    switch (kind) {
     case WidgetKind::Region:
         if (child_count != 1) {
             error = at(index) + ": a Region wraps exactly one child (got " +
@@ -144,7 +146,7 @@ bool build_node(const std::vector<UiNode>& nodes, std::size_t index, int depth,
     case WidgetKind::Text:
     case WidgetKind::Field:
         if (child_count != 0) {
-            error = at(index) + ": a " + std::string(name_of(*kind)) +
+            error = at(index) + ": a " + std::string(name_of(kind)) +
                     " carries no children (got " + std::to_string(child_count) + ")";
             return false;
         }
@@ -155,7 +157,7 @@ bool build_node(const std::vector<UiNode>& nodes, std::size_t index, int depth,
         break; // any arity: stacks arrange, a slot's children are its placeholder preview
     } // no default (exhaustive by -Wswitch under -Werror)
 
-    out.kind = *kind;
+    out.kind = kind;
     out.region_id = n.region_id;
     out.title = n.title;
     out.content = n.content;
@@ -169,7 +171,7 @@ bool build_node(const std::vector<UiNode>& nodes, std::size_t index, int depth,
     out.reorderable = n.reorderable;
     out.focused = n.focused;
     out.weight = static_cast<std::uint16_t>(n.weight);
-    out.overflow = *overflow;
+    out.overflow = overflow;
     out.from_field = n.from_field;
     out.route_to = n.route_to;
     out.slot_name = n.slot_name;
@@ -405,13 +407,13 @@ std::vector<std::string> check_bindings(const UiComponent& component, const Sche
                                            // component must not turn the checker quadratic
     for (std::size_t i = 0; i < component.nodes.size(); ++i) {
         const UiNode& n = component.nodes[i];
-        const std::optional<WidgetKind> kind = widget_kind_from(n.kind);
-        if (!kind) {
-            problems.push_back(at(i) + ": unknown kind '" + n.kind + "'");
+        const WidgetKind kind = n.kind;
+        if (std::string_view(name_of(kind)) == "?") {
+            problems.push_back(at(i) + ": a kind no widget has");
             continue;
         }
 
-        if (*kind == WidgetKind::Slot) {
+        if (kind == WidgetKind::Slot) {
             if (n.slot_accepts != "Component" && n.slot_accepts != "Route" &&
                 !scalar_kind_from(n.slot_accepts)) {
                 problems.push_back(at(i) + ": slot '" + n.slot_name + "' accepts '" +
@@ -444,15 +446,15 @@ std::vector<std::string> check_bindings(const UiComponent& component, const Sche
                                contract_label);
             continue;
         }
-        switch (*kind) {
+        switch (kind) {
         case WidgetKind::Text:
         case WidgetKind::Field:
             if (f->type.kind != Kind::Int && f->type.kind != Kind::Float &&
                 f->type.kind != Kind::Text && f->type.kind != Kind::Bool) {
                 problems.push_back(at(i) + ": '" + n.from_field + "' is a " +
                                    name_of(f->type.kind) + " field of " + contract_label +
-                                   " — a " + n.kind + " node displays a scalar "
-                                   "(Int/Float/Text/Bool)");
+                                   " — a " + name_of(n.kind) +
+                                   " node displays a scalar (Int/Float/Text/Bool)");
             }
             break;
         case WidgetKind::List:
@@ -460,7 +462,7 @@ std::vector<std::string> check_bindings(const UiComponent& component, const Sche
             if (f->type.kind != Kind::List) {
                 problems.push_back(at(i) + ": '" + n.from_field + "' is a " +
                                    name_of(f->type.kind) + " field of " + contract_label +
-                                   " — a " + n.kind + " node binds a List field");
+                                   " — a " + name_of(n.kind) + " node binds a List field");
             } else if (f->type.element == nullptr ||
                        (f->type.element->kind != Kind::Int &&
                         f->type.element->kind != Kind::Float &&
@@ -478,7 +480,7 @@ std::vector<std::string> check_bindings(const UiComponent& component, const Sche
         case WidgetKind::HStack:
         case WidgetKind::Region:
         case WidgetKind::Slot:
-            problems.push_back(at(i) + ": a " + n.kind +
+            problems.push_back(at(i) + ": a " + name_of(n.kind) +
                                " node cannot bind data (from_field '" + n.from_field + "')");
             break;
         } // no default (exhaustive by -Wswitch under -Werror)
