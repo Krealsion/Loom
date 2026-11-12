@@ -112,7 +112,7 @@ inline Value encode_accepted_shapes(
 
 // ---- decode (the answer Value -> Schemas a stranger can inspect) -------------
 // Precondition: `answer` passed the gate against accepted_shapes_schema(). A mis-ordered closure
-// or a type nested past the codec's depth cap still throws, as decode_shape does.
+// or a type nested past the codec's depth cap still throws, as decode_schema does.
 
 /// Register the answer's closure into `deps`, in order: one forward pass, as for
 /// decode_referenced (schema_codec.hpp).
@@ -122,7 +122,7 @@ inline void decode_accepted_referenced(const Value& answer, Registry& deps) {
         return; // nothing nested, nothing to do
     }
     for (const Cell& c : refs->as_list()) {
-        deps.register_schema(decode_shape(*c.as_message(), deps));
+        deps.register_schema(decode_schema(*c.as_message(), deps));
     }
 }
 
@@ -135,7 +135,7 @@ inline std::vector<std::shared_ptr<const Schema>> decode_accepted_roots(const Va
     const Cell::Array& roots = answer.get("accepted")->as_list();
     out.reserve(roots.size());
     for (const Cell& c : roots) {
-        out.push_back(decode_shape(*c.as_message(), deps));
+        out.push_back(decode_schema(*c.as_message(), deps));
     }
     return out;
 }

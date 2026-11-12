@@ -549,7 +549,7 @@ TEST_CASE("a shape's description says a union, its bare cases and an open field,
         Value desc = encode_shape(*s);
         Admission a = admit(parse(serialize(desc)), shape_desc_schema());
         REQUIRE(a.ok());
-        const auto rebuilt = decode_shape(a.value(), deps);
+        const auto rebuilt = decode_schema(a.value(), deps);
         CHECK(same_identity(*rebuilt, *s));
         deps.register_schema(rebuilt);
     }
@@ -592,7 +592,7 @@ TEST_CASE("a shape's description says a union, its bare cases and an open field,
     Registry fresh;
     decode_referenced(held.value(), fresh);
     CHECK(fresh.lookup("Moved", 1) != nullptr);
-    CHECK_THROWS_AS(decode_shape(own, fresh), std::runtime_error); // not a description at all
+    CHECK_THROWS_AS(decode_schema(own, fresh), std::runtime_error); // not a description at all
 }
 
 namespace {

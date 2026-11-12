@@ -353,7 +353,7 @@ inline TypeRef decode_type(const Cell::Array& tokens, std::size_t& i, const Regi
 }
 
 /// A record from its admitted description (`zen.SchemaDesc`).
-inline std::shared_ptr<const Schema> decode_schema(const Value& desc, const Registry& deps) {
+inline std::shared_ptr<const Schema> decode_record(const Value& desc, const Registry& deps) {
     std::string name = desc.get("name")->as_text();
     const auto version = static_cast<std::uint32_t>(desc.get("version")->as_int());
 
@@ -405,13 +405,14 @@ inline std::shared_ptr<const Schema> decode_union(const Value& desc, const Regis
     return make_union(std::move(name), version, std::move(rebuilt));
 }
 
-/// A shape from any admitted description, read by the description it claims: a `zen.ShapeDesc`
-/// (either form), a record's `zen.SchemaDesc` or a union's `zen.UnionDesc`. So a list of any of
-/// them -- a manifest's, a describe answer's, a list a consumer's own shape keeps -- reads alike.
-inline std::shared_ptr<const Schema> decode_shape(const Value& desc, const Registry& deps) {
+/// A shape from any admitted description, read by the description it claims: a record's
+/// `zen.SchemaDesc`, a union's `zen.UnionDesc`, or a `zen.ShapeDesc` holding either. So a list of
+/// any of them -- a manifest's, a describe answer's, a list a consumer's own shape keeps -- reads
+/// alike.
+inline std::shared_ptr<const Schema> decode_schema(const Value& desc, const Registry& deps) {
     const Schema& claimed = desc.schema();
     if (same_identity(claimed, *schema_desc_schema())) {
-        return decode_schema(desc, deps);
+        return decode_record(desc, deps);
     }
     if (same_identity(claimed, *union_desc_schema())) {
         return decode_union(desc, deps);
@@ -423,11 +424,11 @@ inline std::shared_ptr<const Schema> decode_shape(const Value& desc, const Regis
     if (const Cell* u = desc.get("union")) {
         return decode_union(*u->as_message(), deps);
     }
-    return decode_schema(*desc.get("record")->as_message(), deps);
+    return decode_record(*desc.get("record")->as_message(), deps);
 }
 
 /// Decode the optional `referenced` section of an admitted manifest, or of any value keeping one
-/// (a list of descriptions, `decode_shape`), into `deps`, in order; the
+/// (a list of descriptions, `decode_schema`), into `deps`, in order; the
 /// encoder's post-order makes one forward pass enough. Identical re-registration is a no-op, a
 /// conflicting one throws SchemaConflict, and a mis-ordered hand-built list fails its own
 /// resolution. This overload publishes for the Registry's whole lifetime; prefer the
@@ -438,7 +439,7 @@ inline void decode_referenced(const Value& manifest, Registry& deps) {
         return; // flat manifest: nothing nested, nothing to do
     }
     for (const Cell& c : refs->as_list()) {
-        deps.register_schema(decode_shape(*c.as_message(), deps));
+        deps.register_schema(decode_schema(*c.as_message(), deps));
     }
 }
 
@@ -454,7 +455,7 @@ inline void decode_referenced(const Value& manifest, Registry& deps, SchemaClaim
         return;
     }
     for (const Cell& c : refs->as_list()) {
-        deps.claim(scope, {decode_shape(*c.as_message(), deps)});
+        deps.claim(scope, {decode_schema(*c.as_message(), deps)});
     }
 }
 

@@ -107,18 +107,18 @@ inline Value encode_shapes(const std::vector<std::shared_ptr<const Schema>>& roo
 }
 
 /// The subscribed shapes, reconstructed from an admitted `loom.observe.Shapes` value; the closure
-/// is registered into `deps` first. Throws, as `decode_shape` does, on a descriptor it cannot
+/// is registered into `deps` first. Throws, as `decode_schema` does, on a descriptor it cannot
 /// rebuild.
 inline std::vector<std::shared_ptr<const Schema>> decode_shapes(const Value& v, Registry& deps) {
     if (const Cell* refs = v.get("referenced")) {
         for (const Cell& c : refs->as_list()) {
-            deps.register_schema(decode_shape(*c.as_message(), deps));
+            deps.register_schema(decode_schema(*c.as_message(), deps));
         }
     }
     std::vector<std::shared_ptr<const Schema>> out;
     if (const Cell* roots = v.get("shapes")) {
         for (const Cell& c : roots->as_list()) {
-            out.push_back(decode_shape(*c.as_message(), deps));
+            out.push_back(decode_schema(*c.as_message(), deps));
         }
     }
     return out;
