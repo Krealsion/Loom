@@ -45,6 +45,27 @@ void validate_typeref(const TypeRef& t) {
     }
 }
 
+// Whether a type can hold an open field's value: Any itself, a list of one, or a nested shape
+// that reaches one (known when that shape was built, so this is shallow).
+bool type_reaches_open(const TypeRef& t) noexcept {
+    switch (t.kind) {
+    case Kind::Any:
+        return true;
+    case Kind::List:
+        return type_reaches_open(*t.element);
+    case Kind::Message:
+    case Kind::Union:
+        return t.message->reaches_open();
+    case Kind::Int:
+    case Kind::Float:
+    case Kind::Text:
+    case Kind::Bool:
+    case Kind::Bytes:
+        return false;
+    }
+    return false;
+}
+
 // Fold a type's normalized structure into the running hash. Message types fold
 // in the *precomputed* content id of their nested schema, so identity is a
 // shallow, cheap recursion even for deep trees.
@@ -145,6 +166,9 @@ Schema::Schema(Form form, std::string name, std::uint32_t version, std::vector<F
             throw std::invalid_argument("case '" + f.name + "': a union's case is never optional");
         }
         validate_typeref(f.type);
+        if (f.carries && type_reaches_open(f.type)) {
+            reaches_open_ = true;
+        }
     }
     content_id_ = compute_content_id(form_, name_, version_, fields_);
 }

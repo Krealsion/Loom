@@ -165,6 +165,15 @@ TEST_CASE("the component closure walks a union's cases, and an open field names 
     out.clear();
     collect_referenced(*carry(), out);
     CHECK(out.empty());
+    // Whether a shape can hold an open field's value is known when it is built, however deep.
+    CHECK(carry()->reaches_open());
+    CHECK_FALSE(sample()->reaches_open());
+    const auto outer =
+        SchemaBuilder("Outer", 1).list("carried", type_message(carry()), /*required=*/false).build();
+    CHECK(outer->reaches_open());
+    CHECK(make_union("Either", 1, {case_of("c", type_message(outer)), case_bare("none")})
+              ->reaches_open());
+    CHECK_FALSE(make_union("Bare", 1, {case_bare("none")})->reaches_open());
 }
 
 // ---- the value --------------------------------------------------------------------------------

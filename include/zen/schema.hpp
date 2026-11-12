@@ -93,6 +93,9 @@ public:
     /// A record's fields, or a union's cases in declared order.
     const std::vector<Field>& fields() const noexcept { return fields_; }
     ContentId content_id() const noexcept { return content_id_; }
+    /// Whether a value of this shape can hold an open field's value (Kind::Any), in a field of its
+    /// own or of any shape it nests, however deep. Known when the schema is built.
+    bool reaches_open() const noexcept { return reaches_open_; }
 
     /// Field lookup by name, or nullptr if absent. Linear scan; field counts
     /// are small and this keeps the value model index-free.
@@ -113,6 +116,7 @@ private:
     Form form_ = Form::Record;
     std::vector<Field> fields_;
     ContentId content_id_;
+    bool reaches_open_ = false;
 };
 
 /// True iff the two schemas have the same form and the same fields, in the same order: each

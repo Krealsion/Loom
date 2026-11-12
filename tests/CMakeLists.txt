@@ -400,6 +400,13 @@ target_link_libraries(zen_test_dispatch PRIVATE loom zen-switchboard zen-warning
 loom_weave_build_contract(zen_test_dispatch)
 target_compile_definitions(zen-tests PRIVATE "ZEN_SO_DISPATCH=\"$<TARGET_FILE:zen_test_dispatch>\"")
 
+# A loaded reader of an open field: what it is handed is read against the shapes it declares.
+add_library(zen_test_open_reader SHARED weavelib/open_reader.cpp)
+target_link_libraries(zen_test_open_reader PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
+loom_weave_build_contract(zen_test_open_reader)
+target_compile_definitions(zen-tests PRIVATE
+    "ZEN_SO_OPEN_READER=\"$<TARGET_FILE:zen_test_open_reader>\"")
+
 # A library whose describe() hands the host's byte sink a length no string can hold: the host
 # refuses the load in its own words, and nothing it throws reaches the library's frames.
 add_library(zen_test_sink_overflow SHARED weavelib/sink_overflow.cpp)
@@ -481,7 +488,7 @@ set(ZEN_KERNEL_WEAVE_LIBS zen_test_weave zen_test_weave_b zen_test_weave_badsnap
     zen_test_weave_nest_mixed_rev zen_test_weave_nest_agree zen_test_weave_ping_drift
     zen_test_versioned_v1 zen_test_versioned_v2
     zen_test_handoff_v1 zen_test_handoff_v2 zen_test_handoff_migrator
-    zen_test_role_worker zen_test_dispatch zen_test_sink_overflow zen_test_joint
+    zen_test_role_worker zen_test_dispatch zen_test_open_reader zen_test_sink_overflow zen_test_joint
     zen_host_probe zen_host_probe_forge
     zen_test_contract_applied zen_test_contract_bypass zen_test_weave_asks)
 add_dependencies(zen-tests ${ZEN_KERNEL_WEAVE_LIBS})

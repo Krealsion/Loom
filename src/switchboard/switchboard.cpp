@@ -2417,7 +2417,7 @@ void Switchboard::deliver_one(Envelope env) {
         (author != nullptr && may_send(ev.schema_name, ev.schema_version));
     // A weave nests only a shape it may itself send, to this same destination: an Any field is
     // never a way around the send rule of the shape it holds.
-    if (permitted && env.gated) {
+    if (permitted && env.gated && env.msg.payload.schema().reaches_open()) {
         std::vector<const Schema*> nested;
         std::uint64_t visits = kMaxDecodedCells;
         open_shapes(env.msg.payload, nested, visits);
