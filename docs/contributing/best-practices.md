@@ -104,11 +104,11 @@ the entry `optional_member_types`.
 
 ## Messaging, dispatch and answers
 
-Laws MSG-01 to MSG-13 in [messaging](../laws/messaging-laws.md) and ANS-01 to ANS-07 in
+Laws MSG-01 to MSG-13 in [messaging](../laws/messaging-laws.md) and ANS-01 to ANS-08 in
 [answer authority](../laws/answer-authority-laws.md); reference
 [messaging](../reference/messaging.md); the suites `switchboard`, `provenance`,
-`role_authorship`, `ask_book`, `poke`, `describe` and `dispatch_refusal`, and `kernel` and
-`dispatch_loaded` where the kernel is built.
+`role_authorship`, `ask_book`, `poke`, `describe`, `dispatch_refusal` and `ask`, and `kernel`,
+`dispatch_loaded` and `ask_loaded` where the kernel is built.
 
 - **A host loop turns with `pump_pending()`**; the drain is unbounded by contract, and neither
   gains a cap or a synonym.
@@ -215,7 +215,7 @@ the suites `terminal`, `weaver`, `console`, `recorder`, `logger`, `sense` and `o
 - **A terminal session is an ordinary weave**, not a host and not root.
   [What it is, and what it is not](../reference/terminal.md#what-it-is-and-what-it-is-not)
 - **"Submitted" is what was authored, never a delivery.**
-  [Submitted, received, answered and dispatch refusal](../reference/terminal.md#submitted-received-answered-and-dispatch-refusal)
+  [Submitted, received, answered and dispatch refusal](../reference/terminal.md#submitted-received-answered-ended-and-dispatch-refusal)
 - **The Weaver changes authority and performs nothing**, and a grant is not a lease.
   [The flow](../reference/weaver.md#the-flow) and
   [a policy delegate's death does not revoke what it granted](../reference/known-seams.md#a-policy-delegates-death-does-not-revoke-what-it-granted)

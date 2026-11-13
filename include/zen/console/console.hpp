@@ -83,12 +83,13 @@ struct SendOutcome {
     std::string reason; ///< the gate's verdict / routing refusal, on refusal
 };
 
-/// Whether a send opens a conversation the console holds for its caller. `Untracked`: the
-/// message goes, nothing is held, and whatever comes back is the reply window's history.
-/// `Tracked`: the message goes and one slot of `kConsoleAskCapacity` is held until the caller
-/// takes the answer (`take_settled`) or forgets the conversation (`forget_ask`); a caller that
-/// never collects runs out of slots and is told so (`ask == 0`).
-enum class ConsoleTracking : std::uint8_t { Untracked, Tracked };
+/// Whether a send opens a conversation the console holds for its caller: `Untracked` holds
+/// nothing; `Tracked` holds one slot of `kConsoleAskCapacity` until the caller takes the answer
+/// or forgets it (an ordinary reply to `reply_to` settles it too); `Asked` holds it the same way
+/// and sends through the ask door, so an ending Loom tells is held as an answer is. Ask only a
+/// respondent that answers through Loom's answer right.
+/// docs/reference/messaging.md#asks-and-how-each-one-ends
+enum class ConsoleTracking : std::uint8_t { Untracked, Tracked, Asked };
 
 /// What submitting produced: the queued send and the conversation it opened. `ask` is the
 /// handle in the console's own ask book; it is 0 when the message could not be composed, when
@@ -120,6 +121,9 @@ struct BufferEntry {
     /// middleman relaying somebody else's answer (`loom::relay`) sends an ordinary message,
     /// so a true, correctly attributed answer can arrive with this false.
     bool answers_ask = false;
+    /// Did Loom attest this as the end of the ask, told because no answer will come
+    /// (`Provenance::ask_ended`, ANS-08)? The value is the `zen.AskEnded`.
+    bool ask_ended = false;
 };
 
 /// The result of running the assumption ladder AND gate-sending.

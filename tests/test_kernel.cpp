@@ -1976,12 +1976,12 @@ TEST_CASE("a dynamic immediate answer consumes no deferred-answer capacity — p
     LoadResult hoarder = kernel.load("hoard", ZEN_SO_DEFERS);
     REQUIRE_MESSAGE(hoarder.ok, hoarder.error);
     Registered nagger = register_probe(bus, {pong_schema()});
-    for (std::size_t i = 0; i < Switchboard::kMaxDeferredAnswers; ++i) {
+    for (std::size_t i = 0; i < Switchboard::kMaxDeferredPerWeave; ++i) {
         bus.send_as(nagger.id, hoarder.id, Message(ping(1), nagger.id, WeaveId{}, 1));
         bus.drain_until_idle();
     }
 
-    // The registry is now full, and says so: one more deferral is refused.
+    // The hoarder's bound is now full, and says so: one more deferral is refused.
     std::vector<TapRecord> tap;
     bus.add_observer([&tap](const BusEvent& e) {
         if (e.kind == EventKind::Refused) {
@@ -3107,7 +3107,8 @@ TEST_CASE("an immediate readiness answer consumes no deferred-answer capacity") 
     Switchboard bus;
     Cast c = cast_with_role(bus, kRole);
 
-    // 64 genuinely OUTSTANDING deferrals, held open for the rest of the case.
+    // kMaxDeferredAnswers genuinely OUTSTANDING deferrals, one a weave, held open for the rest
+    // of the case.
     std::vector<Registered> hoarders;
     Registered asker = register_probe(bus, {greet_schema()});
     for (std::size_t i = 0; i < Switchboard::kMaxDeferredAnswers; ++i) {
@@ -5672,18 +5673,23 @@ TEST_CASE("an activation's refused deferral consumes none of the bounded capacit
         std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{ping_schema()}),
         Grant{}.allow_any(), "worker");
 
-    // A responder that keeps every answer right it is given, so the registry
-    // fills and STAYS full.
+    // Responders that keep every answer right they are given, so the Loom's registry fills and
+    // STAYS full: one respondent's own bound is smaller, so it takes several.
     std::vector<loom::DeferredAnswer> held;
-    Registered responder = register_probe(bus, {ping_schema()});
-    responder.weave->on_handle = [&held](const Message&, Bus& b, ProbeWeave&) {
-        held.push_back(b.make_deferred_answer());
-    };
+    std::vector<Registered> responders;
+    for (std::size_t r = 0;
+         r < Switchboard::kMaxDeferredAnswers / Switchboard::kMaxDeferredPerWeave; ++r) {
+        responders.push_back(register_probe(bus, {ping_schema()}));
+        responders.back().weave->on_handle = [&held](const Message&, Bus& b, ProbeWeave&) {
+            held.push_back(b.make_deferred_answer());
+        };
+    }
+    const auto responder_for = [&](std::size_t i) { return responders[i % responders.size()]; };
 
     // Fill it to exactly one slot short of the bound.
     const std::size_t bound = Switchboard::kMaxDeferredAnswers;
     for (std::size_t i = 0; i < bound - 1; ++i) {
-        bus.send_as(asker.id, responder.id, Message(ping(static_cast<std::int64_t>(i))));
+        bus.send_as(asker.id, responder_for(i).id, Message(ping(static_cast<std::int64_t>(i))));
     }
     bus.drain_until_idle();
     REQUIRE(held.size() == bound - 1);
@@ -5712,14 +5718,14 @@ TEST_CASE("an activation's refused deferral consumes none of the bounded capacit
 
     // THE LAST SLOT IS STILL THERE. If the activation had taken it, this
     // legitimate deferral — a real ask, from a real requester — would fail.
-    bus.send_as(asker.id, responder.id, Message(ping(1000)));
+    bus.send_as(asker.id, responder_for(bound - 1).id, Message(ping(1000)));
     bus.drain_until_idle();
     REQUIRE(held.size() == bound);
     CHECK(held.back().valid());
 
     // ...and the bound is real, which is what makes the check above mean
     // something: the next one has nowhere to go.
-    bus.send_as(asker.id, responder.id, Message(ping(1001)));
+    bus.send_as(asker.id, responder_for(bound - 1).id, Message(ping(1001)));
     bus.drain_until_idle();
     REQUIRE(held.size() == bound + 1);
     CHECK_FALSE(held.back().valid());

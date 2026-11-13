@@ -10,6 +10,7 @@
 // the Accept<...> list, snapshot and revive from the State struct, and dispatch converts a
 // Value to its struct only after the gate has admitted it. docs/guides/writing-a-weave.md
 
+#include <zen/weave/ask_ended.hpp>
 #include <zen/weave/describe.hpp>
 #include <zen/weave/dispatch_refusal.hpp>
 #include <zen/weave/poke.hpp>
@@ -74,6 +75,9 @@ public:
     loom::WeaveId reply_to() const { return in_.reply_to; }
     std::uint64_t correlation() const { return in_.correlation; }
     bool dispatch_refused() const noexcept { return in_.provenance.dispatch_refused(); }
+    /// Is this Loom's word that an ask this incarnation sent ended with no answer? Check it
+    /// before trusting a `zen.AskEnded`: the shape alone is ordinary speech. ANS-08
+    bool ask_ended() const noexcept { return in_.provenance.ask_ended(); }
 
     /// Reply to the inbound message's reply address, or to its stamped sender when it names
     /// none, echoing the correlation. Ordinary speech either way: checked against this weave's
@@ -100,6 +104,25 @@ public:
                                  std::uint64_t correlation = 0) {
         return bus_.send_to_role(
             role, loom::Message(to_value(msg), self_, loom::WeaveId{}, correlation));
+    }
+
+    // ---- asks (ANS-08) ----------------------------------------------------
+    // A send that waits on an answer, and says so: Loom follows it to its answer or to one
+    // `zen.AskEnded`, told to this incarnation. The weave must accept `loom::AskEnded`, or the
+    // ask is refused here and queues nothing (an invalid Ticket, `AskEndedNotAccepted`). Keep
+    // the Ticket: the ending names it. docs/reference/messaging.md#asks-and-how-each-one-ends
+
+    /// Ask `target`.
+    template <class T>
+    loom::Ticket ask(loom::WeaveId target, const T& msg, std::uint64_t correlation = 0) {
+        return bus_.ask(target,
+                        loom::Message(to_value(msg), self_, loom::WeaveId{}, correlation));
+    }
+    /// Ask whichever weave holds `role`, resolved at delivery.
+    template <class T>
+    loom::Ticket ask_role(std::string_view role, const T& msg, std::uint64_t correlation = 0) {
+        return bus_.ask_role(role,
+                             loom::Message(to_value(msg), self_, loom::WeaveId{}, correlation));
     }
 
     // ---- deliberate role authorship (MSG-07) ------------------------------
@@ -141,6 +164,23 @@ public:
             return mail_.bus_.role_send_to_role(
                 role_, to_role, loom::Message(to_value(msg), mail_.self_, loom::WeaveId{},
                                               correlation));
+        }
+
+        /// Role-authored ask (ANS-08): `ask` as this role, verified now.
+        template <class T>
+        loom::Ticket ask(loom::WeaveId target, const T& msg, std::uint64_t correlation = 0) && {
+            return mail_.bus_.role_ask(role_, target,
+                                       loom::Message(to_value(msg), mail_.self_,
+                                                     loom::WeaveId{}, correlation));
+        }
+
+        /// Role-authored ask to whoever holds `to_role`.
+        template <class T>
+        loom::Ticket ask_role(std::string_view to_role, const T& msg,
+                              std::uint64_t correlation = 0) && {
+            return mail_.bus_.role_ask_role(role_, to_role,
+                                            loom::Message(to_value(msg), mail_.self_,
+                                                          loom::WeaveId{}, correlation));
         }
 
         /// Role-authored publication. `authored` says whether the role spoke; `recipients`

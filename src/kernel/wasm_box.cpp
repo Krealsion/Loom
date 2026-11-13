@@ -542,6 +542,39 @@ BOX_CB(zh_role_send_to_role) {
     return answer(results, st);
 }
 
+// An ask (ANS-08): a role pointer of 0 is NULL, personal speech for `as_role` and a directed ask
+// for `to_role`; any other is a name inside the module, as the role doors read theirs.
+BOX_CB(zh_ask) {
+    BOX_UNUSED;
+    Door d(caller);
+    if (!d.open(&ZenHostApi::ask)) {
+        return answer(results, ZEN_ERR_REFUSED);
+    }
+    const bool authored = u32(args, 0) != 0;
+    const bool to_role = u32(args, 2) != 0;
+    std::string as;
+    std::string to;
+    const std::uint8_t* p = nullptr;
+    std::uint8_t* attempt_at = nullptr;
+    if ((authored && !name_at(d.cx, d.b.memory, u32(args, 0), as)) ||
+        (to_role && !name_at(d.cx, d.b.memory, u32(args, 2), to))) {
+        return outside_name();
+    }
+    if (!d.bytes(u32(args, 5), u32(args, 6), &p)) {
+        return outside_bytes();
+    }
+    if (!d.out64(u32(args, 7), &attempt_at)) {
+        return outside_out();
+    }
+    std::uint64_t attempt = 0;
+    const ZenStatus st = d.b.host->ask(d.b.host->ctx, authored ? as.c_str() : nullptr,
+                                       u64(args, 1), to_role ? to.c_str() : nullptr,
+                                       u64(args, 3), u64(args, 4), p, u32(args, 6),
+                                       attempt_at != nullptr ? &attempt : nullptr);
+    write64(attempt_at, attempt);
+    return answer(results, st);
+}
+
 BOX_CB(zh_role_publish) {
     BOX_UNUSED;
     Door d(caller);
@@ -848,6 +881,7 @@ constexpr Import kImports[] = {
     {kHost, "sense_observe", "Iiii", "i", zh_sense_observe},
     {kHost, "sense_observe_role", "iiii", "i", zh_sense_observe_role},
     {kHost, "sense_offer", "Iii", "i", zh_sense_offer},
+    {kHost, "ask", "iIiIIiii", "i", zh_ask},
     {kWasi, "environ_sizes_get", "ii", "i", wasi_empty_sizes},
     {kWasi, "environ_get", "ii", "i", wasi_empty_list},
     {kWasi, "args_sizes_get", "ii", "i", wasi_empty_sizes},

@@ -12,8 +12,8 @@
 namespace loom {
 
 // One role-addressed attempt, using the caller's correlation sequence and ordinary Mail
-// (or Mail::Role) send. Matching never consumes the record: validate the reply's meaning,
-// then forget it explicitly. No retry, timeout, cancellation or completion policy.
+// (or Mail::Role) send, or its ask. Matching never consumes the record: validate the reply's
+// meaning, then forget it explicitly. No retry, timeout, cancellation or completion policy.
 // See docs/reference/messaging.md#one-role-addressed-request.
 class RoleRequest {
 public:
@@ -36,6 +36,21 @@ public:
         return pending();
     }
 
+    // The same through the ask door (ANS-08): its end, when no answer comes, is a
+    // `zen.AskEnded` this record matches with `matches_ending`.
+    template<class Sender, class Request>
+    bool ask_role(Sender&& sender, const std::string& role, const Request& request,
+                  std::uint64_t correlation) {
+        if (pending()) return false;
+        role_ = role;
+        shape_ = Request::zen_name;
+        version_ = Request::zen_version;
+        correlation_ = correlation;
+        attempt_ = std::forward<Sender>(sender).ask_role(role_, request, correlation_);
+        if (!pending()) forget();
+        return pending();
+    }
+
     template<class Request>
     bool is() const noexcept {
         return pending() && shape_ == Request::zen_name && version_ == Request::zen_version;
@@ -50,6 +65,15 @@ public:
                refused.refused_attempt().seq == attempt_.seq &&
                refused.role == role_ && refused.target.empty() &&
                refused.shape == shape_ && refused.version == version_;
+    }
+
+    // Loom's word that this record's ask ended unanswered; a plain send's refusal is
+    // `matches_refusal`'s.
+    bool matches_ending(const AskEnded& ended, const Mail& mail) const noexcept {
+        return pending() && mail.ask_ended() &&
+               ended.ended_attempt().seq == attempt_.seq &&
+               ended.role == role_ && ended.target.empty() &&
+               ended.shape == shape_ && ended.version == version_;
     }
 
     // Local bookkeeping only. The recipient may still be doing the work.

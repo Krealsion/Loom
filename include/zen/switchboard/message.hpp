@@ -45,7 +45,7 @@ private:
 ///
 /// A well-shaped `zen.Bequest` from a weave that merely holds the grant for it passes the first
 /// two and not the third. Provenance has two independent axes: `Kind` (none, an answer, an
-/// activation, a dispatch refusal) and the authored role (empty for personal speech), so a
+/// activation, a dispatch refusal, an ask's ending) and the authored role (empty for personal speech), so a
 /// delivery may carry both, though no public door produces that combination.
 /// MSG-07, ANS-01; docs/laws/messaging-laws.md
 ///
@@ -59,6 +59,7 @@ public:
         Answer = 1,     ///< the one authorized answer to a request this weave sent
         Activation = 2, ///< Loom attests a lifecycle commit for this incarnation
         DispatchRefusal = 3, ///< Loom refused an ordinary send before handler entry
+        AskEnded = 4,        ///< Loom attests that an ask this weave sent ended unanswered
     };
 
     Provenance() = default;
@@ -89,6 +90,9 @@ public:
 
     /// Loom attests refusal of dispatch, never an application answer.
     bool dispatch_refused() const noexcept { return kind_ == Kind::DispatchRefusal; }
+
+    /// Loom attests that an ask this weave sent ended with no answer (ANS-08).
+    bool ask_ended() const noexcept { return kind_ == Kind::AskEnded; }
 
     /// Does Loom attest a lifecycle commit for the incarnation being delivered to?
     bool lifecycle_activation() const noexcept { return kind_ == Kind::Activation; }

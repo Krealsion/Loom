@@ -75,11 +75,12 @@ the user names is a useful terminal, and none of the workflows below needed it.
 
 `knows()` adds type knowledge; `accepts()` adds type knowledge **and a door**.
 The accept-set handed to the bus is the supplied vocabulary's doors plus
-TerminalSession's common `zen.DispatchRefused` v1 door — never the catalog, and
+TerminalSession's two common notice doors, `zen.DispatchRefused` v1 and `zen.AskEnded` v1 —
+never the catalog, and
 never `AcceptMode::AnyRegistered`. Neither type knowledge nor acceptance grants
 authority to send; the participant's grant governs its speech.
 
-## Submitted, received, answered and dispatch refusal
+## Submitted, received, answered, ended and dispatch refusal
 
 Submitted remains the authored fact, never a delivery guarantee. An authenticated
 dispatch refusal is a later received zen.DispatchRefused message. TerminalSession
@@ -94,13 +95,20 @@ structured detail checks it first to show the safe reason, address and exact
 attempt. Ordinary speech of the same shape has
 no such record. It is never AnswerReceived and answers_ask remains false.
 
+A terminal's ask goes through the ask door, so its refusal arrives as `zen.AskEnded`, never
+as a dispatch refusal, and so does every later end Loom sees
+([asks](messaging.md#asks-and-how-each-one-ends)). Its `ask_ended` record holds the
+authenticated notice and the local ask it closed, matched by the exact attempt; Loom's
+terminal presents ENDED with the stage, the reason, and whether retrying could repeat work.
+
 Loom's terminal presents DISPATCH REFUSED with the original send and
 reason, separate from SUBMITTED and local composition refusal. Text escaping is
 applied at presentation. Matching uses the queued attempt, correlation, original
 shape/version and authored address after checking Loom provenance. Only that
 matching ask leaves the outstanding set. Local forgetting cannot cancel remote
-work; transcript eviction cannot settle another ask. Delivered but unanswered
-requests remain outstanding under the existing local policy.
+work; transcript eviction cannot settle another ask. A delivered ask whose respondent returned
+without answering or keeping its answer ENDS, told `Unanswered`; one whose answer is kept stays
+outstanding until it is answered or Loom says it ended.
 
 No authority request or retry is automatic. The person at the terminal can
 review the reason, use the authority workflow where appropriate, then explicitly
@@ -326,9 +334,9 @@ on every line, and wired into neither participant.
 
 In the session lens, `send @some.service Work 1 7` first authors a submission,
 then prints `DISPATCH REFUSED` with that attempt, address, shape and safe reason.
-`ask @some.service Work 1 7` additionally removes that exact local ask when the
-authenticated refusal arrives. No debug lens is needed. `pending` shows the
-remaining asks; a delivered, unanswered request stays there.
+`ask @some.service Work 1 7` is told `ENDED ... queued, CapabilityDenied` instead, and that
+exact local ask leaves the outstanding set. No debug lens is needed. `pending` shows the
+remaining asks: those a respondent keeps an answer for.
 
 To change authority deliberately, use the existing workflow:
 

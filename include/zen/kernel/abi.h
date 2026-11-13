@@ -28,7 +28,7 @@ extern "C" {
  * version from ZEN_ABI_OLDEST to its own, and refuses one from before ZEN_ABI_OLDEST, or one
  * newer than itself, before calling into it, at load and as a replacement for a live
  * participant, naming both versions. What each version carried: docs/reference/dynamic-abi.md */
-#define ZEN_ABI_VERSION 14u
+#define ZEN_ABI_VERSION 15u
 
 /* The oldest version a host loads: the first whose tables say their size. */
 #define ZEN_ABI_OLDEST 13u
@@ -51,7 +51,10 @@ enum {
     ZEN_PROV_ACTIVATION = 2u,
     /* Loom's notice that this weave's own addressed send was refused before any handler ran
      * (docs/reference/messaging.md#sender-visible-dispatch-refusal). */
-    ZEN_PROV_DISPATCH_REFUSAL = 3u
+    ZEN_PROV_DISPATCH_REFUSAL = 3u,
+    /* Since 15: Loom's notice that an ask this weave sent through the ask door ended with no
+     * answer (zen.AskEnded, docs/reference/messaging.md#asks-and-how-each-one-ends). */
+    ZEN_PROV_ASK_ENDED = 4u
 };
 
 /* Status codes returned across the seam: 0 is OK, negatives are errors. No exception crosses, in
@@ -78,6 +81,9 @@ enum {
     /* This sender already has its bound of messages waiting. Nothing was queued. Not role
      * authorship, and not "there was no answer to spend". Answers are not this bound. */
     ZEN_ERR_PENDING_PER_SENDER = -10,
+    /* Since 15: the weave asked without accepting zen.AskEnded, so its ask's end would have
+     * nowhere to go. Nothing was queued, and nothing was sent as a plain send instead. */
+    ZEN_ERR_ASK_ENDED_NOT_ACCEPTED = -11,
     /* A refused joint offer: ZEN_ERR_JOINT_BASE minus the loom::JointRefusal enumerator. A
      * status below the base naming no enumerator reads as NoLiveDelivery, never as accepted. */
     ZEN_ERR_JOINT_BASE = -100,
@@ -207,6 +213,17 @@ typedef struct ZenHostApi {
      * or ZEN_ERR_JOINT_BASE minus the refusal. The isolated pipe supplies NULL: a child cannot
      * present the exact identity an operation binds. */
     ZenStatus (*sense_offer)(void* ctx, uint64_t op, const uint8_t* payload, size_t len);
+    /* Since 15: an ask, what a native weave reaches through `mail.ask(...)`, `ask_role(...)`
+     * and their `as_role(...)` forms, all four through this door. `as_role` NULL is personal
+     * speech; `to_role` NULL is a directed ask to `target`, else `target` is ignored and the
+     * role resolves at delivery. A send in every way, which Loom follows to its answer or to
+     * one zen.AskEnded, delivered as ZEN_PROV_ASK_ENDED to this weave's incarnation.
+     * ZEN_ERR_ASK_ENDED_NOT_ACCEPTED when the weave does not accept zen.AskEnded;
+     * ZEN_ERR_ROLE_AUTHORSHIP_DENIED and ZEN_ERR_PENDING_PER_SENDER as the role doors say them.
+     * The isolated pipe supplies NULL: it carries no attestation back. */
+    ZenStatus (*ask)(void* ctx, const char* as_role, uint64_t target, const char* to_role,
+                     uint64_t reply_to, uint64_t correlation, const uint8_t* payload,
+                     size_t len, uint64_t* attempt_out);
 } ZenHostApi;
 
 /* The descriptor a Weave library exposes through zen_weave_abi(), over an opaque instance

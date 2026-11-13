@@ -1,6 +1,6 @@
 # Dynamic ABI — reference
 
-The C seam a weave library and the host agree on. Current version: **v<!-- value ZEN_ABI_VERSION -->14<!-- /value -->**
+The C seam a weave library and the host agree on. Current version: **v<!-- value ZEN_ABI_VERSION -->15<!-- /value -->**
 (`ZEN_ABI_VERSION` in `include/zen/kernel/abi.h`), and the oldest a host loads is
 `ZEN_ABI_OLDEST`, beside it ([the number and the sizes](#the-number-and-the-sizes)). Laws:
 [KERN-01, KERN-04](../laws/kernel-laws.md),
@@ -8,6 +8,12 @@ The C seam a weave library and the host agree on. Current version: **v<!-- value
 [ANS-06](../laws/answer-authority-laws.md),
 [MSG-07](../laws/messaging-laws.md#msg-07--role-authorship-is-explicit),
 [SENSE-01..07](../laws/sense-laws.md).
+
+**v15 appends the ask door** ([the ask door](#the-ask-door)): one host door, `ask`, a
+provenance value, `ZEN_PROV_ASK_ENDED`, and a status, `ZEN_ERR_ASK_ENDED_NOT_ACCEPTED`, and nothing
+else moved. An image built against v14's header (`tests/abi_kept/v14/`) loads and works on this
+host; it has no ask, and its host table's size ends before the door. A v15 image on a v14 host is
+refused before any callback, as needing abi_version 15.
 
 **v14 appends the creation value**, the first append since the seam grew: two descriptor
 slots, `describe_creation` and `create_with`, and nothing else moved. A weave may be made with
@@ -230,6 +236,17 @@ creation is reach given to code nobody has admitted yet. Its capabilities are th
   value after it says its declared shape (`Creation` and `Make` frames), and a respawn is made
   with the same. `Kernel::made_with(name)` says it, the door's `ListLibraries` answers
   `name@role<Setup v1>`, and history keeps the load messages that carried it.
+
+## The ask door
+
+Since 15 a loaded or boxed weave asks through one appended host door, `ask`, which carries the
+four forms a native weave has (`mail.ask`, `ask_role` and their `as_role` forms): a NULL `as_role`
+is personal speech, a NULL `to_role` a directed ask. Its ending arrives as `ZEN_PROV_ASK_ENDED`,
+appended, with `zen.AskEnded`, which only a library accepting that shape is ever handed. A weave
+that does not accept it is refused at the call (`ZEN_ERR_ASK_ENDED_NOT_ACCEPTED`, appended); an
+image built against an earlier header has no ask, as it had no door, and loads and works here. The
+isolation pipe supplies no ask door and refuses a manifest accepting `zen.AskEnded`
+([asks](messaging.md#asks-and-how-each-one-ends)).
 
 ## The number and the sizes
 

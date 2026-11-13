@@ -82,6 +82,11 @@ enum class RefusalReason : std::uint8_t {
     /// MSG-01; docs/laws/messaging-laws.md
     /// docs/reference/bounds.md
     PendingPerSender,
+    /// A weave asked through the ask door without accepting `zen.AskEnded`, so the ask's end
+    /// would have nowhere to go. Refused at the call: nothing is queued, and it is not sent as a
+    /// plain send instead.
+    /// ANS-08; docs/laws/answer-authority-laws.md
+    AskEndedNotAccepted,
 };
 
 /// A queued attempt, from an ordinary directed or role-addressed send (role-authored ones
@@ -146,6 +151,45 @@ public:
     /// "shape to role" grant survives the holder reloading. An unheld role is refused like an
     /// unknown target. The same waiting bound as `send` applies, and refuses the same way.
     virtual Ticket send_to_role(std::string_view role, Message msg) = 0;
+
+    // ---- asks (ANS-08) ------------------------------------------------------------------------
+    // An ask is a send whose sender is waiting on an answer, and says so: authorized, routed,
+    // gated and delivered exactly as `send` and `send_to_role`, and followed by Loom to its
+    // answer or to one `zen.AskEnded`, told to this exact incarnation. Refused at the call,
+    // nothing queued and `AskEndedNotAccepted` on the tap, for a weave that does not accept
+    // `zen.AskEnded`, so no ask's end has nowhere to go. The defaults refuse: a bus with no ask
+    // door queues nothing. docs/reference/messaging.md#asks-and-how-each-one-ends
+
+    /// Ask `target`. The Ticket is the ask's attempt, which its ending names.
+    virtual Ticket ask(WeaveId target, Message msg) {
+        (void)target;
+        (void)msg;
+        return Ticket{};
+    }
+
+    /// Ask whichever weave holds `role`, resolved at delivery.
+    virtual Ticket ask_role(std::string_view role, Message msg) {
+        (void)role;
+        (void)msg;
+        return Ticket{};
+    }
+
+    /// Ask `target` as the role `as_role`, verified now (MSG-07).
+    virtual Ticket role_ask(std::string_view as_role, WeaveId target, Message msg) {
+        (void)as_role;
+        (void)target;
+        (void)msg;
+        return Ticket{};
+    }
+
+    /// Ask whoever holds `to_role`, as the role `as_role`.
+    virtual Ticket role_ask_role(std::string_view as_role, std::string_view to_role,
+                                 Message msg) {
+        (void)as_role;
+        (void)to_role;
+        (void)msg;
+        return Ticket{};
+    }
 
     /// Answer the message being handled, once, to its sender, with Loom's word that this is the
     /// answer. A weave that asked a role cannot know which incarnation received it, so the right

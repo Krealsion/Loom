@@ -12,6 +12,6 @@
 # with each one. `cmake -DZEN_CENSUS_WRITE=<file> -P tests/check_census.cmake` writes the rows as
 # the tree stands, to diff. ASCII only.
 
-lines src/switchboard/switchboard.cpp 4107 falls
-members Switchboard 154 falls
-doors ZenHostApi 15
+lines src/switchboard/switchboard.cpp 4105 falls
+members Switchboard 153 falls
+doors ZenHostApi 16

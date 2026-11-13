@@ -1677,7 +1677,7 @@ struct FullRegistry {
     }
 
     Deferrer* fill(Switchboard& bus, Deferrer::Mode mode,
-                   std::size_t count = Switchboard::kMaxDeferredAnswers) {
+                   std::size_t count = Switchboard::kMaxDeferredPerWeave) {
         tap.arm(bus, ProvAsk::zen_name);
         asker = mount<Asker>(bus, heard);
         steward = mount_into_role<Deferrer>(bus, kProvRole, mode);
@@ -1703,7 +1703,7 @@ TEST_CASE("the registry is bounded, the overflow says CAPACITY, and the caller k
     // would be a memory hole any weave could dig by deferring and never answering.
     // The bound is published — and DRIVEN here, because a bound nobody reaches is
     // a comment.
-    static_assert(Switchboard::kMaxDeferredAnswers == 64);
+    static_assert(Switchboard::kMaxDeferredPerWeave == 64);
 
     Switchboard bus;
     FullRegistry world;
@@ -2340,23 +2340,23 @@ TEST_CASE("a stale ask creates no IMMEDIATE answer authority") {
 }
 
 TEST_CASE("a stale ask creates no DEFERRED answer authority and occupies no registry capacity") {
-    // Capacity is the exact instrument. The registry is filled to one slot short of
+    // Capacity is the exact instrument. The steward is filled to one slot short of
     // its bound; if the stale ask were delivered and deferred, it would take the
     // last slot and the living conversation below would be refused as Exhausted.
     Switchboard bus;
     FullRegistry world;
     Deferrer* filler = world.fill(bus, Deferrer::Mode::Normal,
-                                  Switchboard::kMaxDeferredAnswers - 1);
+                                  Switchboard::kMaxDeferredPerWeave - 1);
     REQUIRE(filler->deferred_valid_);
     REQUIRE(world.tap.exhausted == 0);
 
     Received heard;
-    const WeaveId steward =
-        mount_into_role<Deferrer>(bus, "prov.other", Deferrer::Mode::Normal);
+    const WeaveId steward = world.steward;
     const WeaveId speaker = mount<Speaker>(bus, Speaker::How::Direct, heard);
     static_cast<Speaker*>(bus.weave(speaker))->aim(steward);
     LifeTap life;
     life.arm(bus, speaker);
+    const std::int64_t delivered_before = filler->deliveries();
 
     queue_one_utterance(bus, speaker);
     REQUIRE(bus.pending() == 1);
@@ -2364,8 +2364,7 @@ TEST_CASE("a stale ask creates no DEFERRED answer authority and occupies no regi
     bus.drain_until_idle();
 
     Deferrer* d = static_cast<Deferrer*>(bus.weave(steward));
-    CHECK(d->deliveries() == 0);
-    CHECK_FALSE(d->deferred_valid_);
+    CHECK(d->deliveries() == delivered_before); // the stale ask reached no handler
 
     // The last slot is still there for a living conversation — which is what
     // "occupies no capacity" means, measured rather than asserted.

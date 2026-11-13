@@ -130,6 +130,7 @@ add_library(loom::core ALIAS loom)
 # ---- The switchboard (the first live boundary) ----------------------------
 
 add_library(zen-switchboard
+    src/switchboard/asks.cpp
     src/switchboard/switchboard.cpp)
 
 target_include_directories(zen-switchboard

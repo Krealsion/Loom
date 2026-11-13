@@ -3,6 +3,7 @@
 
 #include <zen/isolation/host.hpp>
 
+#include <zen/weave/ask_ended.hpp>
 #include <zen/weave/dispatch_refusal.hpp>
 #include <zen/kernel/making_words.hpp> // a refused making's words, said as the kernel says them
 #include <zen/kernel/schema_codec.hpp> // manifest_schema, decode_schema (shared encode/decode)
@@ -633,6 +634,10 @@ void IsolationHost::reconstruct_and_cache(Link& link, const std::string& manifes
             door->version() == DispatchRefused::zen_version) {
             throw std::runtime_error("zen.DispatchRefused requires native or loaded delivery; "
                                      "the isolated pipe cannot attest dispatch refusal");
+        }
+        if (door->name() == AskEnded::zen_name && door->version() == AskEnded::zen_version) {
+            throw std::runtime_error("zen.AskEnded requires native or loaded delivery; the "
+                                     "isolated pipe cannot attest an ask's end, so it cannot ask");
         }
         accept.push_back(std::move(door));
     }

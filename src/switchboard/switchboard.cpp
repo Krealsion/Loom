@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Joshua DeMoss
 
 #include <zen/switchboard/switchboard.hpp>
+#include <zen/weave/ask_ended.hpp>
 #include <zen/weave/dispatch_refusal.hpp>
 #include <stdexcept>
 
@@ -108,6 +109,8 @@ const char* name_of(RefusalReason r) noexcept {
         return "ApplicationFailed";
     case RefusalReason::PendingPerSender:
         return "PendingPerSender";
+    case RefusalReason::AskEndedNotAccepted:
+        return "AskEndedNotAccepted";
     }
     return "?";
 }
@@ -279,6 +282,9 @@ std::string Refusal::message() const {
         // Names THIS SENDER'S waiting messages. The new send is not queued, and
         // no other sender's waiting messages are touched.
         return "this sender already has its bound of messages waiting; nothing was queued";
+    case RefusalReason::AskEndedNotAccepted:
+        return "the asker does not accept zen.AskEnded, so its ask's end would have nowhere to "
+               "go; nothing was queued";
     }
     return "?";
 }
@@ -634,8 +640,10 @@ std::unique_ptr<Weave> Switchboard::unregister_weave(WeaveId id) {
     weaves_.erase(it);
     // Its unfinished conversations end with it, in both directions: it can no longer answer,
     // and nothing can be answered to it. Asked unconditionally (ANS-04): permanent removal is
-    // the end of a life.
-    abandon_deferred_for(id);
+    // the end of a life. Each asker it owed is told (ANS-08).
+    for (const AskFacts& ask : kept_.end_life(id)) {
+        tell_ask_ended(ask, AskEnding::RespondentRemoved, current_dispatch_seq_);
+    }
     // THE TRANSITION AN OBSERVER CANNOT SEE. `unregister_weave` announces nothing,
     // which is exactly why the transaction registry lives in the bus rather than
     // watching from outside.
@@ -657,7 +665,8 @@ std::uint64_t Switchboard::allocate_sequence() {
 }
 
 void Switchboard::capture_refusal_recipient(Envelope& env) {
-    if (!env.gated || env.preparation.valid() ||
+    // An ask is told `zen.AskEnded` instead (ANS-08): one notice for an ask, never both.
+    if (!env.gated || env.preparation.valid() || env.ask.present() ||
         env.msg.provenance.kind() != Provenance::Kind::None) { return; }
     const WeaveRecord* sender = find(env.msg.sender);
     if (sender != nullptr && sender->alive &&
@@ -666,49 +675,29 @@ void Switchboard::capture_refusal_recipient(Envelope& env) {
     }
 }
 
-void Switchboard::notify_dispatch_refusal(const Envelope& env, const BusEvent& ev,
-                                          bool permitted) {
-    if (env.refusal_incarnation == 0 || !env.gated) { return; }
-    switch (ev.refusal.reason) {
-    case RefusalReason::CapabilityDenied:
-    case RefusalReason::NoSuchTarget:
-    case RefusalReason::TargetUnavailable:
-    case RefusalReason::NotAccepted:
-    case RefusalReason::GateRefused:
-    // A target held behind a published claim it could not apply is a pre-handler
-    // refusal like the five above, and the one a weaver most needs by exact
-    // attempt.
-    case RefusalReason::ApplicationFailed:
-        break;
-    default:
+void Switchboard::queue_notice(Value value, Provenance::Kind kind, WeaveId to, std::uint64_t life,
+                               std::uint64_t incarnation, std::uint64_t correlation,
+                               std::uint64_t parent) {
+    // The exact recipient (ANS-03's discipline): a life or code that came after it at the
+    // address is not told, and neither is one that stopped accepting the notice.
+    const WeaveRecord* rec = find(to);
+    if (rec == nullptr || !rec->alive || rec->life != life || rec->incarnation != incarnation ||
+        !accept_match(*rec, value.schema().name(), value.schema().version())) {
         return;
     }
-    const WeaveRecord* sender = find(env.msg.sender);
-    if (sender == nullptr || !sender->alive || sender->life != env.sender_life ||
-        sender->incarnation != env.refusal_incarnation ||
-        !accept_match(*sender, DispatchRefused::zen_name, DispatchRefused::zen_version)) {
-        return;
-    }
-    DispatchRefused notice;
-    notice.attempt = std::to_string(env.seq);
-    notice.target = env.role.empty() ? std::to_string(env.target.value) : std::string{};
-    notice.role = env.role;
-    notice.shape = ev.schema_name; // the gate may already have consumed the payload
-    notice.version = ev.schema_version;
-    notice.reason = name_of(permitted ? ev.refusal.reason : RefusalReason::CapabilityDenied);
     const std::uint64_t seq = allocate_sequence();
-    Message msg(to_value(notice), WeaveId{}, WeaveId{}, env.msg.correlation);
-    msg.provenance = Provenance::attested(Provenance::Kind::DispatchRefusal, 0);
-    Envelope reply{std::move(msg), env.msg.sender, seq, false, {}, env.sender_life};
-    reply.refusal_incarnation = env.refusal_incarnation;
-    reply.dispatch_parent = env.seq;
-    reply.fence = env.fence; // a consequence of the refused envelope, counted where it is
+    Message msg(std::move(value), WeaveId{}, WeaveId{}, correlation);
+    msg.provenance = Provenance::attested(kind, 0);
+    Envelope note{std::move(msg), to, seq, false, {}, life};
+    note.refusal_incarnation = incarnation; // with the life, it binds the exact recipient
+    note.dispatch_parent = parent;
+    note.fence = current_dispatch_fence_; // a consequence, counted where its cause is
     journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}};
-    queue_back(std::move(reply));
+    queue_back(std::move(note));
 }
 
 Ticket Switchboard::enqueue_directed(WeaveId target, Message msg, bool gated,
-                                     Provenance provenance, TxnId preparation) {
+                                     Provenance provenance, TxnId preparation, bool asking) {
     if (sender_at_pending_bound(msg.sender)) {
         return refuse_pending_bound(target, msg.sender, msg);
     }
@@ -722,6 +711,7 @@ Ticket Switchboard::enqueue_directed(WeaveId target, Message msg, bool gated,
     const std::uint64_t life = gated ? life_of(msg.sender) : 0;
     Envelope env{std::move(msg), target, seq, gated, std::string{}, life};
     env.preparation = preparation; // invalid for every caller but one
+    if (asking) { env.ask = ask_facts(env.msg, seq, life, incarnation_of(env.msg.sender), target, {}); }
     capture_refusal_recipient(env);
     // ...and which delivery this was authored from, read from the bus's own dispatch state for
     // the same reason: it is a fact about the message, so the message never gets to say it. 0
@@ -734,7 +724,7 @@ Ticket Switchboard::enqueue_directed(WeaveId target, Message msg, bool gated,
 }
 
 Ticket Switchboard::enqueue_role(std::string role, Message msg, bool gated,
-                                 Provenance provenance) {
+                                 Provenance provenance, bool asking) {
     if (sender_at_pending_bound(msg.sender)) {
         return refuse_pending_bound(WeaveId{}, msg.sender, msg);
     }
@@ -747,6 +737,7 @@ Ticket Switchboard::enqueue_role(std::string role, Message msg, bool gated,
     msg.provenance = std::move(provenance);
     const std::uint64_t life = gated ? life_of(msg.sender) : 0;
     Envelope env{std::move(msg), WeaveId{}, seq, gated, std::move(role), life};
+    if (asking) { env.ask = ask_facts(env.msg, seq, life, incarnation_of(env.msg.sender), {}, env.role); }
     capture_refusal_recipient(env);
     env.dispatch_parent = current_dispatch_seq_; // the delivery this was authored from
     env.fence = current_dispatch_fence_;
@@ -1826,7 +1817,8 @@ void Switchboard::note_handler_failure() noexcept {
 
 Ticket Switchboard::enqueue_answer(WeaveId to, WeaveId as_sender, Message msg,
                                    std::uint64_t correlation, std::uint64_t requester_life,
-                                   std::uint64_t requester_incarnation, TxnId preparation) {
+                                   std::uint64_t requester_incarnation, TxnId preparation,
+                                   const AskFacts& ask) {
     // Loom chooses the recipient and the correlation; the answerer chooses only
     // what it says. And Loom stamps WHICH requester the answer is for, so the
     // conversation survives in the envelope rather than only in the stack frame or
@@ -1845,6 +1837,7 @@ Ticket Switchboard::enqueue_answer(WeaveId to, WeaveId as_sender, Message msg,
     // answer and one deferred across a dozen deliveries prove exactly the same
     // thing — which is why there is one readiness definition rather than two.
     env.preparation = preparation;
+    env.ask = ask; // ...and which ask through the door, so a refused answer still ends it
     // An answer belongs to the fence of the delivery it is SPENT from, not the ask's: a
     // deferred answer spent from a later, unrelated delivery is that delivery's work.
     env.fence = current_dispatch_fence_;
@@ -1872,7 +1865,8 @@ Ticket Switchboard::answer_as(WeaveId as_sender, Message msg) {
     // keeps them from ever differing later.
     return enqueue_answer(authority_.requester, as_sender, std::move(msg),
                           authority_.correlation, authority_.requester_life,
-                          authority_.requester_incarnation, authority_.preparation);
+                          authority_.requester_incarnation, authority_.preparation,
+                          authority_.ask);
 }
 
 // ---- deferred answers (ANS-02) ---------------------------------------------
@@ -1890,18 +1884,6 @@ std::uint64_t Switchboard::life_of(WeaveId id) const {
     return rec == nullptr ? 0 : rec->life;
 }
 
-Switchboard::DeferredRecord* Switchboard::find_deferred(std::uint64_t token) {
-    if (token == 0) {
-        return nullptr;
-    }
-    for (DeferredRecord& r : deferred_) {
-        if (r.token == token) {
-            return &r;
-        }
-    }
-    return nullptr;
-}
-
 void Switchboard::begin_new_life(WeaveRecord& rec) {
     // A life generation advances exactly when a weave comes back from the dead: registration
     // starts at 1, and a handler returning, an ordinary message and a live code reload leave
@@ -1909,39 +1891,6 @@ void Switchboard::begin_new_life(WeaveRecord& rec) {
     // this is one function rather than a line copied into three revival paths.
     if (!rec.alive) {
         ++rec.life;
-    }
-}
-
-void Switchboard::abandon_deferred_for(WeaveId id) {
-    // A handler may end without ending the conversation; a life may not. The staleness sweep
-    // below cannot see this: `kill` leaves the id and incarnation as they were, so a weave
-    // revived from its own snapshot would come back holding its predecessor's answer rights.
-    // ANS-04; docs/laws/answer-authority-laws.md
-    // Both directions, whatever happens next (revival, last-known-good or quarantine): the
-    // slot is reclaimed at the transition. Only conversations this weave is a party to.
-    for (DeferredRecord& r : deferred_) {
-        if (r.token != 0 && (r.respondent == id || r.requester == id)) {
-            r = DeferredRecord{}; // the slot is free again
-        }
-    }
-}
-
-void Switchboard::forget_deferred_for(WeaveId id) {
-    // Called when new code is committed behind an existing id (`swap_state`), and only there:
-    // the incarnation that earned an unfinished conversation is gone, and a successor does not
-    // inherit it. Death and removal are `abandon_deferred_for`'s, because a killed weave keeps
-    // its id and incarnation. This is also how a leaked capability is reclaimed: it costs one
-    // slot until its owner's code is replaced or its life ends.
-    const std::uint64_t now = incarnation_of(id);
-    for (DeferredRecord& r : deferred_) {
-        if (r.token == 0) {
-            continue;
-        }
-        const bool stale_respondent = r.respondent == id && r.respondent_incarnation != now;
-        const bool stale_requester = r.requester == id && r.requester_incarnation != now;
-        if (stale_respondent || stale_requester) {
-            r = DeferredRecord{}; // the slot is free again
-        }
     }
 }
 
@@ -1962,38 +1911,25 @@ DeferredAnswer Switchboard::defer_answer_as(WeaveId as_sender) {
         return DeferredAnswer{}; // one of the participants is already gone
     }
 
-    DeferredRecord* slot = nullptr;
-    for (DeferredRecord& r : deferred_) {
-        if (r.token == 0) {
-            slot = &r;
-            break;
-        }
+    // Every fact captured at DELIVERY, not now: the requester, the ask, and the preparation it
+    // answers (the ask, not a number).
+    KeptAnswers::Full full = KeptAnswers::Full::No;
+    const std::uint64_t token = kept_.take(
+        KeptAnswer{0, authority_.requester, requester_incarnation, authority_.requester_life,
+                   as_sender, respondent_incarnation, authority_.correlation,
+                   authority_.preparation.value, authority_.ask},
+        full);
+    if (token == 0) {
+        // BOUNDED, AND THE OVERFLOW IS VISIBLE rather than a silent nothing: the caller keeps its
+        // immediate opportunity (nothing was consumed), and a tap sees a refusal that names the
+        // ask it could not defer and says CAPACITY rather than implying a forgery. Either bound,
+        // this respondent's or the Loom's, says it the same way.
+        Message empty{Value(authority_.shape != nullptr ? authority_.shape
+                                                        : lifecycle_policy_schema())};
+        (void)refuse_now(authority_.requester, as_sender, empty, RefusalReason::Exhausted);
+        return DeferredAnswer{};
     }
-    if (slot == nullptr) {
-        if (deferred_.size() >= kMaxDeferredAnswers) {
-            // BOUNDED, AND THE OVERFLOW IS VISIBLE rather than a silent nothing:
-            // the caller keeps its immediate opportunity (nothing was consumed),
-            // and a tap sees a refusal that names the ask it could not defer and
-            // says CAPACITY rather than implying a forgery.
-            Message empty{Value(authority_.shape != nullptr ? authority_.shape
-                                                            : lifecycle_policy_schema())};
-            (void)refuse_now(authority_.requester, as_sender, empty, RefusalReason::Exhausted);
-            return DeferredAnswer{};
-        }
-        deferred_.emplace_back();
-        slot = &deferred_.back();
-    }
-
     authority_.spent = true; // the immediate right is now the deferred one
-    const std::uint64_t token = next_deferred_token_++;
-    *slot = DeferredRecord{token,
-                           authority_.requester,
-                           requester_incarnation,
-                           authority_.requester_life, // captured at DELIVERY, not now
-                           as_sender,
-                           respondent_incarnation,
-                           authority_.correlation,
-                           authority_.preparation}; // likewise: the ask, not a number
     return DeferredAnswer{identity_, token};
 }
 
@@ -2006,49 +1942,35 @@ Ticket Switchboard::spend_deferred_as(WeaveId as_sender, const DeferredAnswer& a
         (void)refuse_now(WeaveId{}, as_sender, msg, RefusalReason::ForeignAuthority);
         return Ticket{};
     }
-    DeferredRecord* rec = find_deferred(answer.opaque_token());
-    // Every term is a different attack: the record exists, unspent and unreleased; the speaker
-    // is the bound respondent (not a successor, the role's current holder or a copier of public
-    // values); the respondent is still the same incarnation; and the requester still exists at
-    // the incarnation that asked, so a successor at the same id is never answered.
-    if (rec == nullptr || as_sender != rec->respondent ||
-        incarnation_of(as_sender) != rec->respondent_incarnation) {
-        (void)refuse_now(rec == nullptr ? WeaveId{} : rec->requester, as_sender, msg,
-                         RefusalReason::ForeignAuthority);
+    // Every term is a different attack, each the unit's (`KeptAnswers::spend`), and the right is
+    // CONSUMED BEFORE QUEUEING, so neither a replay nor a reentrant handler makes it two answers.
+    KeptAnswer was;
+    const KeptAnswers::Spend spent = kept_.spend(
+        answer.opaque_token(), as_sender, [this](WeaveId w) { return incarnation_of(w); }, was);
+    if (spent != KeptAnswers::Spend::Spent) {
+        (void)refuse_now(was.requester, as_sender, msg,
+                         spent == KeptAnswers::Spend::NotYours ? RefusalReason::ForeignAuthority
+                                                               : RefusalReason::NoSuchTarget);
         return Ticket{};
     }
-    if (incarnation_of(rec->requester) != rec->requester_incarnation) {
-        const WeaveId to = rec->requester;
-        *rec = DeferredRecord{}; // the conversation is over either way
-        (void)refuse_now(to, as_sender, msg, RefusalReason::NoSuchTarget);
-        return Ticket{};
-    }
-
-    // CONSUMED BEFORE QUEUEING, so neither a replay nor a reentrant handler can
-    // turn one right into two answers.
-    const WeaveId to = rec->requester;
-    const std::uint64_t correlation = rec->correlation;
-    const std::uint64_t requester_life = rec->requester_life;
-    const std::uint64_t requester_incarnation = rec->requester_incarnation;
-    const TxnId preparation = rec->preparation;
-    *rec = DeferredRecord{};
 
     // THE SAME DOOR THE IMMEDIATE ANSWER LEAVES BY, carrying the requester facts
-    // the RECORD kept — the ones from when the ask was delivered, never today's.
-    return enqueue_answer(to, as_sender, std::move(msg), correlation, requester_life,
-                          requester_incarnation, preparation);
+    // the RECORD kept: the ones from when the ask was delivered, never today's.
+    return enqueue_answer(was.requester, as_sender, std::move(msg), was.correlation,
+                          was.requester_life, was.requester_incarnation,
+                          TxnId{was.preparation}, was.ask);
 }
 
 void Switchboard::release_deferred_as(WeaveId as_sender, const DeferredAnswer& answer) {
-    // Abandonment is silent to the requester: there is no cancellation vocabulary. It is not
-    // silent to the bus: the slot is reclaimed at once.
+    // The slot is reclaimed at once. An ask through the door is told it ended (ANS-08); a plain
+    // send's requester was never waiting, and there is no cancellation vocabulary for it.
     if (!issued_here_deferred(answer)) {
         return;
     }
-    DeferredRecord* rec = find_deferred(answer.opaque_token());
+    KeptAnswer* rec = kept_.find(answer.opaque_token());
     if (rec != nullptr && as_sender == rec->respondent &&
         incarnation_of(as_sender) == rec->respondent_incarnation) {
-        *rec = DeferredRecord{};
+        tell_ask_ended(kept_.release(*rec).ask, AskEnding::Released, current_dispatch_seq_);
     }
 }
 
@@ -2318,6 +2240,45 @@ Ticket Switchboard::role_send_to_role_as(WeaveId as_sender, std::string_view as_
                         Provenance{}.with_authored_role(std::string(as_role)));
 }
 
+// ---- asks (ANS-08) -------------------------------------------------------------------------
+//
+// An ask is an addressed send whose asker says it waits on an answer. Loom follows it with the
+// records it already keeps, and ends it once: its answer is delivered, or the asker is told.
+
+Ticket Switchboard::ask_as(WeaveId as_sender, std::string_view as_role, WeaveId target,
+                           std::string_view to_role, Message msg) {
+    // Using the door is the opting in: a weave that cannot hear its ask end may not ask, so no
+    // ask's end has nowhere to go. Refused before anything else, and never sent as a plain send.
+    const WeaveRecord* asker = find(as_sender);
+    if (asker == nullptr || !accept_match(*asker, AskEnded::zen_name, AskEnded::zen_version)) {
+        (void)refuse_now(target, as_sender, msg, RefusalReason::AskEndedNotAccepted);
+        return Ticket{0, RefusalReason::AskEndedNotAccepted};
+    }
+    if (!as_role.empty() && !holds_role_now(as_sender, as_role)) {
+        return refuse_role(target, as_sender, msg);
+    }
+    msg.sender = as_sender;
+    Provenance authored =
+        as_role.empty() ? Provenance{} : Provenance{}.with_authored_role(std::string(as_role));
+    return to_role.empty()
+               ? enqueue_directed(target, std::move(msg), true, std::move(authored), TxnId{}, true)
+               : enqueue_role(std::string(to_role), std::move(msg), true, std::move(authored), true);
+}
+
+void Switchboard::tell_ask_ended(const AskFacts& ask, AskEnding ending,
+                                 std::uint64_t parent) noexcept {
+    if (!ask.present()) {
+        return; // a send that is no ask has no end to tell
+    }
+    try {
+        queue_notice(ask_ended_value(ask, ending), Provenance::Kind::AskEnded, ask.asker,
+                     ask.asker_life, ask.asker_incarnation, ask.correlation, parent);
+    } catch (const std::exception&) {
+        // No memory, or no sequence left: the notice is dropped, as `zen.DispatchRefused` is,
+        // and what ended the ask stays on the tap.
+    }
+}
+
 RolePublication Switchboard::role_publish_as(WeaveId as_sender, std::string_view as_role,
                                                  Message msg) {
     if (!holds_role_now(as_sender, as_role)) {
@@ -2421,13 +2382,17 @@ void Switchboard::deliver_one(Envelope env) {
 
     // Internal notices are disposable, incarnation-bound deliveries. They never
     // seed refusal-of-refusal traffic, and a successor cannot inherit one.
-    const bool is_notice = env.msg.provenance.dispatch_refused();
+    // Either notice: `queue_notice` judged its recipient when it was made, and this judges it
+    // again now.
+    const bool is_notice =
+        env.msg.provenance.dispatch_refused() || env.msg.provenance.ask_ended();
     if (is_notice) {
         const WeaveRecord* recipient = find(env.target);
         if (recipient == nullptr || !recipient->alive ||
             recipient->life != env.sender_life ||
             recipient->incarnation != env.refusal_incarnation ||
-            !accept_match(*recipient, DispatchRefused::zen_name, DispatchRefused::zen_version)) {
+            !accept_match(*recipient, env.msg.payload.schema().name(),
+                          env.msg.payload.schema().version())) {
             return;
         }
     }
@@ -2480,7 +2445,20 @@ void Switchboard::deliver_one(Envelope env) {
         // Queue before calling arbitrary observers: neither their exceptions nor
         // their topology mutations change the already-made dispatch decision.
         try {
-            notify_dispatch_refusal(env, ev, permitted);
+            // A sender that denied itself is told `CapabilityDenied` whatever the target's state.
+            const RefusalReason told = permitted ? r.reason : RefusalReason::CapabilityDenied;
+            std::optional<Value> refused;
+            if (env.refusal_incarnation != 0 && env.gated &&
+                (refused = dispatch_refused_value(env.seq, env.target, env.role, ev.schema_name,
+                                                  ev.schema_version, told))) {
+                queue_notice(std::move(*refused), Provenance::Kind::DispatchRefusal,
+                             env.msg.sender, env.sender_life, env.refusal_incarnation,
+                             env.msg.correlation, env.seq);
+            }
+            AskEnding ending = AskEnding::AnswerRefused;
+            if (env.answer_target.present || ask_ending_of(told, ending)) {
+                tell_ask_ended(env.ask, ending, env.seq); // nothing for a send that is no ask
+            }
         } catch (const std::bad_alloc&) {
             // Best-effort metadata allocation must not erase the original host evidence.
         } catch (const std::overflow_error&) {
@@ -2656,6 +2634,7 @@ void Switchboard::deliver_one(Envelope env) {
     // cleared here rather than trusted to have been cleared by the last one.
     handler_reported_failure_ = false;
     std::exception_ptr failure;
+    AskFacts unanswered;
     {
         // THE AMBIENT DELIVERY CONTEXT LIVES IN THIS BLOCK AND NOWHERE ELSE (MSG-10).
         // The guard is what makes "this stack frame" true on the path where the
@@ -2690,7 +2669,8 @@ void Switchboard::deliver_one(Envelope env) {
                                         trusted.payload.schema_ptr(),
                                         asker == nullptr ? 0 : asker->life,
                                         asker == nullptr ? 0 : asker->incarnation,
-                                        answerable};
+                                        answerable,
+                                        env.answer_target.present ? AskFacts{} : env.ask};
         }
         // ...AND WHAT THIS DELIVERY IS, for a handler that must prove to the bus what
         // it just heard (PR-04). Every field comes from the envelope Loom built:
@@ -2717,7 +2697,14 @@ void Switchboard::deliver_one(Envelope env) {
             failure = std::current_exception();
         }
         ev.handler_elapsed_ns = elapsed_ns_since(started);
+        unanswered = authority_.spent ? AskFacts{} : authority_.ask;
     } // ...and the authority does not outlive the handler, by ANY exit path.
+    // An ask whose right this handler neither spent nor kept ends with it, told before a
+    // failure is re-raised (MSG-10's order).
+    tell_ask_ended(unanswered,
+                   failure || handler_reported_failure_ ? AskEnding::HandlerFailed
+                                                        : AskEnding::Unanswered,
+                   env.seq);
     // Cleared before the journal and the tap: an observer of a Delivered event is not inside
     // the delivery and must not find one live.
     if (failure || handler_reported_failure_) {
@@ -3321,6 +3308,10 @@ void Switchboard::deliver_admission(Envelope env) {
     // reachable for the private retirement conversation. Moving the role alone
     // would leave it publicly direct-addressable, which is a second live service.
     inc->sealed_by = owner;
+    // A sealed weave's answer cannot leave, so each ask it kept ends here, told (ANS-08).
+    for (const AskFacts& ask : kept_.end_respondent(inc->id, inc->incarnation)) {
+        tell_ask_ended(ask, AskEnding::RespondentRetired, env.seq);
+    }
 
     // ---- 5. and only now is the transaction Committed ------------------------
     // After the topology moved and the activation was proven deliverable: nothing between
@@ -3870,7 +3861,9 @@ void Switchboard::kill(WeaveId id) {
     // Committing the death includes ending its unfinished conversations (ANS-04)
     // and its unfinished transactions (PR-02), both BEFORE the announcement so
     // that anything observing `Died` sees a world in which they are already over.
-    abandon_deferred_for(id);
+    for (const AskFacts& ask : kept_.end_life(id)) {
+        tell_ask_ended(ask, AskEnding::RespondentDied, current_dispatch_seq_);
+    }
     invalidate_transactions_for(id); // a life that ended owns no preparation
     emit(ev);
 }
@@ -4057,7 +4050,12 @@ ReviveOutcome Switchboard::swap_state(WeaveId id, std::string_view candidate_byt
         rec->emits = std::move(fresh_emits);
         rec->schemas = std::move(next); // acquire-then-release: the overlap is the point
     }
-    forget_deferred_for(id);
+    // The incarnation that earned an unfinished conversation is gone, and a successor does not
+    // inherit it; each asker the old code owed is told (ANS-08), and one it asked for ends with
+    // nobody to tell. Death and removal are `kill`'s and `unregister_weave`'s.
+    for (const AskFacts& ask : kept_.end_incarnation(id, incarnation_of(id))) {
+        tell_ask_ended(ask, AskEnding::RespondentReplaced, current_dispatch_seq_);
+    }
     // New code, or a revival, is a new participant to a transaction, which must become
     // terminal promptly: a coordinator reloaded under a Ready transaction is noticed here,
     // not at commit.

@@ -5,6 +5,7 @@
 
 #include <zen/kind.hpp>
 
+#include <algorithm>
 #include <functional>
 #include <map>
 #include <optional>
@@ -108,7 +109,15 @@ public:
         // shapes the registry can resolve, and a notification shape that only ever travels to
         // the weaver has nobody else to declare it. Declaring it here is how a host says "this
         // window expects to be told this"; a listed door is gated exactly as the wildcard is.
-        return vocabulary_;
+        // `zen.AskEnded` is always listed: the console asks, so it must hear an ask end (ANS-08).
+        std::vector<std::shared_ptr<const loom::Schema>> doors = vocabulary_;
+        const auto ended = loom::schema_of<loom::AskEnded>();
+        if (std::none_of(doors.begin(), doors.end(), [&](const auto& s) {
+                return s->name() == ended->name() && s->version() == ended->version();
+            })) {
+            doors.push_back(ended);
+        }
+        return doors;
     }
     void handle(const loom::Message& in, loom::Bus&) override {
         // Buffer every received Value into a bounded window: this weave accepts any registered
@@ -226,7 +235,13 @@ void ConsoleEngine::record_arrival(const loom::Message& in) {
     // correlation this console minted, AND Loom's own stamp of who spoke — so a perfectly
     // shaped message from a participant that was not asked settles nothing, and neither does
     // a genuine respondent talking about a different conversation.
-    const std::optional<loom::PendingAsk> mine = book_.settle(in.correlation, in.sender);
+    // ...and an ask Loom says ended is closed by the same book, by its attempt (ANS-08): it is
+    // held for its caller as an answer is, so a tracked ask that will never be answered says so.
+    const bool ended = in.provenance.ask_ended() &&
+                       in.payload.schema().name() == loom::AskEnded::zen_name;
+    const std::optional<loom::PendingAsk> mine =
+        ended ? book_.end(loom::from_value<loom::AskEnded>(in.payload), in.provenance)
+              : book_.settle(in.correlation, in.sender);
     if (!mine) {
         return;
     }
@@ -239,7 +254,8 @@ void ConsoleEngine::record_arrival(const loom::Message& in) {
                   in.payload,
                   in.sender,
                   in.correlation,
-                  in.provenance.answers_ask()};
+                  in.provenance.answers_ask(),
+                  ended};
     settled_.erase(mine->id); // a settled id is never reopened, so this can only be a no-op
     settled_.emplace(mine->id, std::move(e));
 }
@@ -304,7 +320,7 @@ loom::Ticket ConsoleEngine::assemble_and_send(
     // every slot held the send still goes (a bookkeeping limit is not a messaging limit) and
     // reports `ask == 0`, so a caller that needs attribution knows it has none.
     loom::AskOpened opened;
-    if (next_tracking_ == ConsoleTracking::Tracked && asks_held() < kConsoleAskCapacity) {
+    if (next_tracking_ != ConsoleTracking::Untracked && asks_held() < kConsoleAskCapacity) {
         opened = book_.open(target, schema->name(), schema->version());
     }
     last_ask_ = opened ? opened.id : 0;
@@ -312,9 +328,12 @@ loom::Ticket ConsoleEngine::assemble_and_send(
     // Gated send AS the console: send_as stamps the console as sender and authorizes against
     // the console's grant; reply_to is the console so replies route back; the gate admits
     // against the target's accept-set at delivery.
-    const loom::Ticket t = bus_.send_as(
-        console_id_, target,
-        loom::Message(std::move(v), loom::WeaveId{}, console_id_, correlation));
+    // An `Asked` conversation goes through the ask door, so Loom tells the console if it ends
+    // unanswered (ANS-08); the others are sends.
+    loom::Message msg(std::move(v), loom::WeaveId{}, console_id_, correlation);
+    const loom::Ticket t = opened && next_tracking_ == ConsoleTracking::Asked
+                               ? bus_.ask_as(console_id_, {}, target, {}, std::move(msg))
+                               : bus_.send_as(console_id_, target, std::move(msg));
     if (opened) {
         (void)book_.bind_attempt(opened.id, t.seq); // the queued attempt, for diagnostics
     }

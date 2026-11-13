@@ -32,6 +32,12 @@ public:
                                     Message(std::move(payload), self_, WeaveId{}, correlation));
     }
 
+    Ticket ask(WeaveId target, std::string_view role, Value payload,
+               std::uint64_t correlation) override {
+        return bus_.ask_as(self_, {}, role.empty() ? target : WeaveId{}, role,
+                           Message(std::move(payload), self_, WeaveId{}, correlation));
+    }
+
     std::size_t publish(Value payload, std::uint64_t correlation) override {
         return bus_.publish_as(self_, Message(std::move(payload), self_, WeaveId{}, correlation));
     }

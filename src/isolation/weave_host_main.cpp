@@ -272,7 +272,10 @@ int main(int argc, char** argv) {
                    .sense_observe_role = nullptr,
                    // the isolated pipe supplies no offer door, as it supplies no claim or
                    // observe door: a child cannot present the identity a joint operation binds
-                   .sense_offer          = nullptr};
+                   .sense_offer          = nullptr,
+                   // ...and no ask door: the pipe carries no attestation back, so an ask's end
+                   // would have nowhere to go (ANS-08)
+                   .ask                  = nullptr};
 
     for (;;) {
         Op op = Op::Hello;
