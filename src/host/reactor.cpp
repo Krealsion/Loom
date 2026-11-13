@@ -42,12 +42,16 @@ namespace {
 /// What a source is last told, so it hears each change once.
 enum class Told { Nothing, Held, NotHeld };
 
+/// How many places in the wait a set takes: each handle once, as the look names it once. A POSIX
+/// descriptor waited on for reading and for room to write is one; a Windows socket says room to
+/// write through its event, so `writable` takes nothing there.
 std::size_t count_of(const WaitSet& set) {
-#ifdef _WIN32
-    return set.handles.size(); // a Windows socket says room to write through its event
-#else
-    return set.handles.size() + set.writable.size();
+    std::vector<std::int64_t> all = set.handles;
+#ifndef _WIN32
+    all.insert(all.end(), set.writable.begin(), set.writable.end());
 #endif
+    std::sort(all.begin(), all.end());
+    return static_cast<std::size_t>(std::unique(all.begin(), all.end()) - all.begin());
 }
 
 bool same(const WaitSet& a, const WaitSet& b) {
@@ -74,7 +78,7 @@ struct Role {
     std::uint64_t life = 0;
     std::uint64_t incarnation = 0;
     std::uint64_t revision = 0;
-    std::uint32_t version = 0; ///< of the `WaitSet` it claimed, and so of the `Waited` it is told
+    std::uint32_t version = 0; ///< of the `WaitSet` it claimed: the one the wait reads, or another
     WaitSet set;
     bool held = false;
     std::string why;
@@ -90,7 +94,7 @@ struct Role {
     std::uint64_t due_revision = 0;
     std::uint64_t wakes = 0;
 
-    /// A new holder, a claim of the other version, or none: what was told and done before says
+    /// A new holder, a claim of another version, or none: what was told and done before says
     /// nothing about it.
     void forget_holder() {
         claimed = false;
@@ -164,17 +168,9 @@ struct Reactor::Impl {
     HANDLE timer = nullptr;
 #endif
 
-    /// What the wait says to a role, in the version of `Waited` that answers its claim.
+    /// What the wait says to a role. A source that does not accept this version of `Waited` is
+    /// refused it at its door, which the tap shows.
     void say(Role& o, bool held, bool ready, bool due, const std::string& why) {
-        if (o.version == WaitSetV1::zen_version) {
-            WaitedV1 w;
-            w.revision = static_cast<std::int64_t>(o.revision);
-            w.held = held;
-            w.ready = ready;
-            w.why = why;
-            (void)bus.send_to_role(o.name, Message(to_value(w)));
-            return;
-        }
         Waited w;
         w.revision = static_cast<std::int64_t>(o.revision);
         w.held = held;
@@ -210,12 +206,23 @@ struct Reactor::Impl {
                    r.by.author_life_is_current && r.by.author_incarnation_is_current;
         };
         for (Role& o : roles) {
-            // The claim of version 2 when the current holder made one, else its claim of version 1.
             std::uint32_t version = WaitSet::zen_version;
             SenseReading r = bus.observe_role(o.name, WaitSet::zen_name, version);
             if (!current(r)) {
-                version = WaitSetV1::zen_version;
-                r = bus.observe_role(o.name, WaitSetV1::zen_name, version);
+                // A claim of another version, which the wait cannot read: its source is told so
+                // rather than left to wait on a wake that never comes.
+                const WeaveId holder = bus.role_holder(o.name);
+                for (const std::shared_ptr<const Schema>& s : bus.claimed_schemas(holder)) {
+                    if (s->name() != WaitSet::zen_name || s->version() == WaitSet::zen_version) {
+                        continue;
+                    }
+                    SenseReading other = bus.observe_role(o.name, s->name(), s->version());
+                    if (current(other)) {
+                        version = s->version();
+                        r = std::move(other);
+                        break;
+                    }
+                }
             }
             if (!current(r)) {
                 o.forget_holder();
@@ -232,15 +239,18 @@ struct Reactor::Impl {
             }
             o.claimed = true;
             o.revision = r.by.revision;
-            if (version == WaitSetV1::zen_version) {
-                const WaitSetV1 v1 = from_value<WaitSetV1>(*r.value);
+            if (version != WaitSet::zen_version) {
                 o.set = WaitSet{};
-                o.set.handles = v1.handles;
-                o.set.writable = v1.writable;
-                o.set.messages = v1.messages;
-            } else {
-                o.set = from_value<WaitSet>(*r.value);
+                o.held = false;
+                o.why = "it claims " + std::string(WaitSet::zen_name) + " version " +
+                        std::to_string(version) + ", and the wait reads version " +
+                        std::to_string(WaitSet::zen_version) + " only, as " +
+                        std::string(Waited::zen_name) + " version " +
+                        std::to_string(Waited::zen_version) + " answers it";
+                tell(o);
+                continue;
             }
+            o.set = from_value<WaitSet>(*r.value);
             std::string why;
             if (o.refused && o.refused_revision == o.revision) {
                 why = o.why;

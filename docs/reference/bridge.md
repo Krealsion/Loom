@@ -192,8 +192,9 @@ reader, with no console in it: `hello(claimed, credential)`,
 `await_admission(ms)`, `send`/`send_to_role` (optionally asking for settlement)
 and `publish` under a correlation, `describe`, `poll(events)` — every far frame
 decoded to a `BridgeEvent` the caller owns. A send is **queued** until the next
-`poll` or `flush`. It decodes no payload: the shapes belong to the participant
-that asked.
+`poll` or `flush`; a host that waits on the client is woken by the queuing, so
+the send leaves in the turn it is made ([below](#a-client-a-host-waits-on)). It
+decodes no payload: the shapes belong to the participant that asked.
 
 `zen/bridge/link.hpp` is how an ordinary weave asks across a link a host holds
 for it: `loom.link.Ask{role | target, payload bytes, settle}` to the link's
@@ -395,3 +396,25 @@ the wait wakes, and an idle connection costs the host nothing.
   is served as it always was, by `service()`, `step()` or `run()`.
 - **It changes with the connections**, so a waiting source asks for it again after each
   `service()`.
+
+## A client a host waits on
+
+A host waits on a client the same way: `BridgeClient::wait_set()`, and `poll()` when the wait says
+it is ready. The set is the client's socket and a signal the client raises itself whenever it
+queues something -- a send, a publication, a description or a listing -- so a far frame is read in
+the turn it arrives, and what a turn queued leaves at the poll the wait wakes, not at the next look.
+
+- **On Windows** it is one event the socket is selected on (`WSAEventSelect`, for a read, room to
+  write and a close), which the client also sets when it queues.
+- **On POSIX** it is a pipe's read end beside the socket, and the socket as writable while its
+  output waits on a full buffer.
+- **The first call turns it on**, and says once whatever was owed before: the frames the handshake
+  read and kept, or the end. A client no host waits on is polled as it always was.
+- **Once the end is said it is empty**: a finished socket has nothing more to give. A reconnect is
+  a new client, so a waiting host asks again before every wait.
+
+The supplied host waits on every link it mounts this way, beside its door, as what it serves
+itself ([the guide](../guides/running-loom.md#a-host-that-rests-until-something-is-ready)), and
+at a session's end it waits on the door's sockets until its last answers have been written
+(`BridgeServer::owes()`) and the client that asked for the end has closed, for at most
+`kLastAnswerMs` ([bounds](bounds.md#a-hosts-one-wait)).

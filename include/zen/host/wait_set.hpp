@@ -10,7 +10,9 @@
 // `loom::host::Reactor` (zen/host/reactor.hpp) reads the claims of the roles it trusts, waits once
 // on all of them, on the times they say they are due and on its own deadline, and sends each role a
 // `Waited`. Only the host sends one: a source reads one from any other sender as nothing. The
-// handles mean something only in this process, and the times only on the wait's clock.
+// handles mean something only in this process, and the times only on the wait's clock. The wait
+// reads these versions alone: a source whose claim is of another version is not held, and is told
+// why in this `Waited`, which a source that cannot accept it shows on the tap as refused.
 // docs/guides/running-loom.md#a-host-that-rests-until-something-is-ready
 
 #include <zen/weave/shape.hpp>
@@ -73,38 +75,6 @@ struct Waited {
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(revision), ZEN_FIELD(held), ZEN_FIELD(ready),
                                ZEN_FIELD(why), ZEN_FIELD(due), ZEN_FIELD(now_ms));
-    }
-};
-
-/// The claim of version 1, which names no time. The wait still reads it from a source built
-/// before `until_ms`, holds it as the claim of the same handles, and answers that source in
-/// `WaitedV1`, the version it accepts. A role whose holder claims both is read by its version 2.
-struct WaitSetV1 {
-    std::vector<std::int64_t> handles;
-    std::vector<std::int64_t> writable;
-    bool messages = false;
-
-    using ZenSelf = WaitSetV1;
-    static constexpr const char* zen_name = "loom.host.WaitSet";
-    static constexpr std::uint32_t zen_version = 1;
-    static auto zen_fields() {
-        return std::make_tuple(ZEN_FIELD(handles), ZEN_FIELD(writable), ZEN_FIELD(messages));
-    }
-};
-
-/// The answer of version 1, to a source that claimed a `WaitSetV1`: `Waited` with no time in it.
-struct WaitedV1 {
-    std::int64_t revision = 0;
-    bool held = false;
-    bool ready = false;
-    std::string why;
-
-    using ZenSelf = WaitedV1;
-    static constexpr const char* zen_name = "loom.host.Waited";
-    static constexpr std::uint32_t zen_version = 1;
-    static auto zen_fields() {
-        return std::make_tuple(ZEN_FIELD(revision), ZEN_FIELD(held), ZEN_FIELD(ready),
-                               ZEN_FIELD(why));
     }
 };
 

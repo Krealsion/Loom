@@ -103,6 +103,21 @@ public:
     std::size_t expectations() const noexcept { return expectations_.size(); }
     BridgeServer* server() noexcept { return server_.get(); }
 
+    /// Whether the client that asked this lifetime to end is still connected. The host's end
+    /// serves it until it goes, since reading the answer may take it one more request (a compat
+    /// client asks for the answer's shape). False for an end asked at the console.
+    bool asker_connected() const {
+        if (!server_ || !ending_asker_.valid()) {
+            return false;
+        }
+        for (const Connection& c : server_->connections()) {
+            if (c.session == ending_asker_ && c.state != ConnectionState::Closed) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /// THE I/O HALF, once per host turn: sever the sessions of any registrar that is no longer
     /// on the bus, then accept, read, dispatch, flush. Severed first, so nothing a severed session
     /// sent is read, however long the host rested since its registrar left.
@@ -122,6 +137,7 @@ public:
         // Only a client holds a grant naming this shape; the bus has already checked that. The
         // host reads `ending()` after the turn, flushes this answer, and exits 0.
         ending_ = true;
+        ending_asker_ = mail.sender();
         ending_reason_ = s.reason.empty() ? std::string("a client asked this session to end")
                                           : s.reason;
         (void)mail.answer(Ack{});
@@ -451,6 +467,7 @@ private:
     std::vector<Expectation> expectations_;
     std::set<std::uint64_t> clients_;
     bool ending_ = false;
+    WeaveId ending_asker_{}; ///< the session that asked this lifetime to end
     std::string ending_reason_;
 };
 

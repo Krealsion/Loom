@@ -4,8 +4,9 @@
 // THE STRANGER'S CROSSING: a host outside Loom's build tree that serves a listener under an
 // admission policy of its own, and a client that connects, is refused, then admitted and
 // answered, reaching both halves only through `find_package(loom)`. It links `loom::bridge` and
-// nothing unexported (no console, no UI, no remote console): if the admission seam, the client
-// or the link envelope stop being reachable that way, this fails to configure or compile.
+// nothing unexported (no console, no UI, no remote console): if the admission seam, the client,
+// the link envelope or what a host waits on for either stop being reachable that way, this fails
+// to configure or compile.
 
 #include <zen/bridge/client.hpp>
 #include <zen/bridge/link.hpp>
@@ -135,6 +136,10 @@ int main() {
         ok(client.admitted(), "...and is admitted");
         ok(client.established_name() == "guest-of-agent",
            "the established name is the policy's word, not the claim");
+        ok(!client.wait_set().handles.empty(),
+           "the client says what a stranger host's one wait waits on for it");
+        server.step();
+        ok(!server.owes(), "a server that has written all it was handed owes nothing");
         client.send_to_role("echo", 9, loom::serialize(loom::to_value(Echo{"hi"})));
         const loom::BridgeEvent* delivered = nullptr;
         (void)until(
