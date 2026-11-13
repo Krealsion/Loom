@@ -569,11 +569,12 @@ public:
     Answer ask(loom::WeaveId target, const char* shape, std::uint32_t version,
                const std::map<std::string, loom::FieldValue>& fields, int turns = kSettleTurns) {
         std::string error;
-        // TRACKED, AND THEREFORE OWED: this host holds a slot for every conversation it opens
-        // and returns it by taking the answer here, by taking it in `report_late_answers`
-        // when it lands later, or by forgetting it at the person's word.
+        // ASKED, AND THEREFORE OWED: every respondent here (the Manager, the control door, the
+        // warden) answers through the answer right, so Loom follows each conversation to its
+        // answer or to its end (ANS-08). The host holds a slot for each and returns it by taking
+        // the answer or the ending here, in `report_late_answers`, or at the person's word.
         const loom::Submitted sent = console_->submit(target, shape, version, fields,
-                                                      loom::ConsoleTracking::Tracked, &error);
+                                                      loom::ConsoleTracking::Asked, &error);
         return settle(sent, shape, error, turns);
     }
 
@@ -581,7 +582,7 @@ public:
     Answer ask(loom::WeaveId target, const loom::Value& value, int turns = kSettleTurns) {
         std::string error;
         const loom::Submitted sent =
-            console_->submit(target, value, loom::ConsoleTracking::Tracked, &error);
+            console_->submit(target, value, loom::ConsoleTracking::Asked, &error);
         return settle(sent, value.schema().name().c_str(), error, turns);
     }
 

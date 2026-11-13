@@ -1779,4 +1779,126 @@ TEST_CASE("an artifact from before the oldest ABI a host loads is refused at loa
     CHECK(bus.list_weaves().empty());
 }
 
+
+// ---- the answers the door and the Manager owe (ANS-02, ANS-08) ---------------------------
+
+/// Ask `target` from the console through the ask door, turn the bus dry, and return what the
+/// console holds for that conversation: the answer, or the ending Loom told.
+BufferEntry asked(Rig& r, WeaveId target, const Value& v) {
+    std::string err;
+    const Submitted s = r.engine.submit(target, v, ConsoleTracking::Asked, &err);
+    REQUIRE_MESSAGE(s.sent(), err);
+    REQUIRE(s.ask != 0);
+    r.engine.pump();
+    r.bus.drain_until_idle();
+    const std::optional<BufferEntry> held = r.engine.take_settled(s.ask);
+    REQUIRE(held);
+    return *held;
+}
+
+TEST_CASE("an ask to the control door ends answered, and a reply it is sent elsewhere stays "
+          "ordinary words") {
+    Rig r;
+    const BufferEntry listed = asked(r, r.control, to_value(ListLibraries{}));
+    CHECK(listed.answers_ask);
+    CHECK_FALSE(listed.ask_ended);
+    CHECK(listed.name == Result::zen_name);
+    const BufferEntry refused = asked(r, r.control, to_value(UnloadLibrary{"nothing"}));
+    CHECK(refused.answers_ask);
+    CHECK(refused.name == Refused::zen_name);
+
+    // A participant that names another weave by reply_to: that weave hears the reply, in
+    // ordinary words, and the sender hears nothing.
+    Registered sender = register_probe(r.bus, {schema_of<Result>()}, 2, true,
+                                       load_capability(r.control));
+    Registered elsewhere = register_probe(r.bus, {schema_of<Result>()});
+    std::vector<bool> heard_attested;
+    elsewhere.weave->on_handle = [&](const Message& in, Bus&, ProbeWeave&) {
+        heard_attested.push_back(in.provenance.answers_ask());
+    };
+    std::size_t sender_heard = 0;
+    sender.weave->on_handle = [&](const Message&, Bus&, ProbeWeave&) { ++sender_heard; };
+    r.bus.send_as(sender.id, r.control,
+                  Message(to_value(ListLibraries{}), WeaveId{}, elsewhere.id, 5));
+    r.bus.drain_until_idle();
+    REQUIRE(heard_attested.size() == 1);
+    CHECK_FALSE(heard_attested[0]);
+    CHECK(sender_heard == 0);
+}
+
+TEST_CASE("an ask to the Manager ends answered with the door's result, through the right it kept "
+          "while the door worked") {
+    Rig r;
+    const BufferEntry loaded =
+        asked(r, r.manager, to_value(LoadWeave{"spawner", ZEN_SO_WEAVE, {"spawner"}, ""}));
+    CHECK(loaded.answers_ask);
+    CHECK_FALSE(loaded.ask_ended);
+    CHECK(loaded.name == Result::zen_name);
+    CHECK(text_field(loaded.value, "value") ==
+          std::to_string(r.kernel.weave_id("spawner").value));
+    const BufferEntry listed = asked(r, r.manager, to_value(ListLoaded{}));
+    CHECK(listed.answers_ask);
+    CHECK(text_field(listed.value, "value") == "spawner@spawner");
+    const BufferEntry refused = asked(r, r.manager, to_value(ReloadWeave{"absent", ZEN_SO_WEAVE}));
+    CHECK(refused.answers_ask);
+    CHECK(refused.name == Refused::zen_name);
+}
+
+TEST_CASE("the Manager's kept answer ends with it: removed or dead before the door answers, its "
+          "asker is told so, and the console holds ENDED") {
+    for (const char* reason : {"RespondentRemoved", "RespondentDied"}) {
+        CAPTURE(reason);
+        Rig r;
+        std::string err;
+        const Submitted s =
+            r.engine.submit(r.manager, to_value(ListLoaded{}), ConsoleTracking::Asked, &err);
+        REQUIRE_MESSAGE(s.sent(), err);
+        REQUIRE(r.bus.pump_pending() == 1); // the Manager kept the right and forwarded
+        CHECK_FALSE(r.engine.settled(s.ask).has_value());
+        if (std::string(reason) == "RespondentRemoved") {
+            REQUIRE(r.bus.unregister_weave(r.manager));
+        } else {
+            r.bus.kill(r.manager);
+        }
+        r.bus.drain_until_idle();
+        const std::optional<BufferEntry> held = r.engine.take_settled(s.ask);
+        REQUIRE(held);
+        CHECK(held->ask_ended);
+        CHECK_FALSE(held->answers_ask);
+        CHECK(reason_name(from_value<AskEnded>(held->value).stage) == reason);
+    }
+}
+
+TEST_CASE("a forward the Manager's relay sheds past its bound lets go of its kept answer, and its "
+          "asker is told Released") {
+    Switchboard bus;
+    // A door that never answers, so every forward stays open.
+    Registered door = register_probe(bus, {schema_of<ListLibraries>()});
+    auto weave = std::make_unique<WeaveManager>(door.id);
+    WeaveManager* raw = weave.get();
+    const WeaveId manager =
+        bus.register_weave(std::move(weave), manager_capability(door.id), kManagerRole);
+    raw->zen_set_self(manager);
+    std::vector<AskEnded> ended;
+    std::vector<std::uint64_t> ended_correlation;
+    Registered asker = register_probe(bus, {greet_schema(), schema_of<AskEnded>(),
+                                            schema_of<Result>()});
+    asker.weave->on_handle = [&](const Message& in, Bus& b, ProbeWeave&) {
+        if (in.payload.schema().name() == greet_schema()->name()) {
+            for (std::uint64_t c = 1; c <= kMaxRelayPending + 1; ++c) {
+                (void)b.ask(manager, Message(to_value(ListLoaded{}), WeaveId{}, WeaveId{}, c));
+            }
+        } else if (in.provenance.ask_ended()) {
+            ended.push_back(from_value<AskEnded>(in.payload));
+            ended_correlation.push_back(in.correlation);
+        }
+    };
+    bus.send(asker.id, Message(greet("ask")));
+    bus.drain_until_idle();
+    REQUIRE(ended.size() == 1);
+    CHECK(reason_name(ended[0].stage) == "Released");
+    CHECK(ended_correlation[0] == 1); // the oldest
+    CHECK(manager_state(bus, manager).get("relay")->as_message()->get("pending")->as_list().size() ==
+          kMaxRelayPending);
+}
 } // TEST_SUITE

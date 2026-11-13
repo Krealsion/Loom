@@ -10,7 +10,8 @@
 // is the load capability, the most dangerous grant; a Weave without it is `CapabilityDenied` at
 // delivery.
 //
-// Every operation replies to the asker (reply_to if given, else the stamped sender):
+// Every operation answers its asker, the stamped sender, through the answer right, or replies in
+// ordinary words where `reply_to` names another weave:
 //   LoadLibrary    -> zen.Result{weave id}   | zen.Refused{why}
 //   ReloadLibrary  -> zen.Ack                | zen.Refused{why}
 //   UnloadLibrary  -> zen.Ack                | zen.Refused{why}
@@ -393,13 +394,19 @@ private:
         return {};
     }
 
-    /// Reply to the asker, reply_to if given or else the stamped sender, echoing the request's
-    /// correlation. An ordinary send, not an authenticated answer. A request with neither address
-    /// gets no reply.
+    /// Answer the asker: the stamped sender, through this delivery's answer right, so an ask ends
+    /// answered and a plain send hears Loom's word that this is its answer; or, when `reply_to`
+    /// names another weave, an ordinary send there, which cannot attest a conversation with
+    /// somebody who did not ask. Either way under the request's correlation. A request with
+    /// neither address gets no reply.
     template <class Answer>
     void answer(loom::Mail& mail, const Answer& a) {
         const loom::WeaveId to = mail.reply_to().valid() ? mail.reply_to() : mail.sender();
         if (!to.valid()) {
+            return;
+        }
+        if (to == mail.sender()) {
+            (void)mail.answer(a);
             return;
         }
         mail.send(to, a, mail.correlation());

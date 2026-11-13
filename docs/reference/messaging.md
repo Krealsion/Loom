@@ -475,7 +475,10 @@ void on(const loom::AskEnded& ended, loom::Mail& mail) {
   image cannot ask ([known seams](known-seams.md)).
 
 `loom::TerminalSession` sends its asks through this door and says `ENDED` with the
-stage and the reason; `loom::ConsoleEngine` does for an `Asked` conversation.
+stage and the reason; `loom::ConsoleEngine` does for an `Asked` conversation. Loom's own
+control door and Weave Manager answer through the answer right, the Manager keeping it
+while the door works, so an ask to either ends answered or is told its end
+([kernel](kernel.md#answers-from-the-control-door-and-the-weave-manager)).
 
 ### Substrate answer attribution
 
