@@ -36,6 +36,7 @@
 // renderer has a terminal to protect. docs/reference/terminal.md#the-transcript
 
 #include <zen/bounded_history.hpp>
+#include <zen/weave/ask_ended.hpp>
 #include <zen/weave/dispatch_refusal.hpp>
 #include <zen/schema.hpp>
 #include <zen/switchboard/message.hpp>
@@ -109,6 +110,13 @@ struct TranscriptDispatchRefusal {
     std::uint64_t retired_ask = 0;
 };
 
+/// Authenticated detail of a received `zen.AskEnded` (ANS-08): which ask ended, at what stage
+/// and why, and the local ask it closed, 0 when it names none this participant still tracks.
+struct TranscriptAskEnded {
+    AskEnded ended;
+    std::uint64_t ended_ask = 0;
+};
+
 /// One observation, with its provenance kept apart from its payload. The trusted fields come
 /// from Loom and no sender can write them: `sender` is the bus stamp, `authored_role` a role
 /// Loom verified at authorship, `answers_ask` provenance no ordinary enqueue produces. A payload
@@ -160,6 +168,8 @@ struct TranscriptEntry {
     /// Received: present only after checking Loom's dispatch-refusal provenance.
     /// Bounded by the transcript window; no original payload is retained here.
     std::shared_ptr<const TranscriptDispatchRefusal> dispatch_refusal;
+    /// Received: present only after checking Loom's ask-ended provenance.
+    std::shared_ptr<const TranscriptAskEnded> ask_ended;
 };
 
 /// A retained inbound message: its stable id and the EXACT Value that arrived.

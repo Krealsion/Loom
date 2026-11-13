@@ -174,16 +174,17 @@ int main() {
     bus.pump_pending();
     ok(session.session->waiting_on(denied.ask),"refusal notification is a later delivery");
     bus.pump_pending();
-    ok(!session.session->waiting_on(denied.ask),"authenticated dispatch refusal retires the exact ask");
-    bool saw_refusal=false;
+    ok(!session.session->waiting_on(denied.ask),"the ask's authenticated end retires the exact ask");
+    bool saw_ending=false;
     for(const auto& e : session.session->transcript().entries()) {
-        if(e.dispatch_refusal) {
-            saw_refusal=e.kind==loom::TranscriptKind::Received && e.shape=="zen.DispatchRefused" &&
-                e.dispatch_refusal->send.reason=="CapabilityDenied" &&
-                e.dispatch_refusal->retired_ask==denied.ask && !e.answers_ask;
+        if(e.ask_ended) {
+            saw_ending=e.kind==loom::TranscriptKind::Received && e.shape=="zen.AskEnded" &&
+                std::string(loom::stage_name(e.ask_ended->ended.stage))=="queued" &&
+                loom::reason_name(e.ask_ended->ended.stage)=="CapabilityDenied" &&
+                e.ask_ended->ended_ask==denied.ask && !e.answers_ask && !e.dispatch_refusal;
         }
     }
-    ok(saw_refusal,"installed transcript separates the authenticated refusal from ordinary speech");
+    ok(saw_ending,"installed transcript separates the ask's authenticated end from ordinary speech");
 
     // 7. Two identities, and the refusal to merge them, reach a stranger too.
     const loom::MountedTerminal seat = loom::host_mount_terminal(

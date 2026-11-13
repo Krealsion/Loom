@@ -373,12 +373,17 @@ TerminalResult TerminalSession::author(const Address& to, std::string_view name,
     // Preserve the actual composed value before handing it to the channel. Neither later
     // schema discovery nor re-executing the source text can reconstruct this historical fact.
     transcript_.retain_authored(entry.seq, payload);
+    // An ask goes through the ask door, so Loom follows it to its answer or tells this
+    // participant it ended (ANS-08); a send is a statement nobody waits on.
     switch (to.mode) {
     case Addressing::Weave:
-        entry.attempt = channel_->send(to.target, std::move(payload), correlation).seq;
+        entry.attempt = as_ask ? channel_->ask(to.target, {}, std::move(payload), correlation).seq
+                               : channel_->send(to.target, std::move(payload), correlation).seq;
         break;
     case Addressing::Role:
-        entry.attempt = channel_->send_to_role(to.role, std::move(payload), correlation).seq;
+        entry.attempt =
+            as_ask ? channel_->ask(WeaveId{}, to.role, std::move(payload), correlation).seq
+                   : channel_->send_to_role(to.role, std::move(payload), correlation).seq;
         break;
     case Addressing::Publish:
         // The fanout count is the one delivery fact an ordinary sender is given, and it says how
@@ -442,16 +447,17 @@ TerminalResult TerminalSession::cancel_ask(std::uint64_t ask_id) {
 // ---- the Weave contract ----------------------------------------------------
 
 std::vector<std::shared_ptr<const loom::Schema>> TerminalSession::accepted_schemas() const {
-    // The supplied vocabulary's doors plus TerminalSession's common DispatchRefused door —
-    // never the catalog or AcceptMode::AnyRegistered. Accepting every registered shape would be
-    // accepting shapes chosen by whoever else happens to be running, which is a decision its host
-    // never made.
+    // The supplied vocabulary's doors plus TerminalSession's two common notice doors, a send's
+    // refusal and an ask's end — never the catalog or AcceptMode::AnyRegistered. Accepting every
+    // registered shape would be accepting shapes chosen by whoever else happens to be running,
+    // which is a decision its host never made.
     auto doors = vocabulary_.doors();
-    const auto notice = schema_of<DispatchRefused>();
-    const bool already = std::any_of(doors.begin(), doors.end(), [&](const auto& s) {
-        return s->name() == notice->name() && s->version() == notice->version();
-    });
-    if (!already) { doors.push_back(notice); }
+    for (const auto& notice : {schema_of<DispatchRefused>(), schema_of<AskEnded>()}) {
+        const bool already = std::any_of(doors.begin(), doors.end(), [&](const auto& s) {
+            return s->name() == notice->name() && s->version() == notice->version();
+        });
+        if (!already) { doors.push_back(notice); }
+    }
     return doors;
 }
 
@@ -496,6 +502,15 @@ void TerminalSession::handle(const loom::Message& in, loom::Bus& bus) {
             (void)asks_.forget(pending->id);
         }
         entry.dispatch_refusal = std::move(detail);
+    }
+    if (in.provenance.ask_ended() &&
+        in.payload.schema().content_id() == schema_of<AskEnded>()->content_id()) {
+        auto detail = std::make_shared<TranscriptAskEnded>();
+        detail->ended = from_value<AskEnded>(in.payload);
+        if (const std::optional<PendingAsk> closed = asks_.end(detail->ended, in.provenance)) {
+            detail->ended_ask = closed->id;
+        }
+        entry.ask_ended = std::move(detail);
     }
 
     if (answers) {

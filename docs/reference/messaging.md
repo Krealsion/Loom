@@ -277,12 +277,17 @@ A delivered request grants its handler **one** answer opportunity
 - the recipient checks `mail.answers_ask()` — Loom's word that this delivery
   is THE authorized answer to a request it sent.
 
-Deferred capacity is **bounded at the Loom level, not per weave**
-(`kMaxDeferredAnswers`, <!-- value kMaxDeferredAnswers -->64<!-- /value -->); overflow refuses visibly as `Exhausted` and the
-immediate opportunity survives. A long-running operation that would hold a
-slot for ages may prefer an immediate authenticated acknowledgment followed by
-ordinary later speech — the ack is provable, the follow-up is ordinary, and no
-bounded slot is parked.
+Kept answers are **bounded per respondent and per Loom**
+(`kMaxDeferredPerWeave`, <!-- value kMaxDeferredPerWeave -->64<!-- /value -->, under `kMaxDeferredAnswers`,
+<!-- value kMaxDeferredAnswers -->1024<!-- /value -->; [bounds](bounds.md)): a weave that keeps too many exhausts
+itself and nobody else. Either overflow refuses visibly as `Exhausted` and the
+immediate opportunity survives. **Work that is owed is held as the kept answer,
+and progress is ordinary speech**: the asker of a build holds an open ask until
+the build's result is its answer, so a replacement, a reload or the death of the
+builder is something Loom can tell the asker
+([asks](#asks-and-how-each-one-ends)). An acknowledgment followed by ordinary
+later speech ends the ask `answered`, correctly, and leaves the real result a
+promise nothing follows.
 
 An answer is delivered only to the exact life+incarnation that asked
 ([ANS-03](../laws/answer-authority-laws.md)); correlations identify but never
@@ -334,10 +339,13 @@ if (const std::optional<loom::PendingAsk> closed = asks.settle(mail.correlation(
   *means* — succeeded, refused, here is the value — stays with the consumer, and
   a conversation may be answered by any shape at all.
 - **Outstanding means only "I asked, and no answer of mine has settled it."**
-  Not that the respondent received it, owes an answer, or will ever reply. There
-  is no timeout, no expiry and no unanswerability notice in Loom today, so an ask
-  stays outstanding until the asker locally `forget`s it — which cancels nothing
-  at the far end, because there is no cancellation vocabulary to cancel it with.
+  Not that the respondent received it, owes an answer, or will ever reply. An ask
+  sent through the ask door is also closed by Loom's word that it ended:
+  `end(ended, mail)` closes the record a `zen.AskEnded` names by its bound
+  attempt, and `end_all()` closes what a successor inherited, since its
+  predecessor's asks ended with it ([asks](#asks-and-how-each-one-ends)). A plain
+  send stays outstanding until the asker locally `forget`s it, which cancels
+  nothing at the far end: there is no cancellation vocabulary, and no timeout.
 
 **Who keeps one.** `loom::TerminalSession`, and `loom::ConsoleEngine`, which is
 the weaver's own asking participant. The console's case is the sharpest illustration of why the pair is
@@ -353,7 +361,9 @@ counter beside it could stamp a send with a number an open conversation is
 already using.
 
 The console opens a conversation only for a caller that asks it to
-(`ConsoleTracking::Tracked`), and that caller owns it: its slot stays spent until
+(`ConsoleTracking::Tracked`, or `Asked` to send it through the ask door, whose
+ending is held for the caller as an answer is, so the slot never waits for an
+answer that will not come), and that caller owns it: its slot stays spent until
 the caller takes the answer or forgets the conversation, including after the
 answer has arrived, so what the console holds is bounded by the book rather than
 by how much traffic it has served ([bounds](bounds.md#console-weaver-history)).
@@ -401,11 +411,71 @@ If the weave explicitly accepts `loom::DispatchRefused`,
 role address, request shape/version and empty directed-target field. This is a dispatch
 refusal, not an answer. Forget only when the owner has interpreted that outcome.
 
-`forget()` changes local tracking only. Silence may remain pending forever; no retries,
+`ask_role(...)` is the same through the ask door, and `matches_ending(ended, mail)` is its
+ending's match, on the same terms: Loom's provenance, the exact attempt, the role address
+and the request's shape and version.
+
+`forget()` changes local tracking only. A plain send's silence may remain pending forever; no retries,
 timeouts or remote cancellation are implied. Role resolution, answer incarnation checks
 and grants are the ordinary Loom mechanisms. Keep AskBook for a bounded collection of
 conversations and its correlation allocation; RoleRequest is a single-attempt convenience
 for a caller that already owns those decisions. It is not part of persisted weave state.
+
+### Asks, and how each one ends
+
+An **ask** is a directed or role-addressed send whose asker says it waits on an
+answer ([ANS-08](../laws/answer-authority-laws.md)): `mail.ask(target, msg, c)`,
+`mail.ask_role(role, msg, c)`, and the same on `mail.as_role(R)`. It is
+authorized, routed, gated and delivered exactly as a send is, and the respondent
+sees nothing new: `answer`, `defer_answer` and `spend_deferred` are its doors.
+Loom then follows it with the records it already keeps -- the envelope while it is
+queued, the answer right while the handler runs, the kept answer after -- to its
+answer, or to one `zen.AskEnded` (`zen/weave/ask_ended.hpp`), sent by Loom to the
+exact life and incarnation that asked.
+
+The asker must accept `loom::AskEnded`: an ask from a weave that does not is
+refused at the call, its Ticket invalid with `AskEndedNotAccepted`, nothing
+queued and the refusal on the tap, so no ask's end has nowhere to go. Keep the
+Ticket: the ending names it.
+
+| stage | reason | where it is told |
+|---|---|---|
+| `queued` | `CapabilityDenied`, `NoSuchTarget`, `TargetUnavailable`, `NotAccepted`, `GateRefused`, `ApplicationFailed` | the ask was refused before any handler, for one of the reasons `zen.DispatchRefused` says |
+| `queued` | `AskerSealed` | the asker was retired before its ask was delivered |
+| `delivered` | `Unanswered` | the handler returned with the right neither spent nor kept |
+| `delivered` | `HandlerFailed` | the handler did not finish; told before its exception reaches the host |
+| `deferred` | `Released` | the respondent let its kept answer go |
+| `deferred` | `RespondentReplaced` | new code was committed behind the respondent's id |
+| `deferred` | `RespondentRemoved`, `RespondentDied` | the respondent was removed, or died |
+| `deferred` | `RespondentRetired` | the respondent was retired at an admission, where a sealed weave's answer cannot leave |
+| `answered` | `AnswerRefused` | an answer was made, and Loom refused to deliver it |
+
+```cpp
+void on(const loom::AskEnded& ended, loom::Mail& mail) {
+    if (!mail.ask_ended()) return;                    // the shape alone is ordinary speech
+    if (auto mine = book_.end(ended, mail)) {         // by the exact attempt
+        if (ended.never_delivered()) retry(*mine);    // `queued`: it reached no one
+        else decide(*mine, ended.stage);              // it may have been half done
+    }
+}
+```
+
+- **How far it got is what makes a retry safe.** `queued` reached no handler;
+  every later stage may have been half done, and the asker decides.
+- **It grants nothing**: no answer right, immediate or kept. It carries the ask's
+  attempt, address as addressed (never a role's resolved holder), shape and
+  version, and the ask's correlation on its delivery; never the payload, the
+  reply address or a gate's detail.
+- **Once.** An ask ends exactly once: its answer, or one notice. An asker whose
+  own life or code changed is told nothing -- the exact asker is gone -- and a
+  notice that could not be made is dropped, the ending staying on the tap.
+- **Its edges.** A plain send is not followed (it keeps `zen.DispatchRefused`), nor
+  is work promised in ordinary words, nor a live respondent that has not answered:
+  Loom has no clock. The isolation pipe cannot carry the notice, so an isolated
+  image cannot ask ([known seams](known-seams.md)).
+
+`loom::TerminalSession` sends its asks through this door and says `ENDED` with the
+stage and the reason; `loom::ConsoleEngine` does for an `Asked` conversation.
 
 ### Substrate answer attribution
 

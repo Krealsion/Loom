@@ -3,6 +3,7 @@
 
 #include <zen/isolation/host.hpp>
 
+#include <zen/weave/ask_ended.hpp>
 #include <zen/weave/dispatch_refusal.hpp>
 #include <zen/kernel/making_words.hpp> // a refused making's words, said as the kernel says them
 #include <zen/kernel/schema_codec.hpp> // manifest_schema, decode_schema (shared encode/decode)
@@ -628,13 +629,27 @@ void IsolationHost::reconstruct_and_cache(Link& link, const std::string& manifes
 
     std::vector<std::shared_ptr<const Schema>> accept;
     for (const loom::Cell& c : mv.get("accepted")->as_list()) {
-        auto door = loom::decode_schema(*c.as_message(), registry_);
-        if (door->name() == DispatchRefused::zen_name &&
-            door->version() == DispatchRefused::zen_version) {
+        // A notice the pipe cannot attest is refused by its name, read before the description is
+        // decoded, so what it nests does not decide which refusal is said.
+        const loom::Value* named = c.as_message().get();
+        const loom::Cell* inner = named->get("union");
+        if (inner == nullptr) {
+            inner = named->get("record");
+        }
+        if (inner != nullptr) {
+            named = inner->as_message().get();
+        }
+        const std::string name = named->get("name")->as_text();
+        const std::int64_t version = named->get("version")->as_int();
+        if (name == DispatchRefused::zen_name && version == DispatchRefused::zen_version) {
             throw std::runtime_error("zen.DispatchRefused requires native or loaded delivery; "
                                      "the isolated pipe cannot attest dispatch refusal");
         }
-        accept.push_back(std::move(door));
+        if (name == AskEnded::zen_name && version == AskEnded::zen_version) {
+            throw std::runtime_error("zen.AskEnded requires native or loaded delivery; the "
+                                     "isolated pipe cannot attest an ask's end, so it cannot ask");
+        }
+        accept.push_back(loom::decode_schema(*c.as_message(), registry_));
     }
     auto state = loom::decode_schema(*mv.get("state")->as_message(), registry_);
     // The declared emit-set, decoded as the doors are: top-level, against this host's

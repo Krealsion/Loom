@@ -57,6 +57,11 @@ inline loom::Ticket ticket_from(ZenStatus status, std::uint64_t attempt) {
     if (status == ZEN_ERR_ROLE_AUTHORSHIP_DENIED) {
         return loom::Ticket{0, loom::RefusalReason::RoleAuthorshipDenied};
     }
+#if ZEN_ABI_VERSION >= 15
+    if (status == ZEN_ERR_ASK_ENDED_NOT_ACCEPTED) {
+        return loom::Ticket{0, loom::RefusalReason::AskEndedNotAccepted};
+    }
+#endif
     return loom::Ticket{};
 }
 
@@ -146,6 +151,32 @@ public:
             host_->release_deferred(host_->ctx, answer.opaque_token());
         }
     }
+
+#if ZEN_ABI_VERSION >= 15
+    // ---- asks across the seam (ANS-08) --------------------------------------
+    // One host door for the four forms. A host without it (one before 15, or the isolated pipe)
+    // refuses the ask, and it is never sent as a plain send instead. An image built against an
+    // earlier header has no ask, as it had no door to ask through.
+
+    loom::Ticket ask(loom::WeaveId target, loom::Message msg) override {
+        return ask_through(nullptr, target, nullptr, msg);
+    }
+    loom::Ticket ask_role(std::string_view role, loom::Message msg) override {
+        const std::string to_z(role);
+        return ask_through(nullptr, loom::WeaveId{}, to_z.c_str(), msg);
+    }
+    loom::Ticket role_ask(std::string_view as_role, loom::WeaveId target,
+                          loom::Message msg) override {
+        const std::string as_z(as_role);
+        return ask_through(as_z.c_str(), target, nullptr, msg);
+    }
+    loom::Ticket role_ask_role(std::string_view as_role, std::string_view to_role,
+                               loom::Message msg) override {
+        const std::string as_z(as_role);
+        const std::string to_z(to_role);
+        return ask_through(as_z.c_str(), loom::WeaveId{}, to_z.c_str(), msg);
+    }
+#endif
 
     // ---- deliberate role authorship across the seam (MSG-07) ---------------
     // The library requests; the host verifies membership and stamps. A missing door (the
@@ -286,6 +317,21 @@ public:
     }
 
 private:
+#if ZEN_ABI_VERSION >= 15
+    loom::Ticket ask_through(const char* as_role, loom::WeaveId target, const char* to_role,
+                             const loom::Message& msg) {
+        if (!LOOM_HOST_DOOR(ask)) {
+            return loom::Ticket{}; // no door: refused, never sent as a plain send
+        }
+        std::uint64_t attempt = 0;
+        const std::string bytes = loom::serialize(msg.payload);
+        const ZenStatus st = host_->ask(
+            host_->ctx, as_role, target.value, to_role, msg.reply_to.value, msg.correlation,
+            reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), &attempt);
+        return ticket_from(st, attempt);
+    }
+#endif
+
     /// ZEN_ERR_JOINT_BASE minus the enumerator, back to the enumerator; anything else reads as
     /// `NoLiveDelivery`.
     static loom::JointRefusal joint_refusal_of(ZenStatus st) {
@@ -608,6 +654,11 @@ inline loom::Provenance provenance_from(std::uint32_t flags, std::int64_t sequen
     case ZEN_PROV_ACTIVATION:
         p = loom::Provenance::attested(loom::Provenance::Kind::Activation, sequence);
         break;
+#if ZEN_ABI_VERSION >= 15
+    case ZEN_PROV_ASK_ENDED:
+        p = loom::Provenance::attested(loom::Provenance::Kind::AskEnded, 0);
+        break;
+#endif
     default:
         break;
     }

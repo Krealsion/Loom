@@ -633,6 +633,12 @@ public:
     /// The standard reply shapes, as one line. A `zen.Refused` is printed as a refusal
     /// and never flattened into "failed": the reason is the whole value of it.
     static std::string describe_reply(const loom::BufferEntry& e) {
+        if (e.ask_ended) {
+            // Loom's word that no answer will come, and how far the ask got.
+            const loom::AskEnded ended = loom::from_value<loom::AskEnded>(e.value);
+            return std::string("ENDED: ") + loom::stage_name(ended.stage) + ", " +
+                   std::string(loom::reason_name(ended.stage));
+        }
         const loom::Cell* value = e.value.get("value");
         const loom::Cell* reason = e.value.get("reason");
         if (e.name == loom::Refused::zen_name && reason != nullptr) {
@@ -1490,7 +1496,8 @@ void report_late_answers(HostSession& session, bool& prompt_shown) {
             std::cout << '\n'; // do not write over the prompt the person is typing at
             prompt_shown = false;
         }
-        std::cout << "  [ask " << id << " settled] " << reply->name << " v" << reply->version
+        std::cout << "  [ask " << id << (reply->ask_ended ? " ended] " : " settled] ")
+                  << reply->name << " v" << reply->version
                   << "  from weave " << reply->sender.value << "  "
                   << HostSession::describe_reply(*reply) << '\n';
         for (const std::string& line : session.take_adoption_log()) {

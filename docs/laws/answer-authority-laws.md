@@ -33,17 +33,21 @@ MEANS
 - after deferring, `answer()` finds nothing left; a second `defer` finds
   nothing to convert;
 - the retained right binds the exact respondent incarnation that earned it;
-- capacity is bounded (`kMaxDeferredAnswers`) **per Loom, not per weave**
-  — overflow refuses visibly as `Exhausted` and the immediate right survives.
+- capacity is bounded twice: per respondent (`kMaxDeferredPerWeave`) and per
+  Loom (`kMaxDeferredAnswers`), the first well under the second, so a weave
+  that keeps too many answers exhausts itself and nobody else; either overflow
+  refuses visibly as `Exhausted` and the immediate right survives;
+- owed work is held as a kept answer, which Loom can end out loud (ANS-08).
 
 DOES NOT MEAN
-- that deferral capacity is a private per-weave resource — 64 outstanding
-  conversations anywhere exhaust the 65th *everywhere* (measured in Night Lab's
-  pull-inversion pricing);
+- that one weave can take the whole Loom's capacity — Night Lab measured that
+  hole when the only bound was the Loom's ([bounds](../reference/bounds.md));
 - that a deferred right survives reload, death, or the requester changing.
 
-PROVEN BY — `defer_answer_as` / `spend_deferred_as`; suites `switchboard`,
-`provenance`, `kernel` (held-full capacity case).
+PROVEN BY — `defer_answer_as` / `spend_deferred_as`, the kept answers'
+`KeptAnswers` (`zen/switchboard/asks.hpp`); suites `switchboard`,
+`provenance`, `kernel` (held-full capacity case), `ask` (one respondent at its
+bound, another still keeping one).
 
 ## ANS-03 — An answer belongs to the life that asked
 
@@ -68,15 +72,17 @@ conversation it was party to, before `Died` is announced.
 
 MEANS
 - revival begins with no inherited answer rights, in either direction;
-- an observer of a death sees the conversations already over.
+- an observer of a death sees the conversations already over;
+- an asker whose ask the dead or removed respondent kept is told so
+  (`RespondentDied`, `RespondentRemoved`; ANS-08), queued before `Died`.
 
 DOES NOT MEAN
 - that a live code reload ends conversations the same way — reload sweeps by
   *staleness* (incarnation), death by *life*, and the two questions are asked
   by different functions on purpose.
 
-PROVEN BY — `abandon_deferred_for` at `kill`/`unregister_weave`; suite
-`provenance`.
+PROVEN BY — `KeptAnswers::end_life` at `kill`/`unregister_weave`; suites
+`provenance`, `ask`.
 
 ## ANS-05 — Correlation identifies; it never authenticates
 
@@ -134,3 +140,49 @@ DOES NOT MEAN
 
 PROVEN BY — every enqueue rebuilds provenance; suites `provenance`, `kernel`
 (replayed-activation cases).
+
+## ANS-08 — An ask is told its end
+
+LAW — An ask sent through the ask door ends exactly once: its answer is
+delivered, or Loom tells the exact life and incarnation that asked, with
+`zen.AskEnded`, how far the ask got and why no answer will come. A weave that
+cannot hear the notice cannot ask.
+
+MEANS
+- the ask door (`mail.ask`, `ask_role` and their `as_role` forms; one host door,
+  `ask`, since ABI v15) refuses at the call, queueing nothing, a weave whose
+  accept-set lacks `zen.AskEnded` (`AskEndedNotAccepted`); otherwise an ask is a
+  send in every way;
+- each ending is told where its last record goes: `queued` (refused before any
+  handler: the six reasons MSG-12 names, and `AskerSealed`), `delivered` (the
+  handler returned with the right neither spent nor kept, `Unanswered`, or did
+  not finish, `HandlerFailed`), `deferred` (the kept right ended: `Released`,
+  `RespondentReplaced`, `RespondentRemoved`, `RespondentDied`,
+  `RespondentRetired`), `answered` (the answer was refused, `AnswerRefused`);
+- the notice is Loom's attestation (`mail.ask_ended()`), names the ask's queued
+  attempt, carries the ask's correlation, grants no answer right, and is checked
+  against the exact asker when it is made and when it is delivered;
+- `queued` is the one stage after which sending the ask again cannot repeat
+  work; after the others the respondent may have been half done.
+
+DOES NOT MEAN
+- that a plain send is followed — `send` and `send_to_role` keep
+  `zen.DispatchRefused` as their one notice (MSG-12), and an ask is told this
+  notice and never that one;
+- that work promised in ordinary words is followed — a respondent that answers
+  in a later ordinary send ended the ask `Unanswered` when its handler returned;
+  owed work is a kept answer (ANS-02);
+- that a live respondent that has not answered has ended anything — Loom has no
+  clock, and a timeout is the asker's or a package's;
+- that an asker whose own life or code changed is told — the exact asker is
+  gone, and its successor's book closes what it inherited
+  (`AskBook::end_all`);
+- that a notice which could not be made (no memory, no sequence) is retried —
+  it is dropped, as `zen.DispatchRefused` is, and the ending stays on the tap;
+- that the isolation pipe or a bridge session can ask — the pipe refuses a
+  manifest accepting the notice ([known seams](../reference/known-seams.md)).
+
+PROVEN BY — the ask door and `tell_ask_ended` (`Switchboard`), the kept answers
+(`zen/switchboard/asks.hpp`); suites `ask` (each ending, in process), `ask_loaded`
+(loaded, and an image built against ABI v14), `box` (its twins), `isolation`
+(the pipe's refusal), `terminal` and `console` (the helpers' ENDED).

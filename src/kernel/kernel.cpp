@@ -682,6 +682,46 @@ static ZenStatus zen_host_role_send_to_role(void* ctx, const char* as_role, cons
     });
 }
 
+// An ask, all four forms (ANS-08): admitted as a send is, then the ask door, which refuses a
+// weave that cannot hear its ask end. NULL `to_role` is directed, NULL `as_role` personal.
+static ZenStatus zen_host_ask(void* ctx, const char* as_role, std::uint64_t target,
+                              const char* to_role, std::uint64_t reply_to,
+                              std::uint64_t correlation, const std::uint8_t* payload,
+                              std::size_t len, std::uint64_t* attempt_out) {
+    if (attempt_out != nullptr) { *attempt_out = 0; }
+    return seam_guarded([&]() -> ZenStatus {
+        auto* h = static_cast<HostCtx*>(ctx);
+        const loom::WeaveId to = to_role == nullptr ? loom::WeaveId{target} : loom::WeaveId{};
+        const char* role = to_role == nullptr ? "" : to_role;
+        loom::Unverified u = loom::parse(loom::as_view(payload, len));
+        std::shared_ptr<const loom::Schema> door =
+            h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
+        if (!door) {
+            return seam_reject(h, u, to, seam_unresolved(), role);
+        }
+        loom::Admission a = loom::admit(u, door, h->sb->registry());
+        if (!a.ok()) {
+            return seam_reject(h, u, to, seam_gate_refused(a), role);
+        }
+        loom::Message msg(std::move(a).value(), loom::WeaveId{}, loom::WeaveId{reply_to},
+                          correlation);
+        loom::Bus& bus = *h->gated;
+        const bool authored = as_role != nullptr;
+        const loom::Ticket t =
+            to_role == nullptr
+                ? (authored ? bus.role_ask(as_role, to, std::move(msg)) : bus.ask(to, std::move(msg)))
+                : (authored ? bus.role_ask_role(as_role, to_role, std::move(msg))
+                            : bus.ask_role(to_role, std::move(msg)));
+        if (attempt_out != nullptr) { *attempt_out = t.seq; }
+        if (t.refusal == loom::RefusalReason::AskEndedNotAccepted) {
+            return ZEN_ERR_ASK_ENDED_NOT_ACCEPTED;
+        }
+        return send_status(t, t.refusal == loom::RefusalReason::RoleAuthorshipDenied
+                                  ? ZEN_ERR_ROLE_AUTHORSHIP_DENIED
+                                  : ZEN_ERR_REFUSED);
+    });
+}
+
 static ZenStatus zen_host_role_publish(void* ctx, const char* as_role, std::uint64_t reply_to,
                                          std::uint64_t correlation, const std::uint8_t* payload,
                                          std::size_t len, std::uint64_t* recipients_out) {
@@ -1023,9 +1063,10 @@ public:
                        .sense_role_claim   = &zen_host_sense_role_claim,
                        .sense_observe        = &zen_host_sense_observe,
                        .sense_observe_role = &zen_host_sense_observe_role,
-                       // the claimant's joint offer, last in declaration order; its type is
-                       // unique in this table
-                       .sense_offer          = &zen_host_sense_offer};
+                       // the claimant's joint offer; its type is unique in this table
+                       .sense_offer          = &zen_host_sense_offer,
+                       // since 15, last in declaration order; its type is unique too
+                       .ask                  = &zen_host_ask};
         // Provenance crosses as host-computed facts beside the sender, and it
         // crosses ONE WAY ONLY: the role doors above carry REQUESTS the host
         // verifies, never attested facts, so the seam is a place a loaded weave
@@ -1034,6 +1075,9 @@ public:
         switch (in.provenance.kind()) {
         case Provenance::Kind::DispatchRefusal:
             prov = ZEN_PROV_DISPATCH_REFUSAL;
+            break;
+        case Provenance::Kind::AskEnded:
+            prov = ZEN_PROV_ASK_ENDED;
             break;
         case loom::Provenance::Kind::Answer:
             prov = ZEN_PROV_ANSWER;

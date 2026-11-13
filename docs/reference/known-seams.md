@@ -199,18 +199,24 @@ therefore label that identity as a seat and never as a person.
 
 ## Sender cannot observe send fate
 
-**Status: PARTLY SUPPLIED — dispatch refusal only.**
+**Status: SUPPLIED FOR ASKS — a plain send learns only its dispatch refusal.**
 
-An explicit notice acceptor can receive an authenticated pre-handler refusal
-of an ordinary addressed send, native or in-process loaded; `TerminalSession`
-is one such consumer. Contract:
-[sender-visible dispatch refusal](messaging.md#sender-visible-dispatch-refusal).
+An ask sent through the ask door is followed to its answer or told its end,
+`zen.AskEnded`, at whichever stage it ended: refused before any handler,
+delivered and returned from unanswered, kept and let go or lost with its
+respondent, or answered and the answer refused. Contract:
+[asks](messaging.md#asks-and-how-each-one-ends). A plain send's acceptor of
+`zen.DispatchRefused` still learns only an authenticated pre-handler refusal
+([sender-visible dispatch refusal](messaging.md#sender-visible-dispatch-refusal)).
+`TerminalSession` consumes both.
 
-Absence of a notice proves nothing. Delivered-but-unanswered work, later released
-or invalidated answer rights, timeout, cancellation, progress/closing answers,
-retry and publication aggregation remain separate questions. AskBook stays local
-bookkeeping and creates no global obligation. The isolated pipe does not carry
-this attestation and refuses a manifest requesting its notice door.
+What stays outside: a live respondent that has not answered (Loom has no clock;
+timeout, cancellation and retry are the asker's), work promised in ordinary
+words rather than held as a kept answer, progress and closing answers, and
+publication aggregation. Absence of a notice about a plain send proves nothing.
+The isolated pipe carries neither attestation: it refuses a manifest accepting
+either notice, so an isolated image cannot ask. A bridge session's sends are
+plain sends; asking across a bridge is not supplied.
 
 ## Loaded coordination of a joint publication
 

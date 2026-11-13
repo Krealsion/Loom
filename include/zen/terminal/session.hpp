@@ -104,6 +104,18 @@ public:
     virtual Ticket send_to_role(std::string_view role, Value payload,
                                 std::uint64_t correlation) = 0;
 
+    /// Ask one exact weave, or whoever holds `role` at delivery when `role` is not empty
+    /// (ANS-08): Loom follows the ask to its answer or to one `zen.AskEnded`. The default has no
+    /// ask door and refuses, queueing nothing; it never sends a plain send instead.
+    virtual Ticket ask(WeaveId target, std::string_view role, Value payload,
+                       std::uint64_t correlation) {
+        (void)target;
+        (void)role;
+        (void)payload;
+        (void)correlation;
+        return Ticket{};
+    }
+
     /// Author `payload` to every accepter of its shape; returns the fanout count.
     /// That count is the one delivery fact an ordinary sender does get, and it
     /// says how many deliveries were QUEUED — never how many landed.

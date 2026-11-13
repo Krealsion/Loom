@@ -57,6 +57,10 @@ LOOM_WASM_IMPORT(sense_observe_role) int32_t zh_sense_observe_role(const char* r
                                                                        uint32_t shape_version,
                                                                        ZenSenseBy* by);
 LOOM_WASM_IMPORT(sense_offer) int32_t zh_sense_offer(uint64_t op, const uint8_t* p, size_t n);
+// A null role pointer crosses as 0: personal speech for `as_role`, a directed ask for `to_role`.
+LOOM_WASM_IMPORT(ask) int32_t zh_ask(const char* as_role, uint64_t target, const char* to_role,
+                                     uint64_t reply_to, uint64_t correlation, const uint8_t* p,
+                                     size_t n, uint64_t* attempt_out);
 
 } // extern "C"
 
@@ -140,6 +144,10 @@ ZenStatus g_sense_observe_role(void*, const char* role, const char* name, uint32
 ZenStatus g_sense_offer(void*, uint64_t op, const uint8_t* p, size_t n) {
     return zh_sense_offer(op, p, n);
 }
+ZenStatus g_ask(void*, const char* as, uint64_t t, const char* to, uint64_t r, uint64_t c,
+                const uint8_t* p, size_t n, uint64_t* a) {
+    return zh_ask(as, t, to, r, c, p, n, a);
+}
 
 // By name, in declaration order (KERN-04).
 const ZenHostApi kHostApi{.size                 = sizeof(ZenHostApi),
@@ -158,7 +166,8 @@ const ZenHostApi kHostApi{.size                 = sizeof(ZenHostApi),
                           .sense_role_claim   = &g_sense_role_claim,
                           .sense_observe        = &g_sense_observe,
                           .sense_observe_role = &g_sense_observe_role,
-                          .sense_offer          = &g_sense_offer};
+                          .sense_offer          = &g_sense_offer,
+                          .ask                  = &g_ask};
 
 } // namespace
 

@@ -14,7 +14,8 @@ and held by review alone.
 
 | Bound | Value | Overflow behavior |
 |---|---|---|
-| `kMaxDeferredAnswers` | <!-- value kMaxDeferredAnswers -->64<!-- /value --> | `Exhausted` refusal on the tap; the immediate answer right survives. **Loom-wide, not per weave** |
+| `kMaxDeferredAnswers` | <!-- value kMaxDeferredAnswers -->1024<!-- /value --> | `Exhausted` refusal on the tap; the immediate answer right survives. The Loom's own bound, room for several working weaves each keeping the answers it owes (ANS-02) |
+| `kMaxDeferredPerWeave` | <!-- value kMaxDeferredPerWeave -->64<!-- /value --> | answers one respondent keeps at once, under `kMaxDeferredAnswers`; refused as that is. A weave that keeps too many exhausts itself and nobody else, the hole Night Lab measured when the Loom's bound was the only one |
 | `kJournalCapacity` | <!-- value kJournalCapacity -->1024<!-- /value --> | ring: older ticket outcomes read as `Pending`, exactly like unknown seqs |
 | `kMaxPreparedReplacements` | <!-- value kMaxPreparedReplacements -->8<!-- /value --> | `CapacityExhausted` before anything is inspected |
 | `kMaxRolesPerWeave` | <!-- value kMaxRolesPerWeave -->8<!-- /value --> | roles one weave is bound to at registration; a larger set throws `std::invalid_argument` and binds none of it (a load fails cleanly) |
@@ -290,7 +291,7 @@ What the component *is*, and what it trusts: [bridge](bridge.md).
 | `kMaxWeaverConnections` | <!-- value kMaxWeaverConnections -->32<!-- /value --> | accept-then-shed, `declined_count()` visible |
 | `kMaxHelloFieldBytes` | <!-- value kMaxHelloFieldBytes -->256<!-- /value --> | the longest claimed name or credential a Hello may carry; over it the connection is refused before the policy is asked -- a peer has earned nothing yet |
 | `kMaxSettlingPerConnection` | <!-- value kMaxSettlingPerConnection -->8<!-- /value --> | settle-requested sends one connection may have waiting on their settlement; past it the Send is refused before the bus (`SendRefused`), and so is one the bus's `kMaxFences` cannot fence |
-| `LinkWeave::kMaxOpenAsks` (the supplied host) | <!-- value kMaxOpenAsks -->16<!-- /value --> | crossings one link holds open at once; a new ask past it is told `refused` and every open one is untouched. Each open crossing holds a deferred answer, which counts against the Loom-wide `kMaxDeferredAnswers`, so a link keeps well inside it |
+| `LinkWeave::kMaxOpenAsks` (the supplied host) | <!-- value kMaxOpenAsks -->16<!-- /value --> | crossings one link holds open at once; a new ask past it is told `refused` and every open one is untouched. Each open crossing holds a deferred answer, which counts against the link's own `kMaxDeferredPerWeave` and the Loom's `kMaxDeferredAnswers`, so a link keeps well inside both |
 | `kMaxPendingDelivered` (client) | <!-- value kMaxPendingDelivered -->64<!-- /value --> | pending unknown-schema replies bounded, drained on `SchemaNone`. An **active backlog**, so it is bounded by refusal (a visible `BridgeRefused`), never by eviction -- dropping the oldest would discard an obligation |
 | `kMaxAbsentSchemas` (client) | <!-- value kMaxAbsentSchemas -->64<!-- /value --> | remembered `SchemaNone` answers; FIFO, oldest evicted. A **memo**, so eviction costs at most one repeated `Describe` -- and stops a host from growing the client one entry per novel unknown shape |
 

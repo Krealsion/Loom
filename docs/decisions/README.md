@@ -17,6 +17,7 @@ to unmake without knowing what rejected them. How Loom came to be this way is in
 | [a-claim-is-not-a-message](a-claim-is-not-a-message.md) | Senses earn their category by carrying no causality, no history and no default reach |
 | [migration-is-authored-not-inferred](migration-is-authored-not-inferred.md) | supersedes automatic gate migration: an authored transformation before admission, never coercion inside it |
 | [dispatch-refusal-returns-to-its-author](dispatch-refusal-returns-to-its-author.md) | authenticated later refusal, exact attempts, original incarnation and ordinary consumer ownership |
+| [an-ask-is-told-its-end](an-ask-is-told-its-end.md) | an ask is the asker's, followed by Loom to its answer or to one attested ending at the stage it ended; owed work is a kept answer, bounded per respondent |
 | [declared-vocabulary-is-agreed-at-admission](declared-vocabulary-is-agreed-at-admission.md) | every declared shape and component — accepted, claimed, emitted, persisted — meets one wall at the door, natively and across the seam; a declaration is never authority |
 | [Zengine's timer-continuity decision](https://github.com/Krealsion/Zengine/blob/main/timer/docs/timer-continuity-carries-remaining-duration.md), a separate repository | durations cross; due times cannot |
 

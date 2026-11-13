@@ -156,6 +156,19 @@ std::string render_entry(const loom::DeskEntry& d) {
                (refused.retired_ask ? " — stopped waiting on ask " + std::to_string(refused.retired_ask) : "") +
                ". Review the address, shape or authority; retry explicitly when ready.";
     }
+    if (e.ask_ended) {
+        const auto& told = *e.ask_ended;
+        const auto& ask = told.ended;
+        const std::string address = ask.role.empty()
+            ? "to weave #" + ask.target : "to @" + loom::safe_terminal_text(ask.role);
+        return out + "ENDED " + loom::safe_terminal_text(ask.shape) + " v" +
+               std::to_string(ask.version) + " " + address + "  (attempt " + ask.attempt +
+               ", corr " + std::to_string(e.correlation) + "): " +
+               loom::stage_name(ask.stage) + ", " + std::string(loom::reason_name(ask.stage)) +
+               (told.ended_ask ? " — ask " + std::to_string(told.ended_ask) + " is over" : "") +
+               (ask.never_delivered() ? ". It reached no one: retrying cannot repeat work."
+                                      : ". It may have been half done: decide before retrying.");
+    }
     switch (e.kind) {
     case loom::TranscriptKind::LocalCommand:
         return out + "> " + loom::safe_terminal_text(e.text);

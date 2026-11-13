@@ -328,12 +328,12 @@ TEST_SUITE("dispatch_loaded") {
                        Message(to_value(dispatch_test::Command{"defer", 0, "", "0"}), WeaveId{},
                                WeaveId{}, 77));
         };
-        for (std::size_t i = 0; i < Switchboard::kMaxDeferredAnswers; ++i) {
+        for (std::size_t i = 0; i < Switchboard::kMaxDeferredPerWeave; ++i) {
             ask();
         }
         sb.pump_pending();
         REQUIRE(mind(sb, loaded.id).get("deferred")->as_int() ==
-                static_cast<std::int64_t>(Switchboard::kMaxDeferredAnswers));
+                static_cast<std::int64_t>(Switchboard::kMaxDeferredPerWeave));
         std::vector<EventKind> commands;
         sb.add_observer([&](const BusEvent& ev) {
             if (ev.schema_name == dispatch_test::Command::zen_name) {
@@ -347,7 +347,7 @@ TEST_SUITE("dispatch_loaded") {
         CHECK(state.get("finished")->as_text() == "defer");
         CHECK(state.get("door")->as_text() == "refused");
         CHECK(state.get("deferred")->as_int() ==
-              static_cast<std::int64_t>(Switchboard::kMaxDeferredAnswers));
+              static_cast<std::int64_t>(Switchboard::kMaxDeferredPerWeave));
         CHECK(commands == std::vector<EventKind>{EventKind::Delivered});
     }
 

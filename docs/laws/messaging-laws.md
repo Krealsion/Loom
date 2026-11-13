@@ -450,10 +450,13 @@ DOES NOT MEAN
 - delivery, success, eventual receipt, cancellation or post-delivery abandonment;
 - ordinary queued speech changes its life-only reload rule (MSG-03);
 - an in-process image is a native-memory sandbox;
-- AskBook becomes a global obligation tracker.
+- AskBook becomes a global obligation tracker;
+- that an ask is told this notice: an ask through the ask door is told its end,
+  `zen.AskEnded`, in the same words for the same refusals (its sibling, ANS-08).
 
-PROVEN BY — Switchboard::capture_refusal_recipient, notify_dispatch_refusal,
-deliver_one; suites dispatch_refusal, dispatch_loaded, terminal, isolation;
+PROVEN BY — Switchboard::capture_refusal_recipient, queue_notice, deliver_one,
+and the words' owner `dispatch_refused_value` (zen/switchboard/asks.hpp); suites
+dispatch_refusal, dispatch_loaded, terminal, isolation;
 installed-package witness. Full representation and disposal contract:
 [messaging](../reference/messaging.md#sender-visible-dispatch-refusal).
 

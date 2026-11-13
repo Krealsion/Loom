@@ -22,8 +22,13 @@
 //
 // An ask to a role is answered by whoever holds it at delivery, unknown when asking:
 // `open_to_role` says so, and its record constrains the correlation only.
+//
+// An ask sent through the ask door (`Mail::ask`) also ends without an answer when Loom says so:
+// `end` closes the record a `zen.AskEnded` names, and `end_all` closes every record a successor
+// inherited, since its predecessor's asks ended with it (ANS-08).
 
 #include <zen/switchboard/message.hpp>
+#include <zen/weave/ask_ended.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -199,6 +204,45 @@ public:
             }
         }
         return std::nullopt;
+    }
+
+    /// Close the conversation Loom says ended without an answer, and return it by value. `said`
+    /// is the delivery's word (`Mail` or `Provenance`): a notice whose provenance is not Loom's
+    /// closes nothing, since the shape alone is ordinary speech. The notice names the record by
+    /// its bound attempt, and its address and shape must be the record's.
+    template <class Said>
+        requires requires(const Said& s) { s.ask_ended(); }
+    std::optional<PendingAsk> end(const AskEnded& ended, const Said& said) {
+        if (!said.ask_ended()) {
+            return std::nullopt;
+        }
+        const std::uint64_t attempt = ended.ended_attempt().seq;
+        for (std::size_t i = 0; i < open_.size(); ++i) {
+            const PendingAsk& p = open_[i];
+            if (attempt == 0 || p.attempt != attempt) {
+                continue;
+            }
+            const bool same_address = p.to_role()
+                                          ? ended.role == p.role && ended.target.empty()
+                                          : ended.role.empty() &&
+                                                ended.addressed_weave() == p.respondent;
+            const bool same_shape = p.shape.empty() ||
+                                    (ended.shape == p.shape &&
+                                     ended.version == static_cast<std::int64_t>(p.version));
+            if (!same_address || !same_shape) {
+                return std::nullopt;
+            }
+            return take(i);
+        }
+        return std::nullopt;
+    }
+
+    /// Close every open conversation, and return them in opening order: for a successor's
+    /// activation, whose inherited records name asks that ended with its predecessor.
+    std::vector<PendingAsk> end_all() {
+        std::vector<PendingAsk> closed = std::move(open_);
+        open_.clear();
+        return closed;
     }
 
     /// Stop tracking one conversation, locally only. Loom has no cancellation vocabulary, so the

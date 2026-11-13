@@ -298,6 +298,20 @@ std::vector<TranscriptEntry> dispatch_rows(const TerminalSession& session) {
     }
     return rows;
 }
+std::vector<TranscriptEntry> ended_rows(const TerminalSession& session) {
+    std::vector<TranscriptEntry> rows;
+    for (const auto& e : session.transcript().entries()) {
+        if(e.ask_ended) { rows.push_back(e); }
+    }
+    return rows;
+}
+/// A service that keeps the answer right of the first message it is given, so that ask is owed
+/// and still open: the floor's word for work not yet done (ANS-08).
+void keep_the_first(ProbeWeave* service) {
+    service->on_handle = [](const Message&, Bus& b, ProbeWeave& self) {
+        if (!self.pending.valid()) { self.pending = b.make_deferred_answer(); }
+    };
+}
 }
 
 TEST_SUITE("terminal") {
@@ -327,7 +341,8 @@ TEST_CASE("knowing a shape is not a door, and neither is authority") {
     CHECK_FALSE(has_door("Work"));       // a door it never asked for
     CHECK_FALSE(has_door("Query"));      // ...nor for the shape it SENDS
     CHECK(has_door("zen.DispatchRefused"));
-    CHECK(doors.size() == 7);
+    CHECK(has_door("zen.AskEnded"));
+    CHECK(doors.size() == 8);
 
     // And knowing `Work` confers nothing: the participant's authority says nothing about it.
     CHECK(c.acting().describe("Work", 1).has_value());
@@ -646,7 +661,7 @@ TEST_CASE("retained values identify authored and received content without replay
 
 TEST_CASE("authored retention is bounded independently of replies and pending conversations") {
     Cast c;
-    c.service->on_handle = [](const Message&, Bus&, ProbeWeave&) {};
+    keep_the_first(c.service);
     c.bus.send(c.session.id, Message(notice("preserved reply")));
     c.bus.drain_until_idle();
     const auto incoming = c.of_kind(c.acting(), TranscriptKind::Received).back().seq;
@@ -1171,8 +1186,9 @@ TEST_CASE("the transcript is bounded, counts what it dropped, and never loses a 
     CHECK(TerminalHistoryProbe::entry_slots(c.acting().transcript()) == kTranscriptCapacity);
     CHECK(TerminalHistoryProbe::received_slots(c.acting().transcript()) == kReceivedCapacity);
 
-    // An ask nobody will answer, made FIRST, so it is the oldest thing in the window.
-    c.service->on_handle = [](const Message&, Bus&, ProbeWeave&) {};
+    // An ask whose answer is owed and not yet given, made FIRST, so it is the oldest thing in
+    // the window.
+    keep_the_first(c.service);
     const TerminalResult asked =
         c.acting().ask(Address::to_role(kServiceRole), "Query", 1, {bare(std::string("hi"))});
     REQUIRE(submitted(asked));
@@ -1369,7 +1385,7 @@ TEST_CASE("an unattached participant authors nothing and says why") {
 } // TEST_SUITE("terminal")
 
 TEST_SUITE("terminal") {
-TEST_CASE("dispatch refusal retires only its exact ask while a delivered unanswered ask stays pending") {
+TEST_CASE("an ask's end retires only its exact ask: refused, it ends queued; delivered and unanswered, delivered") {
     Cast c;
     c.service->on_handle=[](const Message&,Bus&,ProbeWeave&) {};
     auto refused=c.acting().ask(Address::to_role(kServiceRole),"Work",1,{bare(std::int64_t{1})});
@@ -1377,10 +1393,16 @@ TEST_CASE("dispatch refusal retires only its exact ask while a delivered unanswe
     REQUIRE(refused); REQUIRE(waiting); REQUIRE(c.acting().outstanding()==2);
     c.bus.pump_pending(); CHECK(c.acting().outstanding()==2);
     c.bus.pump_pending(); CHECK_FALSE(c.acting().waiting_on(refused.ask));
-    CHECK(c.acting().waiting_on(waiting.ask));
-    auto rows=dispatch_rows(c.acting()); REQUIRE(rows.size()==1);
-    CHECK(rows[0].dispatch_refusal->retired_ask==refused.ask); CHECK_FALSE(rows[0].answers_ask); CHECK(rows[0].answers==0);
-    CHECK(rows[0].dispatch_refusal->send.role==kServiceRole); CHECK(rows[0].dispatch_refusal->send.addressed_weave()==WeaveId{});
+    CHECK_FALSE(c.acting().waiting_on(waiting.ask));
+    CHECK(dispatch_rows(c.acting()).empty()); // an ask is told its end, never a dispatch refusal
+    auto rows=ended_rows(c.acting()); REQUIRE(rows.size()==2);
+    CHECK(rows[0].ask_ended->ended_ask==refused.ask); CHECK_FALSE(rows[0].answers_ask); CHECK(rows[0].answers==0);
+    CHECK(std::string(stage_name(rows[0].ask_ended->ended.stage))=="queued");
+    CHECK(reason_name(rows[0].ask_ended->ended.stage)=="CapabilityDenied");
+    CHECK(rows[0].ask_ended->ended.role==kServiceRole); CHECK(rows[0].ask_ended->ended.addressed_weave()==WeaveId{});
+    CHECK(rows[1].ask_ended->ended_ask==waiting.ask);
+    CHECK(std::string(stage_name(rows[1].ask_ended->ended.stage))=="delivered");
+    CHECK(reason_name(rows[1].ask_ended->ended.stage)=="Unanswered");
 }
 TEST_CASE("a forged refusal cannot retire a terminal ask before its real notice arrives") {
     Cast c;
@@ -1396,14 +1418,14 @@ TEST_CASE("a forged refusal cannot retire a terminal ask before its real notice 
     REQUIRE(c.of_kind(c.acting(),TranscriptKind::Received).size()==1);
     c.bus.pump_pending(); CHECK_FALSE(c.acting().waiting_on(ask.ask));
 }
-TEST_CASE("late refusal after local forgetting cannot settle a newer ask") {
-    Cast c; c.service->on_handle=[](const Message&,Bus&,ProbeWeave&) {};
+TEST_CASE("a late ending after local forgetting cannot settle a newer ask") {
+    Cast c; keep_the_first(c.service);
     auto old=c.acting().ask(Address::to_role(kServiceRole),"Work",1,{bare(std::int64_t{1})}); REQUIRE(old);
     c.bus.pump_pending(); REQUIRE(c.acting().cancel_ask(old.ask));
     auto fresh=c.acting().ask(Address::to_role(kServiceRole),"Query",1,{bare(std::string("fresh"))}); REQUIRE(fresh);
     c.bus.pump_pending(); CHECK(c.acting().waiting_on(fresh.ask));
-    auto rows=dispatch_rows(c.acting()); REQUIRE(rows.size()==1);
-    CHECK(rows[0].dispatch_refusal->retired_ask==0); CHECK(c.acting().outstanding()==1);
+    auto rows=ended_rows(c.acting()); REQUIRE(rows.size()==1);
+    CHECK(rows[0].ask_ended->ended_ask==0); CHECK(c.acting().outstanding()==1);
 }
 TEST_CASE("transcript eviction leaves exact local attempt matching and bounded retention intact") {
     Cast c;
@@ -1413,8 +1435,8 @@ TEST_CASE("transcript eviction leaves exact local attempt matching and bounded r
     REQUIRE(c.of_kind(c.acting(),TranscriptKind::Submitted).empty());
     REQUIRE(c.acting().waiting_on(ask.ask)); c.bus.pump_pending();
     CHECK_FALSE(c.acting().waiting_on(ask.ask));
-    auto rows=dispatch_rows(c.acting()); REQUIRE(rows.size()==1);
-    CHECK(rows[0].dispatch_refusal->retired_ask==ask.ask); CHECK(c.acting().transcript().entries().size()==kTranscriptCapacity);
+    auto rows=ended_rows(c.acting()); REQUIRE(rows.size()==1);
+    CHECK(rows[0].ask_ended->ended_ask==ask.ask); CHECK(c.acting().transcript().entries().size()==kTranscriptCapacity);
 }
 }
 TEST_SUITE("ask_book") {

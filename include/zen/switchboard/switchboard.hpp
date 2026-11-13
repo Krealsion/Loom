@@ -7,6 +7,7 @@
 #include <zen/admission.hpp>
 #include <zen/registry.hpp>
 #include <zen/schema.hpp>
+#include <zen/switchboard/asks.hpp>
 #include <zen/switchboard/grant.hpp>
 #include <zen/switchboard/message.hpp>
 #include <zen/switchboard/sense.hpp>
@@ -420,6 +421,14 @@ public:
     Ticket send_to_role(std::string_view role, Message msg) override;
     Ticket send_as_to_role(WeaveId as_sender, std::string_view role, Message msg);
 
+    /// Ask as a specific Weave (ANS-08), all four forms: `as_role` empty is personal speech, and
+    /// `to_role` empty a directed ask to `target`. Refused at the call, nothing queued and
+    /// `AskEndedNotAccepted` on the tap, when the asker does not accept `zen.AskEnded`;
+    /// otherwise a send in every way, which Loom follows to its answer or to one ending told to
+    /// this exact incarnation. A host verb, as `send_as` is: a weave's own Bus reaches it.
+    Ticket ask_as(WeaveId as_sender, std::string_view as_role, WeaveId target,
+                  std::string_view to_role, Message msg);
+
     // ---- fences: when what one send set in motion has been dispatched ------------------
     // Host verbs beside `send_as`: the host that injects on somebody's behalf asks when that
     // work has run here. A weave holds no Switchboard and opens no fence.
@@ -689,11 +698,18 @@ public:
     static_assert(kMaxPendingPerSender == kJournalCapacity,
                   "one sender's waiting speech is one journal window");
 
-    /// How many unfinished deferred conversations one Loom holds at once. A weave asks for this
-    /// host-side state, so it is bounded; past it a deferral is refused visibly and the immediate
-    /// answer opportunity survives. A record is reclaimed when spent or released, or when either
-    /// participant dies or is reloaded.
-    static constexpr std::size_t kMaxDeferredAnswers = 64;
+    /// How many answers one Loom keeps at once (ANS-02): room for several weaves each holding
+    /// work it owes. Past it a deferral is refused visibly and the immediate answer opportunity
+    /// survives. A record is reclaimed when spent or released, or when either participant dies,
+    /// is removed or is reloaded. docs/reference/bounds.md
+    static constexpr std::size_t kMaxDeferredAnswers = 1024;
+
+    /// How many answers one respondent keeps at once, under `kMaxDeferredAnswers`: a weave that
+    /// keeps too many exhausts itself and nobody else. Refused as the Loom-wide bound is.
+    /// docs/reference/bounds.md
+    static constexpr std::size_t kMaxDeferredPerWeave = 64;
+    static_assert(kMaxDeferredPerWeave < kMaxDeferredAnswers,
+                  "one respondent cannot hold the whole Loom's kept answers");
 
     /// Register an observer, told of every delivery and lifecycle event; returns an id for
     /// removal. docs/reference/messaging.md#observation
@@ -1000,6 +1016,9 @@ private:
         /// Counted against `msg.sender`'s `kMaxPendingPerSender`. Set only for a sender's own
         /// speech; a bus notice or a scheduled admission leaves it false.
         bool sender_accounted = false;
+        /// The ask this envelope is, set only by the ask door; on an answer, the ask it answers,
+        /// carried from the right it was spent from. ANS-08
+        AskFacts ask{};
     };
 
     /// A fence the bus is counting for a host: how many envelopes it names are queued or being
@@ -1042,6 +1061,9 @@ private:
         std::uint64_t requester_incarnation = 0;
         /// The preparation ask this delivery is, if any, so its answer carries the fact back.
         TxnId preparation{};
+        /// The ask this delivery is, if it came through the ask door: it ends here, unanswered,
+        /// unless the right is spent or kept. ANS-08
+        AskFacts ask{};
     };
 
     // The Bus a handler receives: it stamps the handling Weave's identity on every send and
@@ -1056,6 +1078,19 @@ private:
         std::size_t publish(Message msg) override { return sb_.publish_as(self_, std::move(msg)); }
         Ticket send_to_role(std::string_view role, Message msg) override {
             return sb_.send_as_to_role(self_, role, std::move(msg));
+        }
+        Ticket ask(WeaveId target, Message msg) override {
+            return sb_.ask_as(self_, {}, target, {}, std::move(msg));
+        }
+        Ticket ask_role(std::string_view role, Message msg) override {
+            return sb_.ask_as(self_, {}, WeaveId{}, role, std::move(msg));
+        }
+        Ticket role_ask(std::string_view as_role, WeaveId target, Message msg) override {
+            return sb_.ask_as(self_, as_role, target, {}, std::move(msg));
+        }
+        Ticket role_ask_role(std::string_view as_role, std::string_view to_role,
+                             Message msg) override {
+            return sb_.ask_as(self_, as_role, WeaveId{}, to_role, std::move(msg));
         }
         Ticket answer(Message msg) override { return sb_.answer_as(self_, std::move(msg)); }
         DeferredAnswer make_deferred_answer() override { return sb_.defer_answer_as(self_); }
@@ -1134,12 +1169,18 @@ private:
     friend struct DispatchRefusalProbe; // test-only counter boundary and retained-size witness
     std::uint64_t allocate_sequence();
     void capture_refusal_recipient(Envelope& env);
-    void notify_dispatch_refusal(const Envelope& env, const BusEvent& ev,
-                                 bool permitted);
+    /// Queue Loom's notice `value`, attested `kind`, for the exact recipient `to` at `life` and
+    /// `incarnation`, as a consequence of delivery `parent`: only while the recipient is still
+    /// exactly that and accepts the notice's shape, and checked again at its delivery. It grants
+    /// nothing and counts against no sender (MSG-12, ANS-08).
+    void queue_notice(Value value, Provenance::Kind kind, WeaveId to, std::uint64_t life,
+                      std::uint64_t incarnation, std::uint64_t correlation, std::uint64_t parent);
+    /// `asking` marks the envelope an ask (ANS-08): only `ask_as` passes it.
     Ticket enqueue_directed(WeaveId target, Message msg, bool gated,
-                            Provenance provenance = Provenance{}, TxnId preparation = TxnId{});
+                            Provenance provenance = Provenance{}, TxnId preparation = TxnId{},
+                            bool asking = false);
     Ticket enqueue_role(std::string role, Message msg, bool gated,
-                        Provenance provenance = Provenance{});
+                        Provenance provenance = Provenance{}, bool asking = false);
     struct Fanout {
         std::size_t recipients = 0;
         bool pending_bound = false;
@@ -1153,6 +1194,14 @@ private:
     /// Refuse a role-authorship request: `RoleAuthorshipDenied` on the tap and in the journal,
     /// nothing queued, and the invalid ticket returned.
     Ticket refuse_role(WeaveId target, WeaveId as_sender, const Message& msg);
+
+
+    /// Tell `ask`'s exact asker that it ended (ANS-08): queued as Loom's notice, granting
+    /// nothing, and only while the asker is the life and incarnation that asked and accepts the
+    /// notice. A notice that cannot be made is dropped; the ending stays on the tap.
+    /// `parent` is the delivery the ending came from: the ask's own when its envelope or its
+    /// handler ended it.
+    void tell_ask_ended(const AskFacts& ask, AskEnding ending, std::uint64_t parent) noexcept;
 
     /// The one write path for an attested answer. Refuses, on the tap and in the journal, when
     /// the caller is not the weave being dispatched, the request had no one to answer, or the
@@ -1178,27 +1227,14 @@ private:
 
     // ---- deferred answers (ANS-02) -------------------------------------------
 
-    /// One unfinished conversation, held by the bus, naming both participants' incarnations: a
-    /// code reload keeps the id, and the right belongs to the code that earned it.
-    struct DeferredRecord {
-        std::uint64_t token = 0; ///< 0 = a free slot
-        WeaveId requester{};
-        std::uint64_t requester_incarnation = 0;
-        /// The requester's life when it asked.
-        std::uint64_t requester_life = 0;
-        WeaveId respondent{};
-        std::uint64_t respondent_incarnation = 0;
-        std::uint64_t correlation = 0;
-        /// The preparation ask this right answers, if any, so a deferred readiness proves what
-        /// an immediate one does.
-        TxnId preparation{};
-    };
+    // One unfinished conversation is a `KeptAnswer` in `kept_` (zen/switchboard/asks.hpp).
 
     /// The one door every authenticated answer leaves by (ANS-03): `answer_as` and
-    /// `spend_deferred_as` both call it.
+    /// `spend_deferred_as` both call it. `ask` is the ask it answers, if it came through the ask
+    /// door, so an answer Loom then refuses ends it.
     Ticket enqueue_answer(WeaveId to, WeaveId as_sender, Message msg, std::uint64_t correlation,
                           std::uint64_t requester_life, std::uint64_t requester_incarnation,
-                          TxnId preparation);
+                          TxnId preparation, const AskFacts& ask);
 
     DeferredAnswer defer_answer_as(WeaveId as_sender);
     Ticket spend_deferred_as(WeaveId as_sender, const DeferredAnswer& answer, Message msg);
@@ -1210,15 +1246,6 @@ private:
         const std::shared_ptr<const LoomIdentity> issuer = answer.issuer().lock();
         return issuer == nullptr || issuer == identity_;
     }
-
-    /// Drop every deferred conversation with `id` at an incarnation that no longer exists: what
-    /// `swap_state` leaves behind. Death is `abandon_deferred_for`'s question.
-    void forget_deferred_for(WeaveId id);
-
-    /// Drop every deferred conversation `id` is a party to, at any incarnation: the end of a life
-    /// (ANS-04). A killed weave keeps its id and incarnation, so staleness cannot see it. Called
-    /// by `kill` and `unregister_weave`.
-    void abandon_deferred_for(WeaveId id);
 
     /// This transaction's one readiness conversation: not asked, open, or consumed.
     enum class Conversation : std::uint8_t { NotAsked, Open, Consumed };
@@ -1268,7 +1295,6 @@ private:
     /// revival path calls it before marking the record alive.
     void begin_new_life(WeaveRecord& rec);
 
-    DeferredRecord* find_deferred(std::uint64_t token);
     /// This weave's current incarnation, or 0 if it is not registered.
     std::uint64_t incarnation_of(WeaveId id) const;
     /// This weave's current life, or 0 if unregistered: stamped at enqueue, checked at delivery.
@@ -1627,7 +1653,8 @@ private:
         std::uint64_t fence_;
         std::uint64_t was_;
     };
-    std::vector<DeferredRecord> deferred_;      ///< bounded; see kMaxDeferredAnswers
+    /// The answers respondents keep (ANS-02), under both bounds.
+    KeptAnswers kept_{kMaxDeferredAnswers, kMaxDeferredPerWeave};
     /// Bounded; a slot is reclaimed when its transaction ends.
     std::vector<PreparedReplacement> txns_;
     std::vector<TxnOutcome> outcomes_;      ///< bounded; oldest dropped
@@ -1636,10 +1663,6 @@ private:
     /// The correlation Loom puts on a preparation ask, never repeated. It does not make an
     /// answer authentic (`Envelope::preparation` does), and is separate from the delivery seq.
     std::uint64_t next_preparation_correlation_ = 1;
-
-    /// Never reused, and unguarded against exhaustion: unlike the persisted activation
-    /// sequence, it is process-local, never revived, and advances by one per deferral.
-    std::uint64_t next_deferred_token_ = 1;
 };
 
 } // namespace loom
