@@ -90,6 +90,7 @@ The host's exit codes, because a script will want them:
 | | |
 |---|---|
 | `0` | it ran and you quit it |
+| `1` | a native participant failed |
 | `2` | the command line was wrong |
 | `3` | a file would not parse |
 | `4` | another host owns the decision store (or, with `--serve`, already serves that directory) |
