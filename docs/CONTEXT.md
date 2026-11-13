@@ -7,7 +7,7 @@ everything. Vocabulary is canonical in [terminology.md](terminology.md);
 `evidence/` = what applications found (never the API contract).
 
 **Ownership:** Loom (this repository) owns substrate truth.
-[Zengine](https://github.com/Krealsion/Zengine) owns its packages (Timer, Input, Surface) and
+[Zengine](https://github.com/Krealsion/Zengine) owns its packages (Timer, Input, Graphics) and
 documents them. [Night Lab](https://github.com/Krealsion/zen-night-lab) is an independent
 application whose findings are recorded in [evidence/night-lab.md](evidence/night-lab.md); it
 is evidence, never the contract.

@@ -24,6 +24,7 @@ empty_population_refused     portable
 empty_population_says_so     portable
 population                   portable
 doc_links                    portable
+doc_names                    portable
 source_comments              portable
 doc_standard                 portable
 code_values                  portable
