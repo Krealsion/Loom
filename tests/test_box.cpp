@@ -158,9 +158,9 @@ TEST_CASE("a module built against another ABI is refused at load, both versions 
     const LoadResult lr = kernel.load("stale", ZEN_BOX_STALE_ABI);
     const KernelLifetimeCounts after = kernel_lifetime_counts();
     CHECK_FALSE(lr.ok);
-    CHECK(lr.error.find("abi_version " + std::to_string(ZEN_ABI_VERSION - 1u)) !=
+    CHECK(lr.error.find("abi_version " + std::to_string(ZEN_ABI_OLDEST - 1u)) !=
           std::string::npos);
-    CHECK(lr.error.find("host supports " + std::to_string(ZEN_ABI_VERSION)) != std::string::npos);
+    CHECK(lr.error.find("host supports " + std::to_string(ZEN_ABI_OLDEST)) != std::string::npos);
     CHECK(after.instances_created == before.instances_created);
     // The one check made when a module is opened ran in a store of its own, closed again.
     CHECK(after.stores_opened - before.stores_opened == after.stores_closed - before.stores_closed);

@@ -23,7 +23,7 @@ claim   ZEN_ABI_VERSION  current: **v{}**
 claim   ZEN_ABI_VERSION  weave ABI v{}
 mention ZEN_ABI_VERSION  ABI v{}
 mention ZEN_ABI_VERSION  ABI version {}
-zen.Manifest                    include/zen/kernel/schema_codec.hpp       "zen.Manifest"
+zen.Manifest                    include/zen/kernel/descriptor.hpp         kManifestVersion
 mention zen.Manifest  zen.Manifest` v{}
 mention zen.Manifest  zen.Manifest v{}
 mention zen.Manifest  manifest v{}

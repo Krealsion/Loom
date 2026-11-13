@@ -59,6 +59,11 @@ inline loom::Ticket ticket_from(ZenStatus status, std::uint64_t attempt) {
     return loom::Ticket{};
 }
 
+// A host door this library may call: the host's table reaches it and fills it. A slot the
+// table does not reach is a door this host does not have, refused as a NULL one is.
+#define LOOM_HOST_DOOR(slot)                                                                       \
+    (host_ != nullptr && ZEN_ABI_REACHES(host_, ZenHostApi, slot) && host_->slot != nullptr)
+
 class HostApiBus final : public loom::Bus {
 public:
     explicit HostApiBus(const ZenHostApi* host) : host_(host) {}
@@ -66,7 +71,7 @@ public:
     loom::Ticket send(loom::WeaveId target, loom::Message msg) override {
         std::uint64_t attempt = 0;
         const std::string bytes = loom::serialize(msg.payload);
-        if (host_ != nullptr && host_->send != nullptr) {
+        if (LOOM_HOST_DOOR(send)) {
             const ZenStatus status = host_->send(host_->ctx, target.value, msg.reply_to.value, msg.correlation,
                         reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), &attempt);
             return ticket_from(status, attempt);
@@ -76,7 +81,7 @@ public:
 
     std::size_t publish(loom::Message msg) override {
         const std::string bytes = loom::serialize(msg.payload);
-        if (host_ != nullptr && host_->publish != nullptr) {
+        if (LOOM_HOST_DOOR(publish)) {
             host_->publish(host_->ctx, msg.reply_to.value, msg.correlation,
                            reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
         }
@@ -89,7 +94,7 @@ public:
         std::uint64_t attempt = 0;
         const std::string bytes = loom::serialize(msg.payload);
         const std::string role_z(role); // NUL-terminated for the C ABI
-        if (host_ != nullptr && host_->send_to_role != nullptr) {
+        if (LOOM_HOST_DOOR(send_to_role)) {
             const ZenStatus status = host_->send_to_role(host_->ctx, role_z.c_str(), msg.reply_to.value, msg.correlation,
                                 reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), &attempt);
             return ticket_from(status, attempt);
@@ -100,7 +105,7 @@ public:
     /// The immediate answer across the seam (ANS-06): the same `mail.answer()` a native weave
     /// makes, answered by the host.
     loom::Ticket answer(loom::Message msg) override {
-        if (host_ == nullptr || host_->answer == nullptr) {
+        if (!LOOM_HOST_DOOR(answer)) {
             return loom::Ticket{}; // no door: nothing sent, and said so
         }
         const std::string bytes = loom::serialize(msg.payload);
@@ -116,14 +121,14 @@ public:
     // through the host context of the delivery that gave it, so it reaches its own board.
 
     loom::DeferredAnswer make_deferred_answer() override {
-        if (host_ == nullptr || host_->defer_answer == nullptr) {
+        if (!LOOM_HOST_DOOR(defer_answer)) {
             return loom::DeferredAnswer{};
         }
         return loom::DeferredAnswer::from_host_token(host_->defer_answer(host_->ctx));
     }
 
     loom::Ticket spend_deferred(const loom::DeferredAnswer& answer, loom::Message msg) override {
-        if (host_ == nullptr || host_->answer_deferred == nullptr || !answer.valid()) {
+        if (!LOOM_HOST_DOOR(answer_deferred) || !answer.valid()) {
             return loom::Ticket{};
         }
         const std::string bytes = loom::serialize(msg.payload);
@@ -136,7 +141,7 @@ public:
     }
 
     void release_deferred(const loom::DeferredAnswer& answer) override {
-        if (host_ != nullptr && host_->release_deferred != nullptr && answer.valid()) {
+        if (LOOM_HOST_DOOR(release_deferred) && answer.valid()) {
             host_->release_deferred(host_->ctx, answer.opaque_token());
         }
     }
@@ -147,7 +152,7 @@ public:
 
     loom::Ticket role_send(std::string_view as_role, loom::WeaveId target,
                              loom::Message msg) override {
-        if (host_ == nullptr || host_->role_send == nullptr) {
+        if (!LOOM_HOST_DOOR(role_send)) {
             return loom::Ticket{}; // no door: refused, never sent as personal speech
         }
         std::uint64_t attempt = 0;
@@ -161,7 +166,7 @@ public:
 
     loom::Ticket role_send_to_role(std::string_view as_role, std::string_view to_role,
                                      loom::Message msg) override {
-        if (host_ == nullptr || host_->role_send_to_role == nullptr) {
+        if (!LOOM_HOST_DOOR(role_send_to_role)) {
             return loom::Ticket{};
         }
         std::uint64_t attempt = 0;
@@ -176,7 +181,7 @@ public:
 
     loom::RolePublication role_publish(std::string_view as_role,
                                            loom::Message msg) override {
-        if (host_ == nullptr || host_->role_publish == nullptr) {
+        if (!LOOM_HOST_DOOR(role_publish)) {
             return loom::RolePublication{};
         }
         const std::string bytes = loom::serialize(msg.payload);
@@ -203,7 +208,7 @@ public:
     // doing nothing.
 
     loom::SenseClaimResult claim(loom::Value value) override {
-        if (host_ == nullptr || host_->sense_claim == nullptr) {
+        if (!LOOM_HOST_DOOR(sense_claim)) {
             return loom::SenseClaimResult{};
         }
         const std::string bytes = loom::serialize(value);
@@ -216,7 +221,7 @@ public:
     }
 
     loom::SenseClaimResult role_claim(std::string_view as_role, loom::Value value) override {
-        if (host_ == nullptr || host_->sense_role_claim == nullptr) {
+        if (!LOOM_HOST_DOOR(sense_role_claim)) {
             return loom::SenseClaimResult{};
         }
         const std::string bytes = loom::serialize(value);
@@ -230,13 +235,14 @@ public:
     }
 
     loom::SenseReading observe(loom::WeaveId author, std::shared_ptr<const loom::Schema> shape) override {
-        if (host_ == nullptr || host_->sense_observe == nullptr) {
+        if (!LOOM_HOST_DOOR(sense_observe)) {
             return loom::SenseReading{};
         }
         const std::string name_z(shape->name());
         HeldBytes bytes;
         HeldBytes authored; // the role authored as: grows to whatever the host wrote, never truncated
         ZenSenseBy by{};
+        by.size = sizeof(ZenSenseBy);
         ZenByteSink sink{&bytes, &collect_bytes};
         ZenByteSink role_sink{&authored, &collect_bytes};
         const ZenStatus st = host_->sense_observe(host_->ctx, author.value, name_z.c_str(),
@@ -245,7 +251,7 @@ public:
     }
 
     loom::SenseReading observe_role(std::string_view role, std::shared_ptr<const loom::Schema> shape) override {
-        if (host_ == nullptr || host_->sense_observe_role == nullptr) {
+        if (!LOOM_HOST_DOOR(sense_observe_role)) {
             return loom::SenseReading{};
         }
         const std::string role_z(role);
@@ -253,6 +259,7 @@ public:
         HeldBytes bytes;
         HeldBytes authored; // the role authored as: grows to whatever the host wrote, never truncated
         ZenSenseBy by{};
+        by.size = sizeof(ZenSenseBy);
         ZenByteSink sink{&bytes, &collect_bytes};
         ZenByteSink role_sink{&authored, &collect_bytes};
         const ZenStatus st = host_->sense_observe_role(
@@ -265,7 +272,7 @@ public:
     // weave inherits `loom::Bus`'s refusing defaults for them, since the authority is a native
     // capability the host mints (docs/reference/joint-publication.md#what-crosses-the-abi).
     loom::JointResult offer_claim(std::uint64_t op, loom::Value value) override {
-        if (host_ == nullptr || host_->sense_offer == nullptr) {
+        if (!LOOM_HOST_DOOR(sense_offer)) {
             return loom::JointResult{false, loom::JointRefusal::NoLiveDelivery};
         }
         const std::string bytes = loom::serialize(value);
@@ -362,6 +369,8 @@ private:
 
     const ZenHostApi* host_;
 };
+
+#undef LOOM_HOST_DOOR
 
 // ---- the per-method helpers the generated thunks forward to ------------------
 
@@ -525,7 +534,8 @@ ZenStatus do_revive(void* instance, const std::uint8_t* state, std::size_t len) 
 }
 
 /// Translate the host's provenance and authored role back into the C++ fact, for this
-/// library's own dispatch only: the outbound callbacks have no field to carry one.
+/// library's own dispatch only: the outbound callbacks have no field to carry one. A value this
+/// library does not know is an ordinary message.
 inline loom::Provenance provenance_from(std::uint32_t flags, std::int64_t sequence,
                                         const char* authored_role) {
     loom::Provenance p;
@@ -549,12 +559,21 @@ inline loom::Provenance provenance_from(std::uint32_t flags, std::int64_t sequen
     return p;
 }
 
+/// One fact of the host's delivery, read where the host's size reaches it, and absent past it.
+#define LOOM_DELIVERY_FACT(field, absent)                                                          \
+    (d != nullptr && ZEN_ABI_REACHES(d, ZenDelivery, field) ? d->field : (absent))
+
 template <class S>
-ZenStatus do_handle(void* instance, std::uint64_t sender, std::uint64_t reply_to,
-                    std::uint64_t correlation, std::uint32_t provenance,
-                    std::int64_t attested_sequence, const char* authored_role,
-                    const std::uint8_t* payload, std::size_t len, const ZenHostApi* host) {
+ZenStatus do_handle(void* instance, const ZenDelivery* d, const std::uint8_t* payload,
+                    std::size_t len, const ZenHostApi* host) {
     try {
+        const std::uint64_t sender = LOOM_DELIVERY_FACT(sender, std::uint64_t{0});
+        const std::uint64_t reply_to = LOOM_DELIVERY_FACT(reply_to, std::uint64_t{0});
+        const std::uint64_t correlation = LOOM_DELIVERY_FACT(correlation, std::uint64_t{0});
+        const std::uint32_t provenance = LOOM_DELIVERY_FACT(provenance, std::uint32_t{ZEN_PROV_NONE});
+        const std::int64_t attested_sequence = LOOM_DELIVERY_FACT(attested_sequence, std::int64_t{0});
+        const char* authored_role = LOOM_DELIVERY_FACT(authored_role, nullptr);
+        const char* addressed_role = LOOM_DELIVERY_FACT(addressed_role, nullptr);
         S* s = static_cast<S*>(instance);
         loom::Unverified u = loom::parse(as_view(payload, len));
         std::shared_ptr<const loom::Schema> door;
@@ -574,6 +593,9 @@ ZenStatus do_handle(void* instance, std::uint64_t sender, std::uint64_t reply_to
         loom::Message msg(a.value(), loom::WeaveId{sender}, loom::WeaveId{reply_to},
                              correlation);
         msg.provenance = provenance_from(provenance, attested_sequence, authored_role);
+        if (addressed_role != nullptr) {
+            msg.addressed_role = addressed_role;
+        }
         HostApiBus bus(host);
         s->handle(msg, bus);
         return ZEN_OK;
@@ -581,6 +603,8 @@ ZenStatus do_handle(void* instance, std::uint64_t sender, std::uint64_t reply_to
         return ZEN_ERR;
     }
 }
+
+#undef LOOM_DELIVERY_FACT
 
 } // namespace loom::detail
 
@@ -608,18 +632,18 @@ ZenStatus do_handle(void* instance, std::uint64_t sender, std::uint64_t reply_to
     static ZenStatus zen__abi_revive(void* i, const uint8_t* st, size_t n) {                       \
         return ::loom::detail::do_revive<WeaveClass>(i, st, n);                              \
     }                                                                                              \
-    static ZenStatus zen__abi_handle(void* i, uint64_t sender, uint64_t reply_to,                  \
-                                     uint64_t correlation, uint32_t prov, int64_t attested,        \
-                                     const char* authored_role, const uint8_t* p, size_t n,        \
+    static ZenStatus zen__abi_handle(void* i, const ZenDelivery* d, const uint8_t* p, size_t n,    \
                                      const ZenHostApi* h) {                                        \
-        return ::loom::detail::do_handle<WeaveClass>(i, sender, reply_to, correlation, prov, \
-                                                            attested, authored_role, p, n, h);     \
+        return ::loom::detail::do_handle<WeaveClass>(i, d, p, n, h);                               \
     }                                                                                              \
     static ZenStatus zen__abi_claim_published(void* i, const uint8_t* v, size_t n) {              \
         return ::loom::detail::do_claim_published<WeaveClass>(i, v, n);                     \
     }                                                                                              \
     ZEN_KERNEL_EXPORT const ZenWeaveAbi* zen_weave_abi(void) {                                      \
         static const ZenWeaveAbi abi = {.abi_version     = ZEN_ABI_VERSION,                         \
+                                        .size            = sizeof(ZenWeaveAbi),                    \
+                                        .host_size       = sizeof(ZenHostApi),                     \
+                                        .manifest_version = ::loom::kManifestVersion,              \
                                         .create          = zen__abi_create,                        \
                                         .destroy         = zen__abi_destroy,                       \
                                         .describe        = zen__abi_describe,                      \

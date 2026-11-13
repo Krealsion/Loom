@@ -50,6 +50,9 @@ set(ZEN_TEST_SOURCES_KERNEL
     test_kernel.cpp
     test_admission.cpp
     test_dispatch_loaded.cpp
+    # The seam that grows: the sizes its tables say, what a host refuses by them, and the
+    # addressed role a loaded weave reads.
+    test_seam.cpp
     test_handoff.cpp
     test_manager.cpp
     test_capabilities.cpp
@@ -106,7 +109,7 @@ set(LOOM_WASM_MODULES "" CACHE PATH
 set(zen_box_module_names
     box_probe box_probe_path_open box_probe_env box_stale_abi box_counter box_counter_reaching
     box_defers box_senses box_role_worker box_dispatch box_joint box_versioned_v1
-    box_versioned_v2)
+    box_versioned_v2 box_addressed)
 set(zen_box_modules "")
 if(LOOM_WASI_SDK)
     set(zen_box_modules "${CMAKE_BINARY_DIR}/wasm")
@@ -137,11 +140,14 @@ if(LOOM_WASI_SDK)
                     SOURCES weavelib/versioned_service.cpp)
     loom_wasm_weave(zen_box_versioned_v2_wasm OUTPUT "${zen_box_modules}/box_versioned_v2.wasm"
                     SOURCES weavelib/versioned_service.cpp DEFINITIONS ZEN_VERSIONED_CANDIDATE)
+    loom_wasm_weave(zen_box_addressed_wasm OUTPUT "${zen_box_modules}/box_addressed.wasm"
+                    SOURCES weavelib/addressed_probe.cpp)
     add_custom_target(loom-wasm-modules DEPENDS
         zen_box_probe_wasm zen_box_probe_path_open_wasm zen_box_probe_env_wasm
         zen_box_stale_abi_wasm zen_box_counter_wasm zen_box_counter_reaching_wasm
         zen_box_defers_wasm zen_box_senses_wasm zen_box_role_worker_wasm zen_box_dispatch_wasm
-        zen_box_joint_wasm zen_box_versioned_v1_wasm zen_box_versioned_v2_wasm)
+        zen_box_joint_wasm zen_box_versioned_v1_wasm zen_box_versioned_v2_wasm
+        zen_box_addressed_wasm)
 elseif(LOOM_WASM_MODULES)
     set(zen_box_modules "${LOOM_WASM_MODULES}")
 endif()
@@ -186,6 +192,7 @@ if(LOOM_ENABLE_WASM AND TARGET zen-kernel)
         "ZEN_BOX_JOINT=\"${zen_box_modules}/box_joint.wasm\""
         "ZEN_BOX_VERSIONED_V1=\"${zen_box_modules}/box_versioned_v1.wasm\""
         "ZEN_BOX_VERSIONED_V2=\"${zen_box_modules}/box_versioned_v2.wasm\""
+        "ZEN_BOX_ADDRESSED=\"${zen_box_modules}/box_addressed.wasm\""
         "ZEN_SO_BOX_COUNTER=\"$<TARGET_FILE:zen_box_counter>\"")
     loom_wasm_runtime_beside(zen-tests)
     # The demo, and its run as a CTest entry: one live weave reloaded into its module and back
@@ -452,6 +459,65 @@ add_library(zen_test_staleabi SHARED weavelib/stale_abi.cpp)
 target_link_libraries(zen_test_staleabi PRIVATE loom zen-warnings zen-sanitize)
 loom_weave_build_contract(zen_test_staleabi)
 
+# The headers kept for images built against an earlier ABI (tests/abi_kept/<version>/), each held
+# to the hash SHA256SUMS pins, and the kept copy of the current version held to the live header
+# byte for byte, so the next version's witness is built against this one as it was.
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/abi_kept/SHA256SUMS" zen_abi_kept_rows REGEX "^[0-9a-f]")
+foreach(zen_abi_kept_row IN LISTS zen_abi_kept_rows)
+    if(NOT zen_abi_kept_row MATCHES "^([0-9a-f]+)  (.+)$")
+        message(FATAL_ERROR "tests/abi_kept/SHA256SUMS: not a row: '${zen_abi_kept_row}'")
+    endif()
+    set(zen_abi_kept_want "${CMAKE_MATCH_1}")
+    set(zen_abi_kept_file "${CMAKE_CURRENT_SOURCE_DIR}/abi_kept/${CMAKE_MATCH_2}")
+    file(SHA256 "${zen_abi_kept_file}" zen_abi_kept_got)
+    if(NOT zen_abi_kept_got STREQUAL zen_abi_kept_want)
+        message(FATAL_ERROR "tests/abi_kept: ${zen_abi_kept_file} is no longer the header it "
+                            "kept (SHA-256 ${zen_abi_kept_got}, pinned ${zen_abi_kept_want})")
+    endif()
+endforeach()
+file(STRINGS "${PROJECT_SOURCE_DIR}/include/zen/kernel/abi.h" zen_abi_version_line
+     REGEX "^#define ZEN_ABI_VERSION [0-9]+u$")
+string(REGEX REPLACE "^.* ([0-9]+)u$" "\\1" zen_abi_version "${zen_abi_version_line}")
+set(zen_abi_kept_current "${CMAKE_CURRENT_SOURCE_DIR}/abi_kept/v${zen_abi_version}/zen/kernel/abi.h")
+if(NOT EXISTS "${zen_abi_kept_current}")
+    message(FATAL_ERROR "tests/abi_kept keeps no copy of ABI ${zen_abi_version}'s header, which the "
+                        "next version's witness image is built against")
+endif()
+file(SHA256 "${zen_abi_kept_current}" zen_abi_kept_got)
+file(SHA256 "${PROJECT_SOURCE_DIR}/include/zen/kernel/abi.h" zen_abi_live)
+if(NOT zen_abi_kept_got STREQUAL zen_abi_live)
+    message(FATAL_ERROR "tests/abi_kept: the kept copy of ABI ${zen_abi_version}'s header differs "
+                        "from include/zen/kernel/abi.h; a change to the header moves the version")
+endif()
+
+# An image compiled against ABI 12's kept header and nothing else of Loom's: the oldest a host
+# refuses for being from before the tables said their size.
+add_library(zen_test_abi_v12_image SHARED weavelib/abi_v12_image.cpp)
+target_include_directories(zen_test_abi_v12_image BEFORE PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/abi_kept/v12")
+target_link_libraries(zen_test_abi_v12_image PRIVATE zen-warnings zen-sanitize)
+loom_weave_build_contract(zen_test_abi_v12_image)
+
+# A descriptor needing one thing this host lacks, in each build (weavelib/needs_more.cpp).
+foreach(zen_needs NEXT_VERSION LARGER_HOST UNREAD_MANIFEST SHORT_DESCRIPTOR)
+    string(TOLOWER "${zen_needs}" zen_needs_lower)
+    add_library(zen_test_needs_${zen_needs_lower} SHARED weavelib/needs_more.cpp)
+    target_compile_definitions(zen_test_needs_${zen_needs_lower} PRIVATE NEEDS_${zen_needs})
+    target_link_libraries(zen_test_needs_${zen_needs_lower} PRIVATE loom zen-warnings zen-sanitize)
+    loom_weave_build_contract(zen_test_needs_${zen_needs_lower})
+endforeach()
+
+# The addressed-role probe, and the same weave behind a descriptor that says it was built against
+# smaller tables.
+add_library(zen_test_addressed SHARED weavelib/addressed_probe.cpp)
+target_link_libraries(zen_test_addressed PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
+loom_weave_build_contract(zen_test_addressed)
+add_library(zen_test_addressed_smaller SHARED weavelib/addressed_probe.cpp)
+target_compile_definitions(zen_test_addressed_smaller PRIVATE ADDRESSED_PROBE_SMALLER_TABLES)
+target_link_libraries(zen_test_addressed_smaller PRIVATE loom zen-switchboard zen-warnings
+                                                         zen-sanitize)
+loom_weave_build_contract(zen_test_addressed_smaller)
+
 # The build contract's own pair: one source, two artifacts, one through
 # loom_weave_build_contract() and one deliberately bypassing it. The bypass twin is the positive
 # control that keeps the question askable, as the stale-ABI fixture keeps "the previous ABI
@@ -489,7 +555,10 @@ set(ZEN_KERNEL_WEAVE_LIBS zen_test_weave zen_test_weave_b zen_test_weave_badsnap
     zen_test_handoff_v1 zen_test_handoff_v2 zen_test_handoff_migrator
     zen_test_role_worker zen_test_dispatch zen_test_open_reader zen_test_sink_overflow zen_test_joint
     zen_host_probe zen_host_probe_forge
-    zen_test_contract_applied zen_test_contract_bypass zen_test_weave_asks)
+    zen_test_contract_applied zen_test_contract_bypass zen_test_weave_asks
+    zen_test_abi_v12_image zen_test_needs_next_version zen_test_needs_larger_host
+    zen_test_needs_unread_manifest zen_test_needs_short_descriptor zen_test_addressed
+    zen_test_addressed_smaller)
 add_dependencies(zen-tests ${ZEN_KERNEL_WEAVE_LIBS})
 
 # Hand the portable fixtures' paths to the tests as string macros.
@@ -513,6 +582,13 @@ target_compile_definitions(zen-tests PRIVATE
     "ZEN_SO_ACTIVATES_CONFLICT=\"$<TARGET_FILE:zen_test_weave_activates_conflict>\""
     "ZEN_SO_BADABI=\"$<TARGET_FILE:zen_test_badabi>\""
     "ZEN_SO_STALEABI=\"$<TARGET_FILE:zen_test_staleabi>\""
+    "ZEN_SO_ABI_V12_IMAGE=\"$<TARGET_FILE:zen_test_abi_v12_image>\""
+    "ZEN_SO_NEEDS_NEXT_VERSION=\"$<TARGET_FILE:zen_test_needs_next_version>\""
+    "ZEN_SO_NEEDS_LARGER_HOST=\"$<TARGET_FILE:zen_test_needs_larger_host>\""
+    "ZEN_SO_NEEDS_UNREAD_MANIFEST=\"$<TARGET_FILE:zen_test_needs_unread_manifest>\""
+    "ZEN_SO_NEEDS_SHORT_DESCRIPTOR=\"$<TARGET_FILE:zen_test_needs_short_descriptor>\""
+    "ZEN_SO_ADDRESSED=\"$<TARGET_FILE:zen_test_addressed>\""
+    "ZEN_SO_ADDRESSED_SMALLER=\"$<TARGET_FILE:zen_test_addressed_smaller>\""
     "ZEN_SO_CONTRACT_APPLIED=\"$<TARGET_FILE:zen_test_contract_applied>\""
     "ZEN_SO_CONTRACT_BYPASS=\"$<TARGET_FILE:zen_test_contract_bypass>\""
     "ZEN_SO_DEFERS=\"$<TARGET_FILE:zen_test_weave_defers>\""

@@ -213,6 +213,12 @@ public:
     /// The role this delivery was deliberately authored as; empty for personal speech.
     std::string_view authored_role() const { return in_.provenance.authored_role(); }
 
+    /// The role this delivery was addressed to, resolved to this weave at delivery; empty for a
+    /// directed send and for a publication. Where it went, never who spoke (MSG-04): the authored
+    /// role is `authored_role()`. A weave holding several roles tells their traffic apart by it,
+    /// and still checks authorship and its grants as it would without it.
+    std::string_view addressed_role() const { return in_.addressed_role; }
+
     // ---- authenticated lifecycle conversation (ANS-01, LIFE-04) -------------
     // A role says where an ask is delivered; an authenticated conversation says who received it
     // and who may answer.

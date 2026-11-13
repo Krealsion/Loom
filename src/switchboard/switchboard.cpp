@@ -2635,6 +2635,7 @@ void Switchboard::deliver_one(Envelope env) {
 
     Message trusted(std::move(a).value(), env.msg.sender, env.msg.reply_to, env.msg.correlation);
     trusted.provenance = env.msg.provenance; // Loom's own word, set at enqueue and only there
+    trusted.addressed_role = env.role;       // the role this envelope was addressed to, if any
     // Shown before it runs, or not run (SENSE-06). A weave behind a value the bus published
     // under its key is shown it here, before its handler. A showing that does not complete, or
     // a weave already held, refuses this delivery: `ApplicationFailed` in the journal and on

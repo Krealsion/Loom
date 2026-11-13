@@ -1757,7 +1757,7 @@ TEST_CASE("an attestation is bound to the incarnation it names — announcing to
     CHECK(activation_log(r.bus, b).activations == 1); // the bystander is untouched
 }
 
-TEST_CASE("an artifact built against the previous ABI is refused at load, and named") {
+TEST_CASE("an artifact from before the oldest ABI a host loads is refused at load, and named") {
     // The break Loom pays for carrying provenance across the library seam. The
     // failure is a clean refusal that says which version — not a weave that
     // loads, runs, and is silently unable to accept a lifecycle fact for the
@@ -1767,10 +1767,10 @@ TEST_CASE("an artifact built against the previous ABI is refused at load, and na
     LoadResult lr = kernel.load("stale", ZEN_SO_STALEABI);
     CHECK_FALSE(lr.ok);
     CHECK(lr.error.find("abi_version") != std::string::npos);
-    // The fixture declares ONE BEHIND whatever the host requires, so this pin keeps
-    // meaning "the immediately previous ABI is refused" after every future bump
-    // rather than pinning the literal number it happened to be when written.
-    CHECK(lr.error.find(std::to_string(ZEN_ABI_VERSION - 1u)) != std::string::npos);
+    // The fixture declares the version just before the oldest a host loads, so this pin
+    // keeps meaning "an image from before the tables said their size is refused" at every
+    // append, rather than pinning the literal number it happened to be when written.
+    CHECK(lr.error.find(std::to_string(ZEN_ABI_OLDEST - 1u)) != std::string::npos);
     CHECK(lr.error.find(std::to_string(ZEN_ABI_VERSION)) != std::string::npos);
     CHECK_FALSE(kernel.is_loaded("stale"));
 

@@ -27,6 +27,7 @@ doc_links                    portable
 source_comments              portable
 doc_standard                 portable
 code_values                  portable
+census                       portable
 hook_return_types            portable
 optional_member_types        portable
 all                          posix

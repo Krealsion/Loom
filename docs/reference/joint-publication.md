@@ -328,9 +328,10 @@ incarnation at every verb, which is a design of its own with its own witnesses.
 The isolated pipe supplies no offer door either: a child cannot present the
 exact identity an operation binds.
 
-An image built for any version but `ZEN_ABI_VERSION` is refused at load and at reload, naming
-both versions, and is not adapted; rebuild hosts, libraries and images together
-([dynamic ABI](dynamic-abi.md)).
+An image whose version the host does not load is refused at load and at reload, by what it
+needs and what the host has; one the host loads is read as far as its descriptor's size reaches,
+and a `claim_published` slot past it is shown nothing and read as Failed
+([the number and the sizes](dynamic-abi.md#the-number-and-the-sizes)).
 
 ## Host exception responsibility at the pump seam
 

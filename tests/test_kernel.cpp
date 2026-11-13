@@ -2052,21 +2052,21 @@ TEST_CASE("a dynamic answer obeys the requester and sender lifecycle laws exactl
     CHECK(heard.count == 0); // neither law is weakened by crossing the seam
 }
 
-TEST_CASE("an artifact built against the previous ABI is refused, naming both versions") {
+TEST_CASE("an artifact from before the oldest ABI a host loads is refused, naming both versions") {
     Switchboard bus;
     Kernel kernel(bus, sbfx::fixture_admission());
     LoadResult stale = kernel.load("stale", ZEN_SO_STALEABI);
     CHECK_FALSE(stale.ok);
     CHECK(stale.error.find("abi_version") != std::string::npos);
-    CHECK(stale.error.find(std::to_string(ZEN_ABI_VERSION - 1u)) != std::string::npos);
+    CHECK(stale.error.find(std::to_string(ZEN_ABI_OLDEST - 1u)) != std::string::npos);
     CHECK(stale.error.find(std::to_string(ZEN_ABI_VERSION)) != std::string::npos);
     CHECK_FALSE(kernel.is_loaded("stale"));
     // No silent fallback: nothing of it reached the bus.
     CHECK(bus.list_weaves().empty());
 }
 
-TEST_CASE("KERN-04: an image built against the previous ABI cannot replace a live participant -- "
-          "refused before any callback of anybody's, and the incumbent stands") {
+TEST_CASE("KERN-04: an image from before the oldest ABI a host loads cannot replace a live "
+          "participant -- refused before any callback of anybody's, and the incumbent stands") {
     // The load gate is one door for an old image; a reload is the more dangerous other: a
     // previous-version descriptor swapped behind a live participant would be read past its end
     // at the next showing. So the candidate is judged BEFORE the incumbent is touched -- no
@@ -2090,7 +2090,7 @@ TEST_CASE("KERN-04: an image built against the previous ABI cannot replace a liv
     CHECK_FALSE(rr.reloaded);
     CHECK_FALSE(rr.version_mismatch); // not a STATE-schema mismatch: refused one door earlier
     CHECK(rr.error.find("abi_version") != std::string::npos);
-    CHECK(rr.error.find(std::to_string(ZEN_ABI_VERSION - 1u)) != std::string::npos);
+    CHECK(rr.error.find(std::to_string(ZEN_ABI_OLDEST - 1u)) != std::string::npos);
     CHECK(rr.error.find(std::to_string(ZEN_ABI_VERSION)) != std::string::npos);
 
     // THE INCUMBENT IS EXACTLY WHAT IT WAS: same artifact, same WeaveId, same state,
@@ -6889,7 +6889,7 @@ TEST_CASE("the previous-ABI artifact refuses at load by version — no instance 
     LoadResult stale = kernel.load("stale", ZEN_SO_STALEABI);
     CHECK_FALSE(stale.ok);
     CHECK(stale.error.find("abi_version") != std::string::npos);
-    CHECK(stale.error.find(std::to_string(ZEN_ABI_VERSION - 1u)) != std::string::npos);
+    CHECK(stale.error.find(std::to_string(ZEN_ABI_OLDEST - 1u)) != std::string::npos);
     CHECK(stale.error.find(std::to_string(ZEN_ABI_VERSION)) != std::string::npos);
     CHECK_FALSE(kernel.is_loaded("stale"));
     CHECK(bus.list_weaves().empty());

@@ -32,6 +32,9 @@ ZenStatus describe(void*, ZenByteSink sink) {
 // manifest are given; the load is refused at the manifest.
 extern "C" ZEN_KERNEL_EXPORT const ZenWeaveAbi* zen_weave_abi(void) {
     static const ZenWeaveAbi abi = {.abi_version = ZEN_ABI_VERSION,
+                                    .size        = sizeof(ZenWeaveAbi),
+                                    .host_size   = sizeof(ZenHostApi),
+                                    .manifest_version = ::loom::kManifestVersion,
                                     .create      = &create,
                                     .destroy     = &destroy,
                                     .describe    = &describe,

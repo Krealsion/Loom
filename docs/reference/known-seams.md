@@ -296,8 +296,8 @@ a weaver surface that puts the question; the emit-set supplies the shape's
 name and definition and nothing more.
 
 Closing the rest is a destination-bearing ask (`zen.CapabilityAsk v2`, or a
-sibling section) — another manifest and ABI bump, rebuilding every artifact in
-every consumer — plus the surface that asks. **Trigger:** a weaver surface
+sibling section) — another manifest version, which every artifact in every
+consumer is rebuilt to write — plus the surface that asks. **Trigger:** a weaver surface
 that wants to offer a one-click approval of what an artifact asked for.
 
 ## Event-loop composition

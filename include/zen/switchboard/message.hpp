@@ -221,6 +221,11 @@ struct Message {
     /// Written by the Switchboard alone and cleared by every ordinary enqueue, so a sender's
     /// value never reaches a recipient.
     Provenance provenance{};
+    /// The role the sender addressed, resolved to the recipient at delivery; empty for a
+    /// directed send and for a publication. Where the delivery went, never who spoke (MSG-04),
+    /// and no authority. Written by the Switchboard at dispatch, on a message it builds there,
+    /// so a sender's value never reaches a recipient.
+    std::string addressed_role{};
 
     explicit Message(Value payload_, WeaveId sender_ = {}, WeaveId reply_to_ = {},
                      std::uint64_t correlation_ = 0)

@@ -9,6 +9,11 @@
  * instance handles, function pointers, byte buffers and integer statuses; never a C++ type or
  * an exception. Every value, schema and message crosses as serialized bytes the host re-admits
  * through the gate. Valid C and C++.
+ *
+ * The seam grows. Every struct that crosses it and can grow says its size, a field or slot is
+ * only ever appended, and a reader reads what the size reaches and no further: a field past it
+ * is absent, and a slot past it is a NULL slot. A status, a provenance value and a slot keep
+ * their number and their meaning for ever. docs/reference/dynamic-abi.md
  */
 
 #include <stddef.h>
@@ -18,14 +23,25 @@
 extern "C" {
 #endif
 
-/* The ABI's own version, distinct from any schema version. The loader requires exact equality
- * and refuses any other version before calling into the image, at load and as a replacement for
- * a live participant, naming both; there is no old-image bridge. Rebuild hosts, libraries and
- * images together. What each version carried: docs/reference/dynamic-abi.md */
-#define ZEN_ABI_VERSION 12u
+/* The ABI's own version, distinct from any schema version. Every change to this header moves
+ * it, and from ZEN_ABI_OLDEST on it says what an image needs: a host loads an image of any
+ * version from ZEN_ABI_OLDEST to its own, and refuses one from before ZEN_ABI_OLDEST, or one
+ * newer than itself, before calling into it, at load and as a replacement for a live
+ * participant, naming both versions. What each version carried: docs/reference/dynamic-abi.md */
+#define ZEN_ABI_VERSION 13u
+
+/* The oldest version a host loads: the first whose tables say their size. */
+#define ZEN_ABI_OLDEST 13u
+
+/* Whether the struct `s` points at, whose first field is its size, reaches `field` whole: a
+ * reader of a struct the other side built reads a field only where this holds. */
+#define ZEN_ABI_REACHES(s, type, field) \
+    ((size_t)(s)->size >= offsetof(type, field) + sizeof(((type*)0)->field))
 
 /* Delivery provenance (ZEN_PROV_*), one value per delivery. Zero is an ordinary message. Set
- * by the host from bus-owned state; no payload a weave composes produces one. */
+ * by the host from bus-owned state; no payload a weave composes produces one. A value is
+ * handed only with a shape the library declares it accepts for that value, so a value
+ * appended later, with a shape of its own, never reaches a library built before it. */
 enum {
     ZEN_PROV_NONE = 0u,
     /* The one authorized answer to a request this weave sent. */
@@ -40,7 +56,8 @@ enum {
 
 /* Status codes returned across the seam: 0 is OK, negatives are errors. No exception crosses, in
  * either direction, since each side may carry its own C++ runtime; the host adapter translates
- * these, and every host callback answers what stopped it as a status. */
+ * these, and every host callback answers what stopped it as a status. A reader meeting a status
+ * it does not know reads it as its slot says, never as success. */
 typedef int32_t ZenStatus;
 enum {
     ZEN_OK = 0,
@@ -70,34 +87,59 @@ enum {
 };
 
 /* A host-provided byte sink: the library hands bytes over through write(), the host copies
- * them at once, and nothing either side must free crosses the seam. */
+ * them at once, and nothing either side must free crosses the seam. A door and its context,
+ * whole: it does not grow. */
 typedef struct ZenByteSink {
     void* ctx;
     void (*write)(void* ctx, const uint8_t* data, size_t len);
 } ZenByteSink;
 
-/* The authorship of one observed claim, filled by the host from its own facts. The role name
- * is not here: it crosses through a ZenByteSink like the value, so the name a reader sees is
- * the one authored, at any length. A role sink never written means a personal claim.
- * `role_holder_is_current` is meaningful only for a role claim. The two generation facts
- * are independent: after a live code replacement the life is current and the incarnation is
- * not. */
+/* The authorship of one observed claim. The library makes it and says its size; the host
+ * fills it from its own facts, as far as that size reaches. The role name is not here: it
+ * crosses through a ZenByteSink like the value, so the name a reader sees is the one authored,
+ * at any length. A role sink never written means a personal claim. `role_holder_is_current`
+ * is meaningful only for a role claim. The two generation facts are independent: after a live
+ * code replacement the life is current and the incarnation is not. */
 typedef struct ZenSenseBy {
+    uint32_t size;                          /* sizeof(ZenSenseBy) as the library built it */
+    uint32_t author_life_is_current;        /* 0/1 */
+    uint32_t author_incarnation_is_current; /* 0/1; NOT implied by the line above */
+    uint32_t role_holder_is_current;        /* 0/1; meaningful iff a role was written */
     uint64_t author;
     uint64_t author_life;
     uint64_t author_incarnation;
-    uint32_t author_life_is_current;         /* 0/1 */
-    uint32_t author_incarnation_is_current;  /* 0/1; NOT implied by the line above */
-    uint32_t role_holder_is_current;       /* 0/1; meaningful iff a role was written */
-    uint32_t reserved_;                      /* keep the 64-bit field below aligned */
     uint64_t revision;
 } ZenSenseBy;
 
-/* Host callbacks a Weave uses from inside handle(). Payloads cross as serialized message bytes
- * the host admits through the gate before routing; weave ids are opaque (0 is none); inputs are
- * valid only for the call. `attempt_out` (may be NULL) receives an addressed send's queued
- * attempt, 0 if nothing was queued. */
+/* The facts of one delivery, which the host computes and says the size of: the library reads
+ * what that size reaches. `provenance` is a ZEN_PROV_* value and `attested_sequence` the
+ * sequence Loom attested (for ZEN_PROV_ACTIVATION, else 0). `authored_role` is the role this
+ * delivery was deliberately authored as, verified by the host; NULL is personal speech. It is
+ * apart from `provenance` because it may coexist with an answer or an activation. All three are
+ * host-computed facts a library trusts as far as `sender`: none can be forged outbound or found
+ * on an ordinary message. `addressed_role` is the role the sender addressed, resolved to this
+ * weave at delivery; NULL for a directed send and for a publication. It says where the delivery
+ * went, never who spoke, and it is no authority. Strings are NUL-terminated and valid for the
+ * call. */
+typedef struct ZenDelivery {
+    uint32_t size; /* sizeof(ZenDelivery) as the host built it */
+    uint32_t provenance;
+    uint64_t sender;
+    uint64_t reply_to;
+    uint64_t correlation;
+    int64_t attested_sequence;
+    const char* authored_role;
+    const char* addressed_role;
+} ZenDelivery;
+
+/* Host callbacks a Weave uses from inside handle(). The host builds it and says its size, at
+ * least the `host_size` the library's descriptor names; a library calls a slot only where that
+ * size reaches it. Payloads cross as serialized message bytes the host admits through the gate
+ * before routing; weave ids are opaque (0 is none); inputs are valid only for the call.
+ * `attempt_out` (may be NULL) receives an addressed send's queued attempt, 0 if nothing was
+ * queued. */
 typedef struct ZenHostApi {
+    uint32_t size; /* sizeof(ZenHostApi) as the host built it */
     void* ctx;
     ZenStatus (*send)(void* ctx, uint64_t target, uint64_t reply_to, uint64_t correlation,
                       const uint8_t* payload, size_t len, uint64_t* attempt_out);
@@ -146,8 +188,8 @@ typedef struct ZenHostApi {
      *
      * observe and observe_role name the shape by (name, version) and return a copy: the value
      * through `sink`, the authored role through `role_sink` (written only for a role
-     * claim, exactly, at any length) and the other authorship facts through `by`. A refusal is
-     * one of the four ZEN_ERR_SENSE_* statuses. */
+     * claim, exactly, at any length) and the other authorship facts through `by`, as far as its
+     * size reaches. A refusal is one of the four ZEN_ERR_SENSE_* statuses. */
     ZenStatus (*sense_claim)(void* ctx, const uint8_t* payload, size_t len,
                              uint64_t* revision_out);
     ZenStatus (*sense_role_claim)(void* ctx, const char* as_role, const uint8_t* payload,
@@ -169,9 +211,19 @@ typedef struct ZenHostApi {
 
 /* The descriptor a Weave library exposes through zen_weave_abi(), over an opaque instance
  * handle and byte buffers. Returns from the library go through a `sink`, which the host
- * copies; inputs from the host are const pointer and length, valid only for the call. */
+ * copies; inputs from the host are const pointer and length, valid only for the call.
+ *
+ * Its first four fields never move: the version the image needs, the descriptor's own size,
+ * the size of the host table the image was built against, and the version of the manifest
+ * `describe` writes. The host reads the slots `size` reaches; one past it is NULL. A host
+ * refuses, before any slot is called, an image whose version it does not load, one whose
+ * `size` does not reach `handle`, one built against a larger host table than its own, and one
+ * whose manifest it does not read, naming what the image needs and what the host has. */
 typedef struct ZenWeaveAbi {
     uint32_t abi_version;
+    uint32_t size;             /* sizeof(ZenWeaveAbi) as the library built it */
+    uint32_t host_size;        /* sizeof(ZenHostApi) the library was built against */
+    uint32_t manifest_version; /* the zen.Manifest version `describe` writes */
 
     /* Make an instance, or return NULL when the weave refuses its making, having written why to
      * `refusal` (or nothing). The host keeps the first words and says them in the load's refusal
@@ -189,22 +241,16 @@ typedef struct ZenWeaveAbi {
     ZenStatus (*policy)(void* instance, ZenByteSink sink);
     /* Restore from state bytes the host has already admitted through the gate. */
     ZenStatus (*revive)(void* instance, const uint8_t* state, size_t len);
-    /* Handle an inbound message the host has already gated; may send through `host`.
-     * `provenance` is a ZEN_PROV_* value and `attested_sequence` the sequence Loom attested
-     * (for ZEN_PROV_ACTIVATION, else 0). `authored_role` is the role this delivery was
-     * deliberately authored as, verified by the host; NULL or empty is personal speech. It is
-     * its own parameter because it may coexist with an answer or an activation. All three are
-     * host-computed facts a library trusts as far as `sender`: none can be forged outbound or
-     * found on an ordinary message. Strings are NUL-terminated and valid for the call. */
-    ZenStatus (*handle)(void* instance, uint64_t sender, uint64_t reply_to, uint64_t correlation,
-                        uint32_t provenance, int64_t attested_sequence, const char* authored_role,
-                        const uint8_t* payload, size_t len, const ZenHostApi* host);
+    /* Handle an inbound message the host has already gated, with the delivery's facts; may send
+     * through `host`. */
+    ZenStatus (*handle)(void* instance, const ZenDelivery* delivery, const uint8_t* payload,
+                        size_t len, const ZenHostApi* host);
     /* One of this weave's own latest claims was published by a joint operation and the weave
      * has not run since. Called before its next `handle` and its next `snapshot`, with the
      * value as bytes the library re-admits against its claim-set. Not a delivery: no host
-     * table, and nothing may be sent. ZEN_EXPORT_WEAVE always fills it; a NULL slot is shown
-     * nothing and read as Failed. The status is the fact, mapped exactly
-     * (docs/reference/joint-publication.md#the-showing-and-its-three-answers):
+     * table, and nothing may be sent. ZEN_EXPORT_WEAVE always fills it; a NULL slot, or one the
+     * descriptor's size does not reach, is shown nothing and read as Failed. The status is the
+     * fact, mapped exactly (docs/reference/joint-publication.md#the-showing-and-its-three-answers):
      *
      *   ZEN_OK               Applied.  The library applied the value and stands behind it.
      *   ZEN_CLAIM_DECLINED   Declined. Functioning, it did not apply the value and keeps state
