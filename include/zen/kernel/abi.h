@@ -28,7 +28,7 @@ extern "C" {
  * version from ZEN_ABI_OLDEST to its own, and refuses one from before ZEN_ABI_OLDEST, or one
  * newer than itself, before calling into it, at load and as a replacement for a live
  * participant, naming both versions. What each version carried: docs/reference/dynamic-abi.md */
-#define ZEN_ABI_VERSION 13u
+#define ZEN_ABI_VERSION 14u
 
 /* The oldest version a host loads: the first whose tables say their size. */
 #define ZEN_ABI_OLDEST 13u
@@ -265,6 +265,16 @@ typedef struct ZenWeaveAbi {
      *                                  until reloaded or removed; the initiator is told.
      *   any other positive   Failed.   Undefined for this slot; never Applied. */
     ZenStatus (*claim_published)(void* instance, const uint8_t* value, size_t len);
+
+    /* Since 14: the value a weave is made with. `describe_creation` writes the shape the weave
+     * declares it is made with (zen.Creation, zen/kernel/schema_codec.hpp), or nothing for a
+     * weave made with none; it needs no instance, so the host gates a load's value against it
+     * before any of the weave's code runs. `create_with` makes an instance from the value the
+     * host admitted, as `create` makes one from nothing, and refuses as `create` does. Data,
+     * never doors: no host table crosses at a making. A NULL slot, or one past the descriptor's
+     * size, declares none and makes nothing with a value. */
+    ZenStatus (*describe_creation)(ZenByteSink sink);
+    void* (*create_with)(ZenByteSink refusal, const uint8_t* value, size_t len);
 } ZenWeaveAbi;
 
 /* The export decoration, on the declaration as well as the definition: MSVC counts it as part

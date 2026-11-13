@@ -303,7 +303,7 @@ TEST_CASE("a boot row names a set of roles with `roles`, beside `role`, in the o
 
 TEST_CASE("the ENVELOPED form the host writes is admitted too") {
     Scratch f("enveloped");
-    f.write(R"({"zen":1,"schema":"zen.HostBootPlan","version":2,)"
+    f.write(R"({"zen":1,"schema":"zen.HostBootPlan","version":3,)"
             R"("fields":{"boot":[{"name":"a","path":"/x/a.so"}]}})");
     BootPlan plan;
     std::string why;

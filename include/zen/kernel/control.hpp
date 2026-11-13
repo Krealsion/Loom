@@ -47,12 +47,32 @@
 namespace loom {
 
 /// Load `path` under `name`, binding the loaded Weave to every role in `roles`, all or none
-/// (MSG-13); none binds no role. Load is the only moment a role can be bound.
+/// (MSG-13); none binds no role. Load is the only moment a role can be bound. `creation` is the
+/// value the weave is made with, in its JSON form, admitted against the shape the artifact
+/// declares (Kernel::load); empty names none. Text, because the value's shape is the artifact's,
+/// which this bus does not hold until the artifact is loaded.
 struct LoadLibrary {
     std::string name;
     std::string path;
     std::vector<std::string> roles; ///< in binding order; empty = bind no role
-    ZEN_SHAPE(LoadLibrary, 3, ZEN_FIELD(name), ZEN_FIELD(path), ZEN_FIELD(roles));
+    /// The value's JSON form; empty = made with none. Defaulted, so a load built by position
+    /// with three fields still compiles.
+    std::string creation{};
+    ZEN_SHAPE(LoadLibrary, 4, ZEN_FIELD(name), ZEN_FIELD(path), ZEN_FIELD(roles),
+              ZEN_FIELD(creation));
+};
+
+/// The load of version 3, which names no value: answered as the load of a weave made with none.
+struct LoadLibraryV3 {
+    std::string name;
+    std::string path;
+    std::vector<std::string> roles;
+    using ZenSelf = LoadLibraryV3;
+    static constexpr const char* zen_name = "LoadLibrary";
+    static constexpr std::uint32_t zen_version = 3;
+    static auto zen_fields() {
+        return std::make_tuple(ZEN_FIELD(name), ZEN_FIELD(path), ZEN_FIELD(roles));
+    }
 };
 
 /// The load of version 2, which names one role. The door answers it as the load of a set of one,
@@ -165,7 +185,7 @@ struct LifecycleAdoption {
 /// answering takes only the ordinary Emit<...> grant.
 class ControlWeave
     : public loom::WeaveBase<ControlWeave, ControlState,
-                             loom::Accept<LoadLibrary, LoadLibraryV2, ReloadLibrary,
+                             loom::Accept<LoadLibrary, LoadLibraryV3, LoadLibraryV2, ReloadLibrary,
                                           UnloadLibrary, UnloadRole, ReleaseRole, ListLibraries,
                                           QueryRole>,
                              loom::Emit<loom::Result, loom::Ack, loom::Refused, RoleInfo,
@@ -181,11 +201,18 @@ public:
     /// A load that arrives as a message is one the host did not write, so it goes through the
     /// Kernel's policy-mediated `load` (`zen/kernel/admission.hpp`). A refusal carries the
     /// policy's own sentence back to the asker as `zen.Refused`, under its correlation.
-    void on(const LoadLibrary& m, loom::Mail& mail) { load(m.name, m.path, m.roles, mail); }
+    void on(const LoadLibrary& m, loom::Mail& mail) {
+        load(m.name, m.path, m.roles, Creation::json(m.creation), mail);
+    }
+
+    void on(const LoadLibraryV3& m, loom::Mail& mail) {
+        load(m.name, m.path, m.roles, Creation{}, mail);
+    }
 
     void on(const LoadLibraryV2& m, loom::Mail& mail) {
         load(m.name, m.path,
-             m.role.empty() ? std::vector<std::string>{} : std::vector<std::string>{m.role}, mail);
+             m.role.empty() ? std::vector<std::string>{} : std::vector<std::string>{m.role},
+             Creation{}, mail);
     }
 
     void on(const ReloadLibrary& m, loom::Mail& mail) {
@@ -258,6 +285,11 @@ public:
                 out += i == 0 ? '@' : '+';
                 out += roles[i];
             }
+            // What it was made with, as a shape and version: `name@role<Setup v1>`.
+            if (const std::optional<loom::Value> made = kernel_->made_with(n)) {
+                out += '<' + made->schema().name() + " v" +
+                       std::to_string(made->schema().version()) + '>';
+            }
         }
         answer(mail, loom::Result{out});
     }
@@ -271,13 +303,13 @@ public:
 
 private:
     void load(const std::string& name, const std::string& path,
-              const std::vector<std::string>& roles, loom::Mail& mail) {
+              const std::vector<std::string>& roles, const Creation& creation, loom::Mail& mail) {
         ++state_.ops;
         if (const char* blocked = activation_block()) {
             answer(mail, loom::Refused{blocked});
             return; // the Kernel is never called: nothing is opened, nothing bound
         }
-        const LoadResult r = kernel_->load(name, path, roles);
+        const LoadResult r = kernel_->load(name, path, roles, creation);
         if (r.ok) {
             // The incarnation is committed. The host adopts it first (LifecycleAdoption), then
             // the activation is queued, then the asker hears "loaded".
@@ -394,6 +426,7 @@ inline loom::WeaveId mount_control(Kernel& kernel, loom::Switchboard& bus,
 inline loom::Grant load_capability(loom::WeaveId control) {
     loom::Grant g;
     g.allow(LoadLibrary::zen_name, LoadLibrary::zen_version, control);
+    g.allow(LoadLibraryV3::zen_name, LoadLibraryV3::zen_version, control);
     g.allow(LoadLibraryV2::zen_name, LoadLibraryV2::zen_version, control);
     g.allow(ReloadLibrary::zen_name, ReloadLibrary::zen_version, control);
     g.allow(UnloadLibrary::zen_name, UnloadLibrary::zen_version, control);

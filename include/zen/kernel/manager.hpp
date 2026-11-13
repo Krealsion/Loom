@@ -19,7 +19,7 @@
 // A consumer that must survive its provider's replacement addresses it by role: the successor
 // is a different weave with a different id. Every outcome crosses as a standard shape, never a
 // throw:
-//   zen.LoadWeave{name, path, roles}  -> zen.Result{id}   | zen.Refused{why}
+//   zen.LoadWeave{name, path, roles, creation}  -> zen.Result{id}   | zen.Refused{why}
 //   zen.SwapWeave{role, name, path}   -> zen.Result{id}   | zen.Refused{why}
 //   zen.ReloadWeave{name, path}       -> zen.Ack          | zen.Refused{why}
 //   zen.ListLoaded{}                  -> zen.Result{"a,b@role,c@r1+r2"}
@@ -76,12 +76,30 @@ namespace loom {
 // ---- the lifecycle-initiator command shapes ---------------------------------
 // Registered by hand so the wire names carry the "zen." prefix.
 
-/// Load a weave, binding it to every role in `roles`, all or none; none binds no role.
+/// Load a weave, binding it to every role in `roles`, all or none; none binds no role, made with
+/// `creation`, the value's JSON form (empty: made with none), as `LoadLibrary` carries it.
 struct LoadWeave {
     std::string name;
     std::string path;
     std::vector<std::string> roles; ///< in binding order; empty = bind no role
+    /// The value's JSON form; empty = made with none. Defaulted, so a load built by position
+    /// with three fields still compiles.
+    std::string creation{};
     using ZenSelf = LoadWeave;
+    static constexpr const char* zen_name = "zen.LoadWeave";
+    static constexpr std::uint32_t zen_version = 3;
+    static auto zen_fields() {
+        return std::make_tuple(ZEN_FIELD(name), ZEN_FIELD(path), ZEN_FIELD(roles),
+                               ZEN_FIELD(creation));
+    }
+};
+
+/// The load of version 2, which names no value: forwarded as the load of a weave made with none.
+struct LoadWeaveV2 {
+    std::string name;
+    std::string path;
+    std::vector<std::string> roles;
+    using ZenSelf = LoadWeaveV2;
     static constexpr const char* zen_name = "zen.LoadWeave";
     static constexpr std::uint32_t zen_version = 2;
     static auto zen_fields() {
@@ -200,7 +218,7 @@ struct ManagerState {
 class WeaveManager
     : public WeaveBase<
           WeaveManager, ManagerState,
-          Accept<LoadWeave, LoadWeaveV1, SwapWeave, ReloadWeave, ListLoaded, ClaimBequest,
+          Accept<LoadWeave, LoadWeaveV2, LoadWeaveV1, SwapWeave, ReloadWeave, ListLoaded, ClaimBequest,
                  RoleInfo, Bequest, Result, Ack, Refused>,
           Emit<LoadLibrary, ReloadLibrary, UnloadRole, ListLibraries, QueryRole, PrepareShutdown,
                Bequest, Result, Ack, Refused>> {
@@ -208,11 +226,15 @@ public:
     explicit WeaveManager(WeaveId control) : control_(control) {}
 
     void on(const LoadWeave& c, Mail& mail) {
-        forward(mail, state_.relay, door(), LoadLibrary{c.name, c.path, c.roles});
+        forward(mail, state_.relay, door(), LoadLibrary{c.name, c.path, c.roles, c.creation});
+    }
+
+    void on(const LoadWeaveV2& c, Mail& mail) {
+        forward(mail, state_.relay, door(), LoadLibrary{c.name, c.path, c.roles, {}});
     }
 
     void on(const LoadWeaveV1& c, Mail& mail) {
-        forward(mail, state_.relay, door(), LoadLibrary{c.name, c.path, set_of(c.role)});
+        forward(mail, state_.relay, door(), LoadLibrary{c.name, c.path, set_of(c.role), {}});
     }
 
     void on(const SwapWeave& c, Mail& mail) {
@@ -366,14 +388,14 @@ private:
     void hard_swap(Mail& mail, const std::string& role, const std::string& name,
                    const std::string& path, WeaveId asker, std::uint64_t corr) {
         mail.send(control_, UnloadRole{role}, /*correlation=*/0);
-        (void)forward_for(mail, state_.relay, door(), LoadLibrary{name, path, set_of(role)}, asker,
+        (void)forward_for(mail, state_.relay, door(), LoadLibrary{name, path, set_of(role), {}}, asker,
                           corr);
     }
 
     /// The same two messages, from a recorded swap.
     std::int64_t begin_replacement(Mail& mail, const SwapInFlight& s) {
         mail.send(control_, UnloadRole{s.role}, /*correlation=*/0);
-        return forward_for(mail, state_.relay, door(), LoadLibrary{s.name, s.path, set_of(s.role)},
+        return forward_for(mail, state_.relay, door(), LoadLibrary{s.name, s.path, set_of(s.role), {}},
                            WeaveId{static_cast<std::uint64_t>(s.asker)},
                            static_cast<std::uint64_t>(s.corr));
     }

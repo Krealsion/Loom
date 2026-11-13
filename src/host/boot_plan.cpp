@@ -21,13 +21,14 @@ namespace {
 // wrong — which is why it is a declared schema admitted through `admit()` rather than
 // a hand-rolled reader that would have to remember to check every field itself.
 std::shared_ptr<const loom::Schema> boot_entry_schema() {
-    static const auto s = loom::SchemaBuilder("zen.HostBootEntry", 1)
+    static const auto s = loom::SchemaBuilder("zen.HostBootEntry", 2)
                               .field("name", loom::Kind::Text)
                               .field("path", loom::Kind::Text)
                               .field("role", loom::Kind::Text, /*required=*/false)
                               .list("roles", loom::type_of(loom::Kind::Text), /*required=*/false)
                               .field("enabled", loom::Kind::Bool, /*required=*/false)
                               .field("on_failure", loom::Kind::Text, /*required=*/false)
+                              .field("creation", loom::Kind::Text, /*required=*/false)
                               .build();
     return s;
 }
@@ -79,7 +80,7 @@ std::shared_ptr<const loom::Schema> history_schema() {
 // the host admits the person's object against the schema it knows by name and supplies the
 // version itself.
 std::shared_ptr<const loom::Schema> boot_plan_schema() {
-    static const auto s = loom::SchemaBuilder("zen.HostBootPlan", 2)
+    static const auto s = loom::SchemaBuilder("zen.HostBootPlan", 3)
                               .list("boot", loom::type_message(boot_entry_schema()))
                               .list("links", loom::type_message(link_entry_schema()),
                                     /*required=*/false)
@@ -150,6 +151,7 @@ bool read_boot_plan(const std::string& path, BootPlan* out, std::string* error) 
             }
         }
         entry.enabled = bool_or(e, "enabled", true);
+        entry.creation = text_or(e, "creation", "");
         const std::string on_fail = text_or(e, "on_failure", "continue");
         if (on_fail == "stop") {
             entry.on_failure = OnFailure::Stop;

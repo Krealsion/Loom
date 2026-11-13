@@ -179,6 +179,18 @@ LOOM_WASM_EXPORT(zw_free) void zw_free(void* p) { std::free(p); }
 LOOM_WASM_EXPORT(zw_create) void* zw_create(int32_t refusal_sink) {
     return zen_weave_abi()->create(host_sink(refusal_sink));
 }
+// The two creation doors (ABI 14): the shape the weave is made with, and its making with a value
+// the host copied into this module's memory.
+LOOM_WASM_EXPORT(zw_describe_creation) int32_t zw_describe_creation(int32_t sink) {
+    const ZenWeaveAbi* abi = zen_weave_abi();
+    return abi->describe_creation == nullptr ? ZEN_OK : abi->describe_creation(host_sink(sink));
+}
+LOOM_WASM_EXPORT(zw_create_with) void* zw_create_with(int32_t refusal_sink, const uint8_t* value,
+                                                      size_t len) {
+    const ZenWeaveAbi* abi = zen_weave_abi();
+    return abi->create_with == nullptr ? nullptr
+                                       : abi->create_with(host_sink(refusal_sink), value, len);
+}
 LOOM_WASM_EXPORT(zw_destroy) void zw_destroy(void* instance) {
     zen_weave_abi()->destroy(instance);
 }

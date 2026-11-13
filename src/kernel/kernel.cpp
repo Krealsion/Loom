@@ -281,6 +281,30 @@ public:
         return abi->create(refusal);
     }
 
+    /// What the image declares it is made with, written to `sink`: a NULL slot, or one past the
+    /// descriptor's size, writes nothing, which declares none.
+    ZenStatus describe_creation(const ZenWeaveAbi* abi, ZenByteSink sink) const {
+#if defined(LOOM_ENABLE_WASM)
+        if (module_) {
+            return detail::box_describe_creation(module_, sink);
+        }
+#endif
+        return abi->describe_creation == nullptr ? ZEN_OK : abi->describe_creation(sink);
+    }
+
+    /// One instance made with `value`, bytes the host admitted; null when it refused its making,
+    /// or when the image makes nothing with a value.
+    void* create_with(const ZenWeaveAbi* abi, ZenByteSink refusal, const std::string& value) const {
+        const auto* bytes = reinterpret_cast<const std::uint8_t*>(value.data());
+#if defined(LOOM_ENABLE_WASM)
+        if (module_) {
+            return detail::box_create_with(module_, refusal, bytes, value.size());
+        }
+#endif
+        return abi->create_with == nullptr ? nullptr
+                                           : abi->create_with(refusal, bytes, value.size());
+    }
+
     /// Give `instance` what its grant asks of the image itself. A library shares the host's
     /// process and takes nothing here; a box carries memory from the grant and refuses, in `why`,
     /// a grant whose reach it cannot give.
@@ -350,6 +374,7 @@ void* create_instance(const LoadedLibrary& lib, const ZenWeaveAbi* abi, MakingWo
     return instance;
 }
 
+
 } // namespace
 
 namespace {
@@ -398,6 +423,49 @@ static void zen_host_sink(void* ctx, const std::uint8_t* data, std::size_t len) 
     } catch (...) {
         out->lost = true;
     }
+}
+
+/// What an image declares it is made with, as its `describe_creation` wrote it: empty for one
+/// made with none. False with `error` when the door failed or the host could not hold what it
+/// wrote, which is never read as a declaration of none.
+bool declared_creation(const LoadedLibrary& lib, const ZenWeaveAbi* abi, std::string& bytes,
+                       std::string& error) {
+    HostBytes out;
+    if (lib.describe_creation(abi, ZenByteSink{&out, &zen_host_sink}) != ZEN_OK) {
+        error = "library describe_creation() failed";
+        return false;
+    }
+    if (out.lost) {
+        error = "the host could not hold the creation shape the library wrote";
+        return false;
+    }
+    bytes = std::move(out.bytes);
+    return true;
+}
+
+/// Make an instance as a load names it (docs/reference/dynamic-abi.md#the-creation-value): with
+/// no value when the image declares none and the load names none, and otherwise with the value
+/// the gate admitted against the declared shape, before any of the weave's code has run. Null,
+/// with `error`, when the two do not meet or the gate refuses; null with `error` empty when the
+/// weave refused its making, its words in `words`. `made` holds the admitted value.
+void* make_instance(const LoadedLibrary& lib, const ZenWeaveAbi* abi, const Creation& creation,
+                    MakingWords& words, std::optional<Value>& made, std::string& error) {
+    std::string declared;
+    if (!declared_creation(lib, abi, declared, error) ||
+        !judge_creation(declared, creation, made, error)) {
+        made.reset();
+        return nullptr;
+    }
+    if (!made) {
+        return create_instance(lib, abi, words);
+    }
+    void* instance = lib.create_with(abi, words.sink(), serialize(*made));
+    if (instance != nullptr) {
+        ++ledger().instances_created;
+    } else {
+        made.reset();
+    }
+    return instance;
 }
 
 /// A queued send is `ZEN_OK`. The waiting bound is its own status. Anything else invalid
@@ -1265,27 +1333,43 @@ std::vector<std::string> set_of(const std::string& role) {
 
 LoadResult Kernel::load(const std::string& name, const std::string& path,
                         const std::string& role) {
-    return load_impl(name, path, set_of(role), AdmissionKind::Load, nullptr);
+    return load_impl(name, path, set_of(role), AdmissionKind::Load, nullptr, Creation{});
 }
 
 LoadResult Kernel::load(const std::string& name, const std::string& path,
                         const std::vector<std::string>& roles) {
-    return load_impl(name, path, roles, AdmissionKind::Load, nullptr);
+    return load_impl(name, path, roles, AdmissionKind::Load, nullptr, Creation{});
 }
 
 LoadResult Kernel::load(const std::string& name, const std::string& path, const std::string& role,
                         Grant grant) {
-    return load_impl(name, path, set_of(role), AdmissionKind::Load, &grant);
+    return load_impl(name, path, set_of(role), AdmissionKind::Load, &grant, Creation{});
 }
 
 LoadResult Kernel::load(const std::string& name, const std::string& path,
                         const std::vector<std::string>& roles, Grant grant) {
-    return load_impl(name, path, roles, AdmissionKind::Load, &grant);
+    return load_impl(name, path, roles, AdmissionKind::Load, &grant, Creation{});
+}
+
+LoadResult Kernel::load(const std::string& name, const std::string& path,
+                        const std::vector<std::string>& roles, const Creation& creation) {
+    return load_impl(name, path, roles, AdmissionKind::Load, nullptr, creation);
+}
+
+LoadResult Kernel::load(const std::string& name, const std::string& path,
+                        const std::vector<std::string>& roles, const Creation& creation,
+                        Grant grant) {
+    return load_impl(name, path, roles, AdmissionKind::Load, &grant, creation);
+}
+
+std::optional<Value> Kernel::made_with(const std::string& name) const {
+    auto it = libs_.find(name);
+    return it == libs_.end() ? std::nullopt : it->second.made_with;
 }
 
 LoadResult Kernel::load_impl(const std::string& name, const std::string& path,
                              const std::vector<std::string>& roles, AdmissionKind kind,
-                             const Grant* explicit_grant) {
+                             const Grant* explicit_grant, const Creation& creation) {
     if (libs_.count(name) != 0) {
         return {false, {}, "already loaded: " + name};
     }
@@ -1317,9 +1401,10 @@ LoadResult Kernel::load_impl(const std::string& name, const std::string& path,
         return {false, {}, error};
     }
     MakingWords words;
-    void* instance = create_instance(*lib, abi, words);
+    std::optional<Value> made;
+    void* instance = make_instance(*lib, abi, creation, words, made, error);
     if (instance == nullptr) {
-        return {false, {}, making_refused(words)};
+        return {false, {}, error.empty() ? making_refused(words) : error};
     }
 
     std::unique_ptr<HostAdapter> adapter;
@@ -1365,7 +1450,7 @@ LoadResult Kernel::load_impl(const std::string& name, const std::string& path,
         // thrown — a bad manifest, a held role, a schema disagreement — `mf` would
         // have died on the way out with the claim still in it.
         libs_.emplace(name, Loaded{name, std::move(lib), abi, raw, id, std::move(mf.schemas),
-                                   std::move(baseline)});
+                                   std::move(baseline), std::move(made)});
         // THE RECORD AND THE ADAPTER ARE NOW ONE THING. From here the adapter's
         // destructor releases this record, whoever destroys it — which is the
         // whole synchronization mechanism, and it is wired last so that a failed
@@ -1387,22 +1472,28 @@ LoadResult Kernel::load_impl(const std::string& name, const std::string& path,
 
 LoadResult Kernel::load_candidate(const std::string& name, const std::string& path,
                                   loom::WeaveId coordinator) {
-    return candidate_impl(name, path, coordinator, nullptr);
+    return candidate_impl(name, path, coordinator, nullptr, Creation{});
 }
 
 LoadResult Kernel::load_candidate(const std::string& name, const std::string& path,
                                   loom::WeaveId coordinator, Grant grant) {
-    return candidate_impl(name, path, coordinator, &grant);
+    return candidate_impl(name, path, coordinator, &grant, Creation{});
+}
+
+LoadResult Kernel::load_candidate(const std::string& name, const std::string& path,
+                                  loom::WeaveId coordinator, const Creation& creation) {
+    return candidate_impl(name, path, coordinator, nullptr, creation);
 }
 
 LoadResult Kernel::candidate_impl(const std::string& name, const std::string& path,
-                                  loom::WeaveId coordinator, const Grant* explicit_grant) {
+                                  loom::WeaveId coordinator, const Grant* explicit_grant,
+                                  const Creation& creation) {
     // The ordinary load, then the seal, rather than a second loading path that would drift:
     // the prepared artifact must be the one that becomes live. Nothing can observe the gap:
     // `fanout` chooses its recipients at enqueue, so a queued publication never named this
     // weave and a later one finds it sealed, and no delivery runs here, in host code.
     LoadResult lr =
-        load_impl(name, path, /*roles=*/{}, AdmissionKind::Candidate, explicit_grant);
+        load_impl(name, path, /*roles=*/{}, AdmissionKind::Candidate, explicit_grant, creation);
     if (!lr.ok) {
         return lr;
     }
@@ -1464,10 +1555,14 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
     if (new_abi == nullptr) {
         return {false, false, false, error};
     }
+    // The new image is made with the value the load named: a reload is the same participant
+    // in new code, so what it was made with does not change.
     MakingWords words;
-    void* new_inst = create_instance(*new_lib, new_abi, words);
+    std::optional<Value> remade;
+    const Creation kept = rec.made_with ? Creation::of(*rec.made_with) : Creation{};
+    void* new_inst = make_instance(*new_lib, new_abi, kept, words, remade, error);
     if (new_inst == nullptr) {
-        return {false, false, false, making_refused(words)};
+        return {false, false, false, error.empty() ? making_refused(words) : error};
     }
 
     // Reconstruct the candidate's WHOLE manifest once: both halves of the

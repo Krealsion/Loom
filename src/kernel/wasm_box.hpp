@@ -49,6 +49,16 @@ const ZenWeaveAbi* box_abi() noexcept;
 /// its making or the module trapped, with its words in `refusal`.
 void* box_create(const std::shared_ptr<BoxModule>& module, ZenByteSink refusal);
 
+/// As `box_create`, the weave made with `value`, bytes the host admitted against the shape the
+/// module declares; a module built before the creation value makes nothing with one.
+void* box_create_with(const std::shared_ptr<BoxModule>& module, ZenByteSink refusal,
+                      const std::uint8_t* value, std::size_t len);
+
+/// The shape the module's weave declares it is made with, written to `sink` from a throwaway
+/// instance in which no weave is made; nothing for a module made with none, or one built before
+/// the creation value.
+ZenStatus box_describe_creation(const std::shared_ptr<BoxModule>& module, ZenByteSink sink);
+
 /// Project `grant` onto the instance's box, or refuse in `why` the parts it cannot carry: the
 /// box gives memory from `ResourceLimits` and reaches nothing outside the host's doors, so an OS
 /// capability, a filesystem level or a cpu share is refused, never narrowed.

@@ -71,7 +71,9 @@ ZEN_KERNEL_EXPORT const ZenWeaveAbi* zen_weave_abi(void) {
         .policy = probe_policy,
         .revive = probe_revive,
         .handle = probe_handle,
-        .claim_published = probe_past_its_size};
+        .claim_published = probe_past_its_size,
+        .describe_creation = nullptr,
+        .create_with = nullptr};
     return &abi;
 }
 } // extern "C"

@@ -30,6 +30,9 @@ struct BootEntry {
     std::vector<std::string> roles; ///< the roles it should hold, in order, or none
     bool enabled = true;
     OnFailure on_failure = OnFailure::Continue;
+    /// The value the weave is made with, in its JSON form, admitted at its load against the shape
+    /// the artifact declares; empty for one made with none.
+    std::string creation;
 };
 
 /// `roles` as a row prints them: `<lead>r1+r2`, or nothing for none.

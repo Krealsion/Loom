@@ -344,7 +344,7 @@ TEST_CASE("the Manager loads into a set by the newer load and a set of one by th
     Rig r;
     const std::size_t before = r.engine.buffer_size();
     const Submitted sent = r.engine.submit(
-        r.manager, to_value(LoadWeave{"pair", ZEN_SO_WEAVE, Roles{"pair.one", "pair.two"}}),
+        r.manager, to_value(LoadWeave{"pair", ZEN_SO_WEAVE, Roles{"pair.one", "pair.two"}, {}}),
         ConsoleTracking::Untracked);
     REQUIRE(sent.ticket.valid());
     r.engine.pump();
@@ -739,7 +739,7 @@ TEST_CASE("the Manager holds no privilege: a second granted participant drives t
     struct Driver : WeaveBase<Driver, GoState, Accept<Go>, Emit<LoadLibrary>> {
         WeaveId control{};
         void on(const Go&, Mail& mail) {
-            mail.send(control, LoadLibrary{"direct", ZEN_SO_WEAVE, {"spawner"}});
+            mail.send(control, LoadLibrary{"direct", ZEN_SO_WEAVE, {"spawner"}, {}});
         }
     };
     WeaveId driver = mount_granted<Driver>(r.bus, load_capability(r.control));
@@ -756,7 +756,7 @@ TEST_CASE("the Manager holds no privilege: a second granted participant drives t
     struct Sneak : WeaveBase<Sneak, GoState, Accept<Go>, Emit<LoadLibrary>> {
         WeaveId control{};
         void on(const Go&, Mail& mail) {
-            mail.send(control, LoadLibrary{"sneaked", ZEN_SO_WEAVE_B, {}});
+            mail.send(control, LoadLibrary{"sneaked", ZEN_SO_WEAVE_B, {}, {}});
         }
     };
     WeaveId sneak = mount_granted<Sneak>(r.bus, Grant::nothing());
@@ -1194,7 +1194,7 @@ TEST_CASE("the direct control door activates too — the fact is not the Manager
         WeaveId control{};
         std::vector<std::string> results;
         void on(const Go&, Mail& mail) {
-            mail.send(control, LoadLibrary{"direct", ZEN_SO_ACTIVATES, {}});
+            mail.send(control, LoadLibrary{"direct", ZEN_SO_ACTIVATES, {}, {}});
         }
         void on(const Result& res, Mail&) { results.push_back(res.value); }
     };
@@ -1402,7 +1402,7 @@ TEST_CASE("the activation sequence lives in the control state and survives reviv
     struct Driver : WeaveBase<Driver, GoState, Accept<Go>, Emit<LoadLibrary>> {
         WeaveId control{};
         void on(const Go&, Mail& mail) {
-            mail.send(control, LoadLibrary{"c", ZEN_SO_ACTIVATES, {}});
+            mail.send(control, LoadLibrary{"c", ZEN_SO_ACTIVATES, {}, {}});
         }
     };
     WeaveId driver = mount_granted<Driver>(r.bus, load_capability(control2));

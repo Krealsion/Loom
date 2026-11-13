@@ -237,7 +237,7 @@ it could not find ([opening a weave on Windows](../reference/kernel.md#opening-a
 ## Deeper
 
 Reference: [kernel](../reference/kernel.md) ·
-[dynamic-abi](../reference/dynamic-abi.md) (current: **v<!-- value ZEN_ABI_VERSION -->13<!-- /value -->**) ·
+[dynamic-abi](../reference/dynamic-abi.md) (current: **v<!-- value ZEN_ABI_VERSION -->14<!-- /value -->**) ·
 [capabilities](../reference/capabilities.md#the-grant-in-process) (the
 in-process trust statement above, in its own reference). Real artifacts to
 crib:

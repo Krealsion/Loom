@@ -1,6 +1,6 @@
 # Dynamic ABI — reference
 
-The C seam a weave library and the host agree on. Current version: **v<!-- value ZEN_ABI_VERSION -->13<!-- /value -->**
+The C seam a weave library and the host agree on. Current version: **v<!-- value ZEN_ABI_VERSION -->14<!-- /value -->**
 (`ZEN_ABI_VERSION` in `include/zen/kernel/abi.h`), and the oldest a host loads is
 `ZEN_ABI_OLDEST`, beside it ([the number and the sizes](#the-number-and-the-sizes)). Laws:
 [KERN-01, KERN-04](../laws/kernel-laws.md),
@@ -8,6 +8,13 @@ The C seam a weave library and the host agree on. Current version: **v<!-- value
 [ANS-06](../laws/answer-authority-laws.md),
 [MSG-07](../laws/messaging-laws.md#msg-07--role-authorship-is-explicit),
 [SENSE-01..07](../laws/sense-laws.md).
+
+**v14 appends the creation value**, the first append since the seam grew: two descriptor
+slots, `describe_creation` and `create_with`, and nothing else moved. A weave may be made with
+one value, data and never a door ([the creation value](#the-creation-value)). An image built
+against v13's header (`tests/abi_kept/v13/`) loads and works on this host, made with none: its
+descriptor's size ends before the two slots, which the host reads as NULL. A v14 image on a v13
+host is refused before any callback, as needing abi_version 14.
 
 **v13 makes the seam grow.** Every struct that crosses it and can grow says its size, and a
 reader takes what that size reaches. The descriptor's first four fields are the version the
@@ -196,6 +203,33 @@ the ABI directly ([guide](../guides/dynamic-weaves.md)).
 An artifact the host does not load is refused before any slot of it is called, by what it needs
 and what the host has ([KERN-04](../laws/kernel-laws.md),
 [the number and the sizes](#the-number-and-the-sizes)).
+
+## The creation value
+
+A weave is handed one value at its making, with its load: what it needs before its first turn,
+such as a path a host fixed or the vocabulary it serves. A value, because a value is all that can
+be judged before the weave runs; never a door, a handle or an authority, since a door handed at
+creation is reach given to code nobody has admitted yet. Its capabilities are the load's grant.
+
+- **Declared.** `ZEN_MADE_WITH(Setup)` in the weave and a constructor taking `const Setup&`. The
+  descriptor's `describe_creation` writes the shape as `zen.Creation` (the shapes it nests, then the
+  shape) without making an instance, because the manifest is read from one, after `create()`.
+- **Gated before it runs.** The host admits the load's value against that shape before any of the
+  weave's code sees it (`loom::judge_creation`, `zen/kernel/creation.hpp`, one function for the
+  kernel, the box and the isolation host), then calls `create_with` with the admitted bytes, which
+  the library re-admits against its own definition as it does state. A value that does not admit
+  refuses the load in the gate's words; so does a load naming none for a weave made with one, and a
+  load naming one for a weave made with none. Nothing is made.
+- **Named by each door.** `Kernel::load(..., Creation)`, `load_candidate(..., Creation)`,
+  `LoadLibrary` v4 and `zen.LoadWeave` v3 (`creation`, the value's JSON form, empty for none: text,
+  since the value's shape is the artifact's and the bus holds no definition of it until the artifact
+  is loaded), a boot plan row's `creation`, the console's `start ... --with <value>`, and a native
+  weave through `loom::mount_made<W>(bus, value, why)`, which judges by the same function.
+- **Kept.** A reload makes the new image with the value the load named: the same participant in new
+  code. A prepared candidate is a new weave and names its own. An isolated child is told its
+  value after it says its declared shape (`Creation` and `Make` frames), and a respawn is made
+  with the same. `Kernel::made_with(name)` says it, the door's `ListLibraries` answers
+  `name@role<Setup v1>`, and history keeps the load messages that carried it.
 
 ## The number and the sizes
 

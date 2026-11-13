@@ -688,7 +688,7 @@ public:
     /// One boot row, through the steward, with its outcome attributed.
     void start_row(const loom::host::BootEntry& e, loom::host::BootOutcome* row) {
 #if ZEN_HOST_HAS_KERNEL
-        const Answer a = ask(manager_, loom::to_value(loom::LoadWeave{e.name, e.path, e.roles}));
+        const Answer a = ask(manager_, loom::to_value(loom::LoadWeave{e.name, e.path, e.roles, e.creation}));
         if (a.state == Answer::State::Pending) {
             // A ROW MAY LEGITIMATELY NOT BE DONE YET, and saying so beats both waiting
             // forever and calling it started. The conversation stays open; the console
@@ -1214,16 +1214,25 @@ void cmd_lifecycle(HostSession& s, const std::vector<Token>& tok) {
     };
     if (cmd == "start") {
         if (tok.size() < 3) {
-            std::cout << "  usage: start <name> <path> [role ...]\n";
+            std::cout << "  usage: start <name> <path> [role ...] [--with <value as JSON>]\n";
             return;
         }
         const std::string name = tok[1].text;
         std::vector<std::string> roles;
+        std::string creation;
         for (std::size_t i = 3; i < tok.size(); ++i) {
+            if (tok[i].text == "--with") {
+                if (i + 1 >= tok.size() || !creation.empty()) {
+                    std::cout << "  usage: start <name> <path> [role ...] [--with <value as JSON>]\n";
+                    return;
+                }
+                creation = tok[++i].text;
+                continue;
+            }
             roles.push_back(tok[i].text);
         }
-        const Answer a =
-            s.ask(s.manager(), loom::to_value(loom::LoadWeave{name, tok[2].text, roles}));
+        const Answer a = s.ask(s.manager(),
+                               loom::to_value(loom::LoadWeave{name, tok[2].text, roles, creation}));
         if (!a.settled()) {
             std::cout << "  " << a.trouble << '\n';
             print_adoption();
