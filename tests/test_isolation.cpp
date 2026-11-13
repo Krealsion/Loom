@@ -2045,6 +2045,7 @@ TEST_CASE("an out-of-process channel's RECEIVE buffer reclaims decoded bytes, so
 TEST_CASE("an isolated image that can hear an ask's end is refused explicitly: it cannot ask") {
     Switchboard bus; IsolationHost host(bus,kHostExe);
     auto result=host.mount("asker",ZEN_SO_ASK_PROBE,Grant{});
+    INFO(result.error);
     CHECK_FALSE(result.ok);
     CHECK(result.error.find("isolated pipe cannot attest an ask's end")!=std::string::npos);
     CHECK(bus.list_weaves().empty());
