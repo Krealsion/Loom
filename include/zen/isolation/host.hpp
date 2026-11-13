@@ -195,6 +195,9 @@ private:
         std::string fs_root;   // the mkdtemp'd new-root dir (for teardown), empty otherwise
         std::string cg_leaf;   // the per-Weave cgroup leaf name (empty if resources not contained)
         ResourceCaps cg_caps;  // the resolved resource caps applied to the leaf
+        /// Whether its grant gives it the time (`Grant::with_time`): else its deliveries carry
+        /// no turn's time across the pipe, as a contained child reads no host clock.
+        bool knows_time = false;
         bool dead = false;
         bool death_signaled = false;
         bool quarantined = false;

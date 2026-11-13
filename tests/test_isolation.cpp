@@ -15,6 +15,7 @@
 #include "enforcement_gate.hpp"
 #include "switchboard_fixtures.hpp"
 #include "weavelib/addressed_protocol.hpp"
+#include "weavelib/turn_protocol.hpp"
 #include "weavelib/made_protocol.hpp"
 #include "weavelib/role_protocol.hpp"
 
@@ -300,6 +301,30 @@ TEST_CASE("an isolated weave reads the role a delivery was addressed to, as a na
     bus.send(door.id, Message(to_value(addressed::AddressedKnock{2})));
     REQUIRE(host.run_until([&] { return knocks() == 2; }, 2000));
     CHECK(heard().get("addressed")->as_text().empty());
+}
+
+TEST_CASE("an isolated weave is handed the turn's time across the pipe only where its grant gives "
+          "it time") {
+    for (const bool given : {false, true}) {
+        CAPTURE(given);
+        Switchboard bus;
+        IsolationHost host(bus, kHostExe);
+        Grant grant;
+        if (given) {
+            grant.with_time();
+        }
+        OutOfProcessResult probe = host.mount("turn", ZEN_SO_TURN_PROBE, std::move(grant), "turn.a");
+        REQUIRE_MESSAGE(probe.ok, probe.error);
+        const auto heard = [&] {
+            return from_value<turning::TurnHeard>(bus.weave(probe.id)->snapshot());
+        };
+        bus.begin_turn(TurnFacts{777, 1794600000000});
+        bus.send_to_role("turn.a", Message(to_value(turning::TurnKnock{1})));
+        REQUIRE(host.run_until([&] { return heard().knocks == 1; }, 2000));
+        CHECK(heard().told == (given ? 1 : 0));
+        CHECK(heard().turn_ms == (given ? 777 : 0));
+        CHECK(heard().turn_date_ms == (given ? 1794600000000 : 0));
+    }
 }
 
 TEST_CASE("an isolated weave is made with the value its mount names, admitted by this host against "

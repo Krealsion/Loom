@@ -1100,7 +1100,12 @@ public:
             .correlation = in.correlation,
             .attested_sequence = in.provenance.attested_sequence(),
             .authored_role = authored.empty() ? nullptr : authored.c_str(),
-            .addressed_role = in.addressed_role.empty() ? nullptr : in.addressed_role.c_str()};
+            .addressed_role = in.addressed_role.empty() ? nullptr : in.addressed_role.c_str(),
+            // The turn's time, when a wait began this turn: an image in this process reads the
+            // clock as easily, so it is told whatever its grant (a box withholds it, wasm_box.cpp).
+            .turn = in.turn ? std::uint32_t{ZEN_TURN_KNOWN} : 0u,
+            .turn_ms = in.turn ? in.turn->ms : 0,
+            .turn_date_ms = in.turn ? in.turn->date_ms : 0};
         // The library handler's status is contained, not discarded. The delivery was valid
         // and the library's error stays its own: nothing is refused, retried or translated,
         // and no weave can read the status. But `do_handle` catches every exception at the

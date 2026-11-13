@@ -76,6 +76,9 @@ std::string render_record(const HistoryRecord& rec) {
     if (rec.dispatch_parent != 0) {
         line += " from-dispatch=" + std::to_string(rec.dispatch_parent);
     }
+    if (rec.turn) {
+        line += " turn=" + std::to_string(rec.turn->ms) + " date=" + std::to_string(rec.turn->date_ms);
+    }
     if (rec.handler_elapsed_ns != 0) {
         line += " handler=" + std::to_string(rec.handler_elapsed_ns) + "ns";
     }

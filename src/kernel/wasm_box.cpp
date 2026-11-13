@@ -198,6 +198,9 @@ struct Box {
     Exports fn;
     /// The weave instance, an address in the module's memory.
     std::int32_t weave = 0;
+    /// Whether its grant gives it the time (`Grant::with_time`), read at mount: else its
+    /// deliveries carry no turn's time, as the box withholds every clock.
+    bool knows_time = false;
     /// The doors of the delivery in progress, and null outside one.
     const ZenHostApi* host = nullptr;
     /// The host sink `zen_host.sink_write` hands bytes to while a slot writes.
@@ -1308,7 +1311,7 @@ ZenStatus box_slot_claim_published(void* instance, const uint8_t* value, size_t 
 namespace wasm32_delivery {
 constexpr std::uint32_t kSize = 0, kProvenance = 4, kSender = 8, kReplyTo = 16, kCorrelation = 24,
                         kAttestedSequence = 32, kAuthoredRole = 40, kAddressedRole = 44,
-                        kBytes = 48;
+                        kTurn = 48, kTurnMs = 56, kTurnDateMs = 64, kBytes = 72;
 } // namespace wasm32_delivery
 
 /// A host string copied into fresh module memory, NUL-terminated; 0 for NULL. False on failure.
@@ -1351,6 +1354,12 @@ ZenStatus box_slot_handle(void* instance, const ZenDelivery* d, const uint8_t* p
         put(w::kAttestedSequence, &d->attested_sequence, 8);
         put(w::kAuthoredRole, &authored, 4);
         put(w::kAddressedRole, &addressed, 4);
+        // The turn's time only where the grant gives it: the box withholds the clock.
+        if (b->knows_time && d->turn == ZEN_TURN_KNOWN) {
+            put(w::kTurn, &d->turn, 4);
+            put(w::kTurnMs, &d->turn_ms, 8);
+            put(w::kTurnDateMs, &d->turn_date_ms, 8);
+        }
         facts = copy_in(*b, image, sizeof(image), why);
         trapped = facts == 0;
     }
@@ -1563,6 +1572,7 @@ void* box_make(const std::shared_ptr<BoxModule>& module, ZenByteSink refusal,
 
 bool box_mount(void* instance, const Grant& grant, std::string& why) {
     auto* b = static_cast<Box*>(instance);
+    b->knows_time = grant.knows_time();
     std::string refused;
     auto refuse = [&refused](const std::string& part) {
         refused += (refused.empty() ? "" : "; ") + part;

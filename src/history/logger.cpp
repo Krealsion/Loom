@@ -182,37 +182,54 @@ struct Logger::Stream {
     std::ofstream out;
 };
 
+namespace {
+
+/// The record's shape at `version`: 2 adds the turn's time a delivery was handed, and 1, which a
+/// log written before it holds, has none.
+std::shared_ptr<const Schema> log_record_schema(std::uint32_t version) {
+    SchemaBuilder b("zen.history.LogRecord", version);
+    // ---- the discriminant, and what only a non-bus record carries ------
+    b.field("log_seq", Kind::Int)
+        .field("origin", Kind::Text)
+        .field("severity", Kind::Text)
+        .field("source", Kind::Text)
+        .field("text", Kind::Text)
+        // ---- the observation, meaningful iff origin == BusObservation ------
+        .field("kind", Kind::Text)
+        .field("held", Kind::Int)
+        .field("seq", Kind::Int)
+        .field("sender", Kind::Int)
+        .field("target", Kind::Int)
+        .field("addressed_role", Kind::Text)
+        .field("authored_role", Kind::Text)
+        .field("shape", Kind::Text)
+        .field("shape_version", Kind::Int)
+        .field("correlation", Kind::Int)
+        .field("dispatch_parent", Kind::Int)
+        .field("handler_elapsed_ns", Kind::Int);
+    if (version >= 2) {
+        b.field("turn", Kind::Bool).field("turn_ms", Kind::Int).field("turn_date_ms", Kind::Int);
+    }
+    b.field("outcome", Kind::Text)
+        .field("refusal", Kind::Text)
+        .field("refusal_detail", Kind::Text)
+        .field("from_last_known_good", Kind::Bool)
+        .field("note", Kind::Text)
+        .field("payload", Kind::Text)
+        .field("payload_bytes", Kind::Int)
+        .field("payload_body", Kind::Bytes);
+    return b.build();
+}
+
+const std::shared_ptr<const Schema>& record_schema_v1() {
+    static const std::shared_ptr<const Schema> schema = log_record_schema(1);
+    return schema;
+}
+
+} // namespace
+
 const std::shared_ptr<const Schema>& Logger::record_schema() {
-    static const std::shared_ptr<const Schema> schema =
-        SchemaBuilder("zen.history.LogRecord", 1)
-            // ---- the discriminant, and what only a non-bus record carries ------
-            .field("log_seq", Kind::Int)
-            .field("origin", Kind::Text)
-            .field("severity", Kind::Text)
-            .field("source", Kind::Text)
-            .field("text", Kind::Text)
-            // ---- the observation, meaningful iff origin == BusObservation ------
-            .field("kind", Kind::Text)
-            .field("held", Kind::Int)
-            .field("seq", Kind::Int)
-            .field("sender", Kind::Int)
-            .field("target", Kind::Int)
-            .field("addressed_role", Kind::Text)
-            .field("authored_role", Kind::Text)
-            .field("shape", Kind::Text)
-            .field("shape_version", Kind::Int)
-            .field("correlation", Kind::Int)
-            .field("dispatch_parent", Kind::Int)
-            .field("handler_elapsed_ns", Kind::Int)
-            .field("outcome", Kind::Text)
-            .field("refusal", Kind::Text)
-            .field("refusal_detail", Kind::Text)
-            .field("from_last_known_good", Kind::Bool)
-            .field("note", Kind::Text)
-            .field("payload", Kind::Text)
-            .field("payload_bytes", Kind::Int)
-            .field("payload_body", Kind::Bytes)
-            .build();
+    static const std::shared_ptr<const Schema> schema = log_record_schema(2);
     return schema;
 }
 
@@ -239,6 +256,9 @@ Value to_value(const LogRecord& r) {
     v.set("correlation", Cell::integer(as_i64(o.correlation)));
     v.set("dispatch_parent", Cell::integer(as_i64(o.dispatch_parent)));
     v.set("handler_elapsed_ns", Cell::integer(as_i64(o.handler_elapsed_ns)));
+    v.set("turn", Cell::boolean(o.turn.has_value()));
+    v.set("turn_ms", Cell::integer(o.turn ? o.turn->ms : 0));
+    v.set("turn_date_ms", Cell::integer(o.turn ? o.turn->date_ms : 0));
     v.set("outcome", Cell::text(name_of(o.outcome)));
     v.set("refusal", Cell::text(name_of(o.refusal)));
     v.set("refusal_detail", Cell::text(o.refusal_detail));
@@ -270,6 +290,10 @@ LogRecord from_value(const Value& v) {
     o.correlation = as_u64(int_at(v, "correlation"));
     o.dispatch_parent = as_u64(int_at(v, "dispatch_parent"));
     o.handler_elapsed_ns = as_u64(int_at(v, "handler_elapsed_ns"));
+    if (const Cell* told = v.get("turn"); told != nullptr && told->is(Kind::Bool) &&
+                                            told->as_bool()) {
+        o.turn = TurnFacts{int_at(v, "turn_ms"), int_at(v, "turn_date_ms")};
+    }
     o.outcome = outcome_from_name(text_at(v, "outcome"));
     o.refusal = refusal_from_name(text_at(v, "refusal"));
     o.refusal_detail = text_at(v, "refusal_detail");
@@ -545,7 +569,9 @@ bool Logger::read(const std::string& path, std::vector<LogRecord>* out, std::str
         // Through the one gate: a log is bytes on a disk anybody can write, so it is admitted
         // rather than believed.
         Unverified u = ::loom::parse(bytes);
-        Admission a = ::loom::admit(u, record_schema());
+        // A record of version 1, from before the turn's time, reads as one that carries none.
+        Admission a = ::loom::admit(u, u.claimed_version() == 1 ? record_schema_v1()
+                                                                 : record_schema());
         if (!a.ok()) {
             if (error != nullptr) {
                 *error = "record refused by the gate: " + a.first_error().message();

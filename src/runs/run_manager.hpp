@@ -17,6 +17,7 @@
 #include "../detail/json.hpp"
 #include "../host/secure_random.hpp"
 
+#include <zen/host/clock.hpp>
 #include <zen/runs/vocabulary.hpp>
 #include <zen/serialize.hpp>
 #include <zen/session/vocabulary.hpp>
@@ -1068,12 +1069,9 @@ private:
                s == "crashed" || s == "interrupted";
     }
 
-    static std::int64_t now_ms() {
-        return static_cast<std::int64_t>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::system_clock::now().time_since_epoch())
-                .count());
-    }
+    /// A record's stamp: the calendar of the host's own clock (zen/host/clock.hpp), never a
+    /// deadline.
+    static std::int64_t now_ms() { return loom::host::MachineClock{}.date_ms(); }
 
     static std::string lower(std::string s) {
         for (char& c : s) {

@@ -299,6 +299,13 @@ int main(int argc, char** argv) {
                 !known.bytes(addressed)) {
                 break;
             }
+            // The turn's time, when the parent appended it: a flag, then both readings.
+            std::uint8_t told = 0;
+            std::uint64_t turn_ms = 0;
+            std::uint64_t turn_date_ms = 0;
+            if (known.u8(told) && told == 1 && !(known.u64(turn_ms) && known.u64(turn_date_ms))) {
+                told = 0;
+            }
             std::string_view bytes = cursor.rest();
             const std::string addressed_role(addressed); // NUL-terminated for the seam
             // Provenance does not cross this pipe: a Deliver frame carries no attestation, so an
@@ -314,7 +321,10 @@ int main(int argc, char** argv) {
                 .correlation = correlation,
                 .attested_sequence = 0,
                 .authored_role = nullptr,
-                .addressed_role = addressed_role.empty() ? nullptr : addressed_role.c_str()};
+                .addressed_role = addressed_role.empty() ? nullptr : addressed_role.c_str(),
+                .turn = told == 1 ? std::uint32_t{ZEN_TURN_KNOWN} : 0u,
+                .turn_ms = told == 1 ? static_cast<std::int64_t>(turn_ms) : 0,
+                .turn_date_ms = told == 1 ? static_cast<std::int64_t>(turn_date_ms) : 0};
             abi->handle(instance, &delivery, reinterpret_cast<const std::uint8_t*>(bytes.data()),
                         bytes.size(), &api);
             (void)emit_snapshot(abi, instance);

@@ -219,7 +219,9 @@ LOOM_WASM_EXPORT(zw_revive) int32_t zw_revive(void* instance, const uint8_t* sta
 // at the offsets the box keeps (src/kernel/wasm_box.cpp), and says their size.
 static_assert(sizeof(void*) == 4 && offsetof(ZenDelivery, attested_sequence) == 32 &&
                   offsetof(ZenDelivery, authored_role) == 40 &&
-                  offsetof(ZenDelivery, addressed_role) == 44 && sizeof(ZenDelivery) == 48,
+                  offsetof(ZenDelivery, addressed_role) == 44 &&
+                  offsetof(ZenDelivery, turn) == 48 && offsetof(ZenDelivery, turn_ms) == 56 &&
+                  offsetof(ZenDelivery, turn_date_ms) == 64 && sizeof(ZenDelivery) == 72,
               "ZenDelivery's wasm32 layout is the one the box writes");
 LOOM_WASM_EXPORT(zw_handle) int32_t zw_handle(void* instance, const ZenDelivery* delivery,
                                               const uint8_t* payload, size_t len) {

@@ -138,6 +138,9 @@ struct BusEvent {
     /// where no handler ran. A duration, never a time of day, and wall time rather than CPU time:
     /// with one dispatching thread, time a handler spends blocked holds up everything else.
     std::uint64_t handler_elapsed_ns = 0;
+    /// The turn's time and date the delivery was dispatched with, when the host's wait began
+    /// its turn (zen/switchboard/turn.hpp); none otherwise.
+    std::optional<TurnFacts> turn{};
 };
 
 using Observer = std::function<void(const BusEvent&)>;
@@ -512,6 +515,11 @@ public:
     /// End the current turn after the delivery in flight — both operations
     /// honour it, and each reports what it actually did.
     void stop() noexcept { stop_requested_ = true; }
+
+    /// THE TURN'S TIME, handed over by the host's wait as it ends (zen/host/reactor.hpp): every
+    /// delivery of the next dispatch call carries these readings, and a call that follows no wait
+    /// carries none. The host's door; a weave reads the facts on its deliveries and sets nothing.
+    void begin_turn(TurnFacts facts) noexcept { turn_.begin(facts); }
 
     // ---- Senses --------------------------------------------------------------
     // A Sense is a participant's deliberate, immutable claim of its latest observation, read
@@ -1571,6 +1579,7 @@ private:
     };
 
     bool in_dispatch_ = false;
+    TurnTime turn_; ///< the turn's time, taken by each dispatch call (zen/switchboard/turn.hpp)
     bool stop_requested_ = false;
     /// The recipient of the delivery being dispatched; invalid when none is live, so nobody may
     /// answer.
@@ -1603,8 +1612,12 @@ private:
     public:
         explicit DispatchGuard(Switchboard& sb) noexcept : sb_(sb), was_(sb.in_dispatch_) {
             sb_.in_dispatch_ = true;
+            sb_.turn_.open();
         }
-        ~DispatchGuard() { sb_.in_dispatch_ = was_; }
+        ~DispatchGuard() {
+            sb_.turn_.close();
+            sb_.in_dispatch_ = was_;
+        }
         DispatchGuard(const DispatchGuard&) = delete;
         DispatchGuard& operator=(const DispatchGuard&) = delete;
 

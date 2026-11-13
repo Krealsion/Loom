@@ -302,9 +302,12 @@ as its runtime:
 - **Abuse-tier for time.** The step bound ends every entry, and between entries
   the module does not run at all; within the bound it may spend its steps on every
   delivery it is given.
-- **Nothing for side channels.** The box withholds the clock, but the host's own
-  delivery rhythm is a clock; timing and speculative-execution channels are not
-  addressed.
+- **Nothing for side channels.** The box withholds the clock, the turn's time and
+  date a delivery carries included, unless its grant gives it time
+  (`Grant::with_time`); but the host's own delivery rhythm is a clock, and timing and
+  speculative-execution channels are not addressed. A contained child is handed the
+  turn's time across the pipe on the same grant
+  ([the turn's time](dynamic-abi.md#the-turns-time)).
 - **Not denial of service through the host.** Host-side decode of the module's
   bytes spends the decode bound
   ([below](#work-the-host-does-on-behalf-of-a-contained-participant)), and queues,

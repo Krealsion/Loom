@@ -706,6 +706,11 @@ ZenStatus do_handle(void* instance, const ZenDelivery* d, const std::uint8_t* pa
         if (addressed_role != nullptr) {
             msg.addressed_role = addressed_role;
         }
+#if ZEN_ABI_VERSION >= 16
+        if (d != nullptr && ZEN_ABI_REACHES(d, ZenDelivery, turn_date_ms) && d->turn == ZEN_TURN_KNOWN) {
+            msg.turn = loom::TurnFacts{d->turn_ms, d->turn_date_ms};
+        }
+#endif
         HostApiBus bus(host);
         s->handle(msg, bus);
         return ZEN_OK;

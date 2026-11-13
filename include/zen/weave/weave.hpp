@@ -75,6 +75,18 @@ public:
     loom::WeaveId reply_to() const { return in_.reply_to; }
     std::uint64_t correlation() const { return in_.correlation; }
     bool dispatch_refused() const noexcept { return in_.provenance.dispatch_refused(); }
+    /// THE TURN'S TIME: the host's steady clock when its wait ended and began the turn this is
+    /// delivered in, for durations and deadlines; none in a turn no wait began, and none for a
+    /// boxed or contained weave whose grant gives it no time. Read it rather than a clock.
+    /// docs/decisions/the-turns-time-on-every-delivery.md
+    std::optional<std::int64_t> turn_ms() const noexcept {
+        return in_.turn ? std::optional<std::int64_t>(in_.turn->ms) : std::nullopt;
+    }
+    /// The calendar at that same moment, milliseconds since 1970-01-01 UTC: for a person and a
+    /// record, never a deadline. Present exactly when `turn_ms()` is.
+    std::optional<std::int64_t> turn_date_ms() const noexcept {
+        return in_.turn ? std::optional<std::int64_t>(in_.turn->date_ms) : std::nullopt;
+    }
     /// Is this Loom's word that an ask this incarnation sent ended with no answer? Check it
     /// before trusting a `zen.AskEnded`: the shape alone is ordinary speech. ANS-08
     bool ask_ended() const noexcept { return in_.provenance.ask_ended(); }

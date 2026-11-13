@@ -28,7 +28,7 @@ extern "C" {
  * version from ZEN_ABI_OLDEST to its own, and refuses one from before ZEN_ABI_OLDEST, or one
  * newer than itself, before calling into it, at load and as a replacement for a live
  * participant, naming both versions. What each version carried: docs/reference/dynamic-abi.md */
-#define ZEN_ABI_VERSION 15u
+#define ZEN_ABI_VERSION 16u
 
 /* The oldest version a host loads: the first whose tables say their size. */
 #define ZEN_ABI_OLDEST 13u
@@ -136,7 +136,18 @@ typedef struct ZenDelivery {
     int64_t attested_sequence;
     const char* authored_role;
     const char* addressed_role;
+    /* Since 16: the turn's time. `turn` is ZEN_TURN_KNOWN when the host's wait began the turn
+     * this is delivered in and this weave may know the time, else 0, and then both readings are
+     * 0 and mean nothing. `turn_ms` is the host's steady clock then, for durations and
+     * deadlines; `turn_date_ms` the calendar at that moment, milliseconds since 1970-01-01 UTC,
+     * for a person and a record. Host-computed facts, as `sender` is: no sender writes them. */
+    uint32_t turn;
+    int64_t turn_ms;
+    int64_t turn_date_ms;
 } ZenDelivery;
+
+/* Since 16: `ZenDelivery::turn` when it carries the turn's time and date. */
+enum { ZEN_TURN_KNOWN = 1u };
 
 /* Host callbacks a Weave uses from inside handle(). The host builds it and says its size, at
  * least the `host_size` the library's descriptor names; a library calls a slot only where that
