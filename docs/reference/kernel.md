@@ -63,6 +63,25 @@ anywhere) is reported correctly at once, including truthfully-unchanged during
 holder's `roles`. It reads the load of version 2, which names one role, as a
 set of one, as the Weave Manager reads `zen.LoadWeave` v1.
 
+## Answers from the control door and the Weave Manager
+
+The control door (`ControlWeave`, `zen/kernel/control.hpp`) answers each operation's asker, the
+stamped sender, through the delivery's answer right: an ask to it ends answered, and a plain send
+hears the reply it always heard, now with Loom's word that it is the answer. A request whose
+`reply_to` names another weave is replied to there in ordinary words, which can attest nothing to
+a weave that did not ask; a request from no one with no `reply_to` gets no reply.
+
+The Weave Manager (`zen/kernel/manager.hpp`) forwards a load, a reload or a list to the door and
+keeps its asker's answer right while the door works (ANS-02), spending it with the door's result,
+so an ask to it ends answered too. A right Loom cannot keep is refused at once, and nothing is
+forwarded. Its relay holds at most `kMaxRelayPending` forwards, inside the answers one respondent
+may keep; the oldest shed past it lets go of its kept answer, and Loom tells its asker `Released`.
+A kept answer ends with the Manager: removed, dead or reloaded, it ends its ask
+`RespondentRemoved`, `RespondentDied` or `RespondentReplaced`
+([ANS-08](../laws/answer-authority-laws.md#ans-08--an-ask-is-told-its-end);
+[bounds](bounds.md#switchboard)). A swap, and the letter's stages, still answer in ordinary
+words ([lifecycle](lifecycle.md#graceful-swap--the-other-ceremony-and-when-to-prefer-it)).
+
 ## Platforms
 
 Reference platform: Linux, including under WSL (`dlopen`). `LOOM_ENABLE_WINDOWS_KERNEL` is an opt-in

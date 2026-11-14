@@ -5,8 +5,9 @@
 #define ZEN_KERNEL_MANAGER_HPP
 
 // The Weave Manager, the lifecycle steward: an ordinary woven Weave that loads, swaps, reloads
-// and lists by sending gated messages to the kernel's control door, and answers its asker
-// with the standard reply shapes.
+// and lists by sending gated messages to the kernel's control door, and answers its asker with the
+// standard reply shapes: a load, a reload or a list through the answer right it keeps while the
+// door works (ANS-02), so an ask to it ends answered; a swap in ordinary words.
 // docs/reference/lifecycle.md#graceful-swap--the-other-ceremony-and-when-to-prefer-it
 //
 // It has no privilege: its reach is `load_capability` (control.hpp), which the host grants at
@@ -65,10 +66,12 @@
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 #include <system_error>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 namespace loom {
@@ -202,6 +205,11 @@ struct StoredLetter {
 inline constexpr std::size_t kMaxSwapsInFlight = 16;
 inline constexpr std::size_t kMaxStoredLetters = 16;
 
+/// Each forward the relay holds may keep its asker's answer, so the relay's bound sits inside what
+/// one respondent may keep: a full relay never finds the right of its next forward refused.
+static_assert(kMaxRelayPending <= Switchboard::kMaxDeferredPerWeave,
+              "every forward the Manager's relay holds can keep its asker's answer");
+
 struct ManagerState {
     RelayState relay;
     std::vector<SwapInFlight> swaps;
@@ -226,15 +234,15 @@ public:
     explicit WeaveManager(WeaveId control) : control_(control) {}
 
     void on(const LoadWeave& c, Mail& mail) {
-        forward(mail, state_.relay, door(), LoadLibrary{c.name, c.path, c.roles, c.creation});
+        forward_owed(mail, LoadLibrary{c.name, c.path, c.roles, c.creation});
     }
 
     void on(const LoadWeaveV2& c, Mail& mail) {
-        forward(mail, state_.relay, door(), LoadLibrary{c.name, c.path, c.roles, {}});
+        forward_owed(mail, LoadLibrary{c.name, c.path, c.roles, {}});
     }
 
     void on(const LoadWeaveV1& c, Mail& mail) {
-        forward(mail, state_.relay, door(), LoadLibrary{c.name, c.path, set_of(c.role), {}});
+        forward_owed(mail, LoadLibrary{c.name, c.path, set_of(c.role), {}});
     }
 
     void on(const SwapWeave& c, Mail& mail) {
@@ -253,10 +261,10 @@ public:
     }
 
     void on(const ReloadWeave& c, Mail& mail) {
-        forward(mail, state_.relay, door(), ReloadLibrary{c.name, c.path});
+        forward_owed(mail, ReloadLibrary{c.name, c.path});
     }
 
-    void on(const ListLoaded&, Mail& mail) { forward(mail, state_.relay, door(), ListLibraries{}); }
+    void on(const ListLoaded&, Mail& mail) { forward_owed(mail, ListLibraries{}); }
 
     /// Stage 2 of the ceremony: the door has told us who holds the role.
     void on(const RoleInfo& info, Mail& mail) {
@@ -320,10 +328,10 @@ public:
             name_heir(s->role, parse_id(a.value));
             retire(s);
         }
-        relay(mail, state_.relay, a);
+        relay_owed(mail, a);
     }
 
-    void on(const Ack& a, Mail& mail) { relay(mail, state_.relay, a); }
+    void on(const Ack& a, Mail& mail) { relay_owed(mail, a); }
 
     void on(const Refused& a, Mail& mail) {
         // An incumbent may accept PrepareShutdown and still decline to write: the swap goes on
@@ -341,7 +349,7 @@ public:
             drop_letter(s->role);
             retire(s);
         }
-        relay(mail, state_.relay, a);
+        relay_owed(mail, a);
     }
 
     /// The heir's claim, honored only from the weave recorded as the role's successor, once,
@@ -383,19 +391,95 @@ private:
         return mail.reply_to().valid() ? mail.reply_to() : mail.sender();
     }
 
+    /// FORWARD A LOAD, A RELOAD OR A LIST, KEEPING THE ASKER'S ANSWER. An asker answered where it
+    /// asked has its answer right kept (ANS-02) and spent with the door's relayed result, so an
+    /// ask ends answered; an asker that named another weave by `reply_to` hears there in ordinary
+    /// words, as before. A right Loom cannot keep is refused at once, and nothing is forwarded.
+    template <class Req>
+    void forward_owed(Mail& mail, const Req& req) {
+        const WeaveId asker = asker_of(mail);
+        if (!asker.valid()) {
+            return; // a command with no asker forwards nothing
+        }
+        make_room(mail); // first, so the oldest's kept answer is let go before this one is kept
+        DeferredAnswer due;
+        if (asker == mail.sender()) {
+            due = mail.defer_answer();
+            if (!due.valid()) {
+                (void)mail.answer(Refused{"this Loom keeps as many answers as it can; nothing "
+                                          "was forwarded"});
+                return;
+            }
+        }
+        const std::int64_t seq = forward_to_door(mail, req, asker, mail.correlation());
+        if (due.valid()) {
+            owed_.emplace(seq, std::move(due));
+        }
+    }
+
+    /// Every forward to the door, the swap's included: when the relay is full it sheds its
+    /// oldest, and the answer kept for that one is released, which Loom tells its asker.
+    template <class Req>
+    std::int64_t forward_to_door(Mail& mail, const Req& req, WeaveId asker, std::uint64_t corr) {
+        make_room(mail);
+        return forward_for(mail, state_.relay, door(), req, asker, corr);
+    }
+
+    /// A full relay sheds its oldest forward here, letting go of the answer kept for it.
+    void make_room(Mail& mail) {
+        auto& pending = state_.relay.pending;
+        if (pending.size() >= kMaxRelayPending) {
+            release_owed(mail, pending.front().seq);
+            pending.erase(pending.begin());
+        }
+    }
+
+    /// The door's result for one forward: to its asker through the kept right, or in ordinary
+    /// words when none was kept. Only the door's own word for a forward still open counts, by
+    /// correlation and stamped sender, so a forged, stale or unsolicited reply is dropped.
+    template <class Answer>
+    void relay_owed(Mail& mail, const Answer& a) {
+        auto& pending = state_.relay.pending;
+        for (auto it = pending.begin(); it != pending.end(); ++it) {
+            if (static_cast<std::uint64_t>(it->seq) != mail.correlation() ||
+                static_cast<std::uint64_t>(it->target) != mail.sender().value) {
+                continue;
+            }
+            const auto owed = owed_.find(it->seq);
+            if (owed == owed_.end()) {
+                relay(mail, state_.relay, a);
+                return;
+            }
+            const DeferredAnswer due = std::move(owed->second);
+            owed_.erase(owed);
+            pending.erase(it);
+            (void)answer_deferred(due, mail, a);
+            return;
+        }
+    }
+
+    /// Let go of the answer kept for forward `seq`, if one was.
+    void release_owed(Mail& mail, std::int64_t seq) {
+        const auto owed = owed_.find(seq);
+        if (owed != owed_.end()) {
+            release_deferred(owed->second, mail);
+            owed_.erase(owed);
+        }
+    }
+
     /// The hard swap: unload the role's holder, load the successor into it, relay the load's
     /// answer to the asker.
     void hard_swap(Mail& mail, const std::string& role, const std::string& name,
                    const std::string& path, WeaveId asker, std::uint64_t corr) {
         mail.send(control_, UnloadRole{role}, /*correlation=*/0);
-        (void)forward_for(mail, state_.relay, door(), LoadLibrary{name, path, set_of(role), {}}, asker,
+        (void)forward_to_door(mail, LoadLibrary{name, path, set_of(role), {}}, asker,
                           corr);
     }
 
     /// The same two messages, from a recorded swap.
     std::int64_t begin_replacement(Mail& mail, const SwapInFlight& s) {
         mail.send(control_, UnloadRole{s.role}, /*correlation=*/0);
-        return forward_for(mail, state_.relay, door(), LoadLibrary{s.name, s.path, set_of(s.role), {}},
+        return forward_to_door(mail, LoadLibrary{s.name, s.path, set_of(s.role), {}},
                            WeaveId{static_cast<std::uint64_t>(s.asker)},
                            static_cast<std::uint64_t>(s.corr));
     }
@@ -473,6 +557,9 @@ private:
     }
 
     WeaveId control_; ///< the kernel's control door — host-supplied wiring, not state
+    /// The answers kept for forwards still open, by the forward's sequence: a right lives in this
+    /// incarnation and is never state, since Loom ends it when the incarnation ends.
+    std::map<std::int64_t, DeferredAnswer> owed_;
 };
 
 /// The grant a Weave Manager needs, assembled by the host: the kernel door, target-scoped, and

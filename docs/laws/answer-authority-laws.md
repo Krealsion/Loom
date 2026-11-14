@@ -185,4 +185,5 @@ DOES NOT MEAN
 PROVEN BY — the ask door and `tell_ask_ended` (`Switchboard`), the kept answers
 (`zen/switchboard/asks.hpp`); suites `ask` (each ending, in process), `ask_loaded`
 (loaded, and an image built against ABI v14), `box` (its twins), `isolation`
-(the pipe's refusal), `terminal` and `console` (the helpers' ENDED).
+(the pipe's refusal), `terminal` and `console` (the helpers' ENDED), `manager`
+(the control door's and the Weave Manager's answers, and their endings).

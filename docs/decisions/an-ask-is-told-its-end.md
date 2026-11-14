@@ -62,8 +62,10 @@ result in ordinary later speech, which nothing follows.
   handler: safe to send again), `delivered`, `deferred`, `answered`.
 - A respondent that answers in ordinary words now ends an ask `Unanswered` when its handler
   returns. So an asker asks only a respondent that answers through Loom's answer right. Loom's own
-  control door and Weave Manager still answer in ordinary words, and the console's conversations
-  with them stay plain sends (`ConsoleTracking::Tracked`); `Asked` is the ask.
+  control door answers that way, and the Weave Manager keeps the right of a load, a reload or a
+  list while the door works ([kernel](../reference/kernel.md#answers-from-the-control-door-and-the-weave-manager)),
+  so the supplied host asks them (`ConsoleTracking::Asked`); a swap still answers in ordinary
+  words.
 - A retirement's end is not yet a place (it ends at an admission's switch, where a sealed weave's
   answer cannot leave), so an answer the retired incumbent owes ends `RespondentRetired` there.
 - The bus's census holds: the kept answers and the ask's record are a unit the bus consults
