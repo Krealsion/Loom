@@ -76,6 +76,12 @@ public:
     std::size_t open() const noexcept { return open_.size(); }
     std::uint64_t epoch() const noexcept { return epoch_; }
 
+    /// What the host's one wait waits on for this link: its session's socket and the signal its
+    /// sends raise (`BridgeClient::wait_set`), so a far frame is read, and a send leaves, in the
+    /// turn the wait wakes. Nothing while it holds no session. Asked anew before every wait, since a
+    /// reconnect replaces the session.
+    WaitSet wait_set() { return client_ ? client_->wait_set() : WaitSet{}; }
+
     /// OPEN THE SOCKET AND SAY HELLO -- A NEW SESSION, A NEW EPOCH. Bounded: it waits at most
     /// `timeout_ms` for the far host's Welcome or Denied. A failure is a state and a sentence,
     /// never an exception -- the host prints it and keeps running. Every crossing still open on

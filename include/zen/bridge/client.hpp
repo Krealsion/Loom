@@ -16,8 +16,12 @@
 // So this is a socket, a handshake and a frame reader, and nothing else: no ladder, no buffer,
 // no window, no registry. Everything it hands out is a value the caller owns; nothing blocks
 // past `connect`'s bounded handshake.
+//
+// A host that rests between turns waits on the client through `wait_set()`, and polls it when
+// that wait says it is ready: a far frame arrived, a send was queued, or the socket has room again.
 
 #include <zen/bridge/channel.hpp>
+#include <zen/host/wait_set.hpp>
 
 #include <cstdint>
 #include <memory>
@@ -67,6 +71,8 @@ struct BridgeEvent {
     std::vector<WeaveEntry> weaves;
 };
 
+class BridgeWake; // what ends a host's wait when a send is queued; src/bridge/wake.hpp
+
 class BridgeClient {
 public:
     /// Take ownership of a connected socket (from bridge_connect_*). Nothing is said until
@@ -97,7 +103,8 @@ public:
     /// `settle` asks the far host to say `Settled` under `correlation`, once, when everything the
     /// send set in motion on its bus has been dispatched (or `SendRefused` when it cannot follow
     /// one more). QUEUED, NOT WRITTEN: the bytes leave on the next `poll` or `flush`, which is
-    /// where a caller that expects an answer must go anyway.
+    /// where a caller that expects an answer must go anyway. A host waiting on `wait_set()` is
+    /// woken by the queuing, so they leave at the poll that wake brings.
     void send(std::uint64_t target, std::uint64_t correlation, std::string_view payload,
               bool settle = false);
     /// Queue a Send to whoever holds `role` on the far bus at delivery.
@@ -116,11 +123,24 @@ public:
     /// Flush only.
     void flush();
 
+    /// WHAT A HOST'S ONE WAIT WAITS ON FOR THIS CLIENT (zen/host/reactor.hpp): its socket, and a
+    /// signal it raises when a send, a description or a listing is queued, so what was queued
+    /// leaves at the `poll` the wait wakes. Ready means `poll()` has work: a frame to read, bytes to
+    /// write, or the end to say. On Windows one event the socket is selected on (`WSAEventSelect`:
+    /// read, room to write, close) and the client sets when it queues; on POSIX a pipe's read end
+    /// beside the socket, and the socket as writable while its output waits on a full buffer. The
+    /// first call turns this on; a client no host waits on is polled as it always was. Asked anew
+    /// after each `poll()`. Empty once the end has been said: nothing more will come.
+    host::WaitSet wait_set();
+
 private:
+    /// Something was queued: a host waiting on this client wakes to write it.
+    void queued() noexcept;
     void send_frame(std::uint8_t kind, std::uint8_t flags, std::uint64_t target,
                     std::string_view role, std::uint64_t correlation, std::string_view payload);
     static bool decode(const BridgeIncoming& f, BridgeEvent& out);
 
+    std::unique_ptr<BridgeWake> wake_; ///< declared first, so it outlives the socket selected on it
     std::unique_ptr<BridgeChannel> ch_;
     bool admitted_ = false;
     bool denied_ = false;

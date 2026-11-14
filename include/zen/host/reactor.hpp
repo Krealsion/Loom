@@ -41,9 +41,10 @@ namespace loom::host {
 
 class LineInput;
 
-/// The most handles one wait holds, its sources' and a watched console's together: a Windows wait
-/// takes 64, one of them the thread's message queue and one the deadline's timer. POSIX keeps the
-/// same bound. A claim that would pass it is not held, and its source polls.
+/// The most handles one wait holds, its sources', a watched console's and what the host serves
+/// itself together, each handle counted once: a Windows wait takes 64, one of them the thread's
+/// message queue and one the deadline's timer. POSIX keeps the same bound. A claim that would pass
+/// it is not held, and its source polls.
 inline constexpr std::size_t kMaxWaitedHandles = 62;
 
 class Reactor {
@@ -84,6 +85,8 @@ public:
         bool own = false;         ///< what the host serves itself (`watch_own`) is ready
         bool deadline = false;    ///< the host's own deadline came
         std::int64_t now_ms = 0;  ///< the clock when the wait ended
+        std::int64_t date_ms = 0; ///< its date then; both are handed to the bus as the next
+                                  ///< turn's time (Switchboard::begin_turn)
     };
 
     /// AFTER A TURN: read every trusted role's claim, tell each whether the wait holds it, wait
@@ -110,9 +113,9 @@ public:
         bool claimed = false;       ///< its current holder has claimed a `WaitSet`
         bool held = false;          ///< the wait holds that claim
         std::uint64_t revision = 0; ///< the claim's revision
-        std::size_t handles = 0;    ///< how many handles it names, readable and writable
+        std::size_t handles = 0;    ///< how many handles it names, each counted once
         std::optional<std::int64_t> until_ms; ///< when it is due, until it is told so
-        std::uint32_t version = 0;  ///< the version of `WaitSet` it claimed
+        std::uint32_t version = 0;  ///< the `WaitSet` version it claimed; another is not held
         std::uint64_t wakes = 0;    ///< how many times it was told it is ready
         std::string why;            ///< why the wait does not hold it, when it does not
     };

@@ -95,6 +95,7 @@ void fill_from_event(HistoryRecord& rec, const BusEvent& e) {
     rec.correlation = e.correlation;
     rec.dispatch_parent = e.dispatch_parent;
     rec.handler_elapsed_ns = e.handler_elapsed_ns;
+    rec.turn = e.turn;
     rec.from_last_known_good = e.from_last_known_good;
     switch (e.kind) {
     case EventKind::Delivered:

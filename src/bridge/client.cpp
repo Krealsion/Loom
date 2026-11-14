@@ -6,14 +6,19 @@
 
 #include <zen/bridge/client.hpp>
 
+#include "wake.hpp"
+
 #include <chrono>
 #include <utility>
 
 namespace loom {
 
-BridgeClient::BridgeClient(socket_t sock) : ch_(std::make_unique<BridgeChannel>(sock)) {}
+BridgeClient::BridgeClient(socket_t sock)
+    : wake_(std::make_unique<BridgeWake>()), ch_(std::make_unique<BridgeChannel>(sock)) {}
 
 BridgeClient::~BridgeClient() = default;
+
+void BridgeClient::queued() noexcept { wake_->raise(); }
 
 bool BridgeClient::hello(std::string_view claimed_name, std::string_view credential) {
     if (!ch_ || ch_->done()) {
@@ -24,6 +29,7 @@ bool BridgeClient::hello(std::string_view claimed_name, std::string_view credent
     put_bytes(body, claimed_name);
     put_bytes(body, credential);
     ch_->queue(BridgeOp::Hello, body);
+    queued();
     ch_->flush();
     return !ch_->done();
 }
@@ -69,6 +75,7 @@ void BridgeClient::send_frame(std::uint8_t kind, std::uint8_t flags, std::uint64
     put_bytes(frame, role);
     frame.append(payload);
     ch_->queue(BridgeOp::Send, frame);
+    queued();
 }
 
 void BridgeClient::send(std::uint64_t target, std::uint64_t correlation, std::string_view payload,
@@ -93,11 +100,13 @@ void BridgeClient::describe(std::string_view name, std::uint32_t version) {
     put_bytes(body, name);
     put_u32(body, version);
     ch_->queue(BridgeOp::Describe, body);
+    queued();
 }
 
 void BridgeClient::list_weaves() {
     if (ch_ && !ch_->done()) {
         ch_->queue(BridgeOp::ListWeaves, {});
+        queued();
     }
 }
 
@@ -241,6 +250,7 @@ void BridgeClient::poll(std::vector<BridgeEvent>& out) {
         out.push_back(std::move(e));
     }
     held_.clear();
+    wake_->clear(); // what is owed is paid below; the network or a later queuing sets it again
     if (!ch_) {
         return;
     }
@@ -268,6 +278,43 @@ void BridgeClient::poll(std::vector<BridgeEvent>& out) {
         gone.kind = BridgeEvent::Kind::Disconnected;
         out.push_back(std::move(gone));
     }
+}
+
+host::WaitSet BridgeClient::wait_set() {
+    host::WaitSet set;
+    if (!ch_ || (ch_->done() && said_disconnected_)) {
+        return set; // the end is said: nothing more will come
+    }
+    const bool fresh = !wake_->ok();
+    if (!wake_->start()) {
+        // No signal: the socket alone where the platform can name it, and what is queued leaves
+        // when something else wakes the host.
+#ifndef _WIN32
+        if (!ch_->done()) {
+            set.handles.push_back(static_cast<std::int64_t>(ch_->fd()));
+        }
+#endif
+        return set;
+    }
+    if (fresh) {
+        // Waiting starts now: the socket is selected, and whatever is owed already is said, since
+        // nothing raised the signal before it existed.
+        wake_->select(ch_->fd());
+        wake_->raise();
+    }
+    if (ch_->done() || !held_.empty()) {
+        wake_->raise(); // an end to say, or frames the handshake read and kept for `poll`
+    }
+    set.handles.push_back(wake_->handle());
+#ifndef _WIN32
+    if (!ch_->done()) {
+        set.handles.push_back(static_cast<std::int64_t>(ch_->fd()));
+        if (ch_->backlogged()) {
+            set.writable.push_back(static_cast<std::int64_t>(ch_->fd()));
+        }
+    }
+#endif
+    return set;
 }
 
 } // namespace loom

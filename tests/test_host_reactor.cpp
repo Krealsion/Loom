@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Joshua DeMoss
 
-// THE HOST'S ONE WAIT (zen/host/reactor.hpp), over real handles -- an event on Windows, a pipe on
-// POSIX, a crossing's sockets: claims held, woken, refused or let go; the deadline kept; a source's
-// time kept on a clock that moves only when told, and once on the machine's; the first version of
-// the claim answered in kind; and what the host serves itself. Times on the machine's clock are
-// bounds far from either answer, so a busy machine moves no verdict.
+// THE HOST'S ONE WAIT (zen/host/reactor.hpp), over real handles -- an event, a pipe, a
+// crossing's sockets: claims held, woken, refused or let go; the deadline kept; a source's
+// time, on a clock that moves only when told and on the machine's; a claim of another version
+// told so, on the tap; what the host serves itself; what a server owes; a crossing's client,
+// a far frame and a queued send each ending the wait. Machine-clock times are bounds far from
+// either answer, so a busy machine moves no verdict.
 
 #include <doctest.h>
 
@@ -13,6 +14,7 @@
 #include <zen/bridge/server.hpp>
 #include <zen/host/reactor.hpp>
 #include <zen/host/wait_set.hpp>
+#include <zen/serialize.hpp>
 #include <zen/switchboard/switchboard.hpp>
 #include <zen/weave.hpp>
 
@@ -189,22 +191,68 @@ WaitSet until(std::int64_t at) {
     return s;
 }
 
+/// The claim and the answer as a source built before times knew them: their first versions, which
+/// name no time. The wait reads neither.
+struct OldWaitSet {
+    std::vector<std::int64_t> handles;
+    std::vector<std::int64_t> writable;
+    bool messages = false;
+
+    using ZenSelf = OldWaitSet;
+    static constexpr const char* zen_name = "loom.host.WaitSet";
+    static constexpr std::uint32_t zen_version = 1;
+    static auto zen_fields() {
+        return std::make_tuple(ZEN_FIELD(handles), ZEN_FIELD(writable), ZEN_FIELD(messages));
+    }
+};
+struct OldWaited {
+    std::int64_t revision = 0;
+    bool held = false;
+    bool ready = false;
+    std::string why;
+
+    using ZenSelf = OldWaited;
+    static constexpr const char* zen_name = "loom.host.Waited";
+    static constexpr std::uint32_t zen_version = 1;
+    static auto zen_fields() {
+        return std::make_tuple(ZEN_FIELD(revision), ZEN_FIELD(held), ZEN_FIELD(ready),
+                               ZEN_FIELD(why));
+    }
+};
+
 /// A SOURCE BUILT BEFORE TIMES: it claims the first version of `WaitSet` and accepts the first
-/// version of `Waited`.
-class SourceV1 final
-    : public WeaveBase<SourceV1, SourceState, Accept<ClaimYourWait, loom::host::WaitedV1>, Emit<>,
-                       Claims<loom::host::WaitSetV1>> {
+/// version of `Waited` alone.
+class OldSource final
+    : public WeaveBase<OldSource, SourceState, Accept<ClaimYourWait, OldWaited>, Emit<>,
+                       Claims<OldWaitSet>> {
 public:
     void on(const ClaimYourWait&, Mail& mail) { (void)mail.as_role(role).claim(set); }
-    void on(const loom::host::WaitedV1& w, Mail& mail) {
-        if (!mail.sender().valid()) {
-            heard.push_back(w);
-        }
-    }
+    void on(const OldWaited& w, Mail&) { heard.push_back(w); }
 
     std::string role;
-    loom::host::WaitSetV1 set;
-    std::vector<loom::host::WaitedV1> heard;
+    OldWaitSet set;
+    std::vector<OldWaited> heard;
+};
+
+/// The first version's claim from a source that accepts today's answer.
+class OldClaimSource final
+    : public WeaveBase<OldClaimSource, SourceState, Accept<ClaimYourWait, Waited>, Emit<>,
+                       Claims<OldWaitSet>> {
+public:
+    void on(const ClaimYourWait&, Mail& mail) { (void)mail.as_role(role).claim(set); }
+    void on(const Waited& w, Mail&) { heard.push_back(w); }
+
+    std::string role;
+    OldWaitSet set;
+    std::vector<Waited> heard;
+};
+
+/// A FAR PARTICIPANT that counts what reaches it.
+class Catcher final : public WeaveBase<Catcher, SourceState, Accept<Waited>, Emit<>> {
+public:
+    void on(const Waited&, Mail&) { ++*caught; }
+
+    std::atomic<int>* caught = nullptr;
 };
 
 using Clock = std::chrono::steady_clock;
@@ -354,7 +402,12 @@ TEST_CASE("a handle that closes is held no longer and stalls nothing") {
 TEST_CASE("the wait holds what fits in trust order, and tells the source that does not fit why") {
     Switchboard bus;
     Signal sig;
-    std::vector<std::int64_t> many(loom::host::kMaxWaitedHandles, sig.handle());
+    std::vector<std::unique_ptr<Signal>> signals; // as many handles as the wait holds, each its own
+    std::vector<std::int64_t> many;
+    for (std::size_t i = 0; i < loom::host::kMaxWaitedHandles; ++i) {
+        signals.push_back(std::make_unique<Signal>());
+        many.push_back(signals.back()->handle());
+    }
     Source* big = mount(bus, "test.big", [&many] { return of(many); });
     Source* late = mount(bus, "test.late", [&sig] { return of({sig.handle()}); });
     Reactor wait(bus);
@@ -366,6 +419,23 @@ TEST_CASE("the wait holds what fits in trust order, and tells the source that do
     REQUIRE_FALSE(late->heard.empty());
     CHECK_FALSE(late->held());
     CHECK(late->heard.back().why.find("the wait holds") != std::string::npos);
+}
+
+TEST_CASE("a handle named more than once, or for reading and for room to write, takes one place in "
+          "the wait") {
+    Switchboard bus;
+    Signal sig;
+    Source* src = mount(bus, "test.repeats", [&sig] {
+        WaitSet s = of(std::vector<std::int64_t>(loom::host::kMaxWaitedHandles + 1, sig.handle()));
+        s.writable = {sig.handle()};
+        return s;
+    });
+    Reactor wait(bus);
+    wait.trust("test.repeats");
+    (void)turn(bus, wait, 0);
+    (void)bus.pump_pending();
+    CHECK(src->held());
+    CHECK(wait.sources().front().handles == 1);
 }
 
 TEST_CASE("a claim that names nothing is held: there is nothing to poll for, and the wait lasts") {
@@ -498,6 +568,121 @@ TEST_CASE("a crossing is waited on: a connection, its Hello and an answer queued
         }
     }
     CHECK(delivered);
+}
+
+TEST_CASE("a server owes what a turn handed a session until the service that writes it") {
+    Switchboard bus;
+    std::string err;
+    REQUIRE(bridge_net_init(&err));
+    const socket_t listener = bridge_listen_tcp(0, &err);
+    REQUIRE(listener != kInvalidSocket);
+    BridgeServer server(bus, listener);
+    BridgeClient client(bridge_connect_tcp("127.0.0.1", bridge_socket_port(listener), &err));
+    REQUIRE(client.hello("guest", ""));
+    const Clock::time_point began = Clock::now();
+    while (!client.admitted() && ms_since(began) < 10000) {
+        server.step();
+        std::vector<BridgeEvent> got;
+        client.poll(got);
+    }
+    REQUIRE(client.admitted());
+    server.step();
+    CHECK_FALSE(server.owes());
+
+    Waited w;
+    w.why = "an answer";
+    bus.send(WeaveId{client.session()}, Message(to_value(w)));
+    (void)bus.pump_pending(); // the session's proxy takes it: queued, not yet written
+    CHECK(server.owes());
+    server.service(); // written
+    CHECK_FALSE(server.owes());
+}
+
+TEST_CASE("a crossing's client is waited on: a far frame and a send queued in a turn each end the "
+          "wait at once, the send leaving at the poll that wake brings, and an idle client lets it "
+          "last") {
+    // THE FAR HOST, on a thread of its own: a server over a bus of its own and a catcher there.
+    std::string err;
+    REQUIRE(bridge_net_init(&err));
+    const socket_t listener = bridge_listen_tcp(0, &err);
+    REQUIRE(listener != kInvalidSocket);
+    const std::uint16_t port = bridge_socket_port(listener);
+    Switchboard far_bus;
+    BridgeServer server(far_bus, listener);
+    std::atomic<int> caught{0};
+    auto catcher = std::make_unique<Catcher>();
+    catcher->caught = &caught;
+    (void)far_bus.register_weave(std::move(catcher), Grant{}, "test.catcher");
+    std::atomic<bool> stop{false};
+    std::atomic<std::uint64_t> say_to{0}; // a session the far host speaks to once, when set
+    std::thread far_host([&] {
+        while (!stop) {
+            if (const std::uint64_t session = say_to.exchange(0); session != 0) {
+                Waited w;
+                w.why = "a far word";
+                far_bus.send(WeaveId{session}, Message(to_value(w)));
+            }
+            server.wait_and_step(5);
+        }
+    });
+
+    // THIS HOST: a client, admitted, and a wait that holds it as what the host serves itself.
+    Switchboard bus;
+    BridgeClient client(bridge_connect_tcp("127.0.0.1", port, &err));
+    REQUIRE(client.hello("near", ""));
+    REQUIRE(client.await_admission(10000));
+    Reactor wait(bus);
+    wait.watch_own([&client] { return client.wait_set(); });
+    std::vector<BridgeEvent> got;
+    const auto rest = [&](std::int64_t ms, Reactor::Woke* woke) {
+        const Clock::time_point t = Clock::now();
+        *woke = wait.after_turn(ms);
+        if (woke->own) {
+            client.poll(got); // the host's turn: read what came, write what waits
+        }
+        return ms_since(t);
+    };
+    Reactor::Woke woke;
+    // Asking first turns waiting on, and says once what was owed: the frames the handshake kept.
+    for (int i = 0; i < 4; ++i) {
+        (void)rest(0, &woke);
+    }
+    got.clear();
+    CHECK(rest(60, &woke) >= 40); // idle and connected: the wait lasts
+    CHECK(woke.deadline);
+    CHECK_FALSE(woke.own);
+
+    // A far frame: the wait ends when it arrives, and the poll that wake brings reads it.
+    say_to = client.session();
+    CHECK(rest(5000, &woke) < 2500);
+    CHECK(woke.own);
+    bool delivered = false;
+    for (int i = 0; i < 4 && !delivered; ++i) {
+        for (const BridgeEvent& e : got) {
+            delivered = delivered || e.kind == BridgeEvent::Kind::Delivered;
+        }
+        if (!delivered) {
+            (void)rest(5000, &woke); // a frame read in parts ends the wait again for its rest
+        }
+    }
+    CHECK(delivered);
+    got.clear();
+
+    // A send queued in a turn: the wait ends at once, and the poll that wake brings writes it.
+    // No other poll follows, so the far host receiving it is that poll's doing.
+    Waited sent;
+    sent.why = "a near word";
+    client.send_to_role("test.catcher", 7, loom::serialize(to_value(sent)));
+    CHECK(rest(5000, &woke) < 2500);
+    CHECK(woke.own);
+    const Clock::time_point c = Clock::now();
+    while (caught == 0 && ms_since(c) < 5000) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    CHECK(caught == 1);
+
+    stop = true;
+    far_host.join();
 }
 
 TEST_CASE("a source due at a time is woken then and told the time, and nothing is queued for it "
@@ -685,11 +870,19 @@ TEST_CASE("on a clock that moves only when told, a ready source ends the look an
     CHECK(clock.now_ms() == 1000);
 }
 
-TEST_CASE("a source that claims the first version is held and answered in the first version") {
+TEST_CASE("a source that claims only the first version is not held, never woken, and the wait's "
+          "word to it is refused on the tap") {
     Switchboard bus;
+    std::vector<BusEvent> refused;
+    (void)bus.add_observer([&refused](const BusEvent& e) {
+        if (e.kind == EventKind::Refused && e.schema_name == Waited::zen_name) {
+            refused.push_back(e);
+        }
+    });
     Signal sig;
-    auto owned = std::make_unique<SourceV1>();
-    SourceV1* src = owned.get();
+    sig.set(); // ready from the start: a wait holding it would end at once
+    auto owned = std::make_unique<OldSource>();
+    OldSource* src = owned.get();
     src->role = "test.old";
     src->set.handles = {sig.handle()};
     const WeaveId id = bus.register_weave(std::move(owned), Grant{}, "test.old");
@@ -697,18 +890,54 @@ TEST_CASE("a source that claims the first version is held and answered in the fi
     bus.send(id, Message(to_value(ClaimYourWait{})));
     Reactor wait(bus);
     wait.trust("test.old");
+    Reactor::Woke woke;
+    (void)turn(bus, wait, 0, &woke);
+    CHECK(woke.roles == 0);
+    (void)bus.pump_pending(); // the wait's word reaches the source's door, which refuses it
+    const Reactor::Source s = wait.sources().front();
+    CHECK(s.claimed);
+    CHECK_FALSE(s.held);
+    CHECK(s.version == OldWaitSet::zen_version);
+    CHECK(s.why.find("version 1") != std::string::npos);
+    REQUIRE(refused.size() == 1);
+    CHECK(refused.front().schema_version == Waited::zen_version);
+    CHECK(refused.front().refusal.reason == RefusalReason::NotAccepted);
+    CHECK(refused.front().target == id);
+    CHECK(src->heard.empty());
+
+    // Not held, so its ready handle ends no wait, and it is told once, not at every turn.
+    const std::int64_t took = turn(bus, wait, 60, &woke);
+    (void)bus.pump_pending();
+    CHECK(woke.deadline);
+    CHECK(woke.roles == 0);
+    CHECK(took >= 40);
+    CHECK(refused.size() == 1);
+}
+
+TEST_CASE("a source that claims the first version and accepts today's answer is told why it is "
+          "not held") {
+    Switchboard bus;
+    Signal sig;
+    auto owned = std::make_unique<OldClaimSource>();
+    OldClaimSource* src = owned.get();
+    src->role = "test.half-old";
+    src->set.handles = {sig.handle()};
+    const WeaveId id = bus.register_weave(std::move(owned), Grant{}, "test.half-old");
+    src->zen_set_self(id);
+    bus.send(id, Message(to_value(ClaimYourWait{})));
+    Reactor wait(bus);
+    wait.trust("test.half-old");
     (void)turn(bus, wait, 0);
     (void)bus.pump_pending();
-    REQUIRE_FALSE(src->heard.empty());
-    CHECK(src->heard.back().held);
-    CHECK(wait.sources().front().version == loom::host::WaitSetV1::zen_version);
+    REQUIRE(src->heard.size() == 1);
+    CHECK_FALSE(src->heard.front().held);
+    CHECK(src->heard.front().why.find("version 1") != std::string::npos);
     sig.set();
     Reactor::Woke woke;
-    (void)turn(bus, wait, 5000, &woke);
-    CHECK(woke.roles == 1);
+    (void)turn(bus, wait, 60, &woke);
     (void)bus.pump_pending();
-    CHECK(src->heard.back().ready);
-    CHECK(src->heard.size() == 2); // every answer reached it, in the version it accepts
+    CHECK(woke.roles == 0);
+    CHECK(src->heard.size() == 1);
 }
 
 TEST_CASE("what the host serves itself ends the wait when ready, and a handle the OS refuses is "

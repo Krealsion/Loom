@@ -610,7 +610,11 @@ not trust cannot put a handle in it. It tells each role's holder a `loom.host.Wa
 wait first holds its claim, when it stops, and each time what the claim names is ready. Only the
 host sends it, so a source reads one from any other sender as nothing, and until it is told it
 is held a source keeps polling as it would with no host waiting. A host that never builds a
-`Reactor` serves its sources exactly as before.
+`Reactor` serves its sources exactly as before. The wait reads the version of `WaitSet` the
+header declares and no other, and answers in its `Waited`: a holder whose claim is of another
+version is not held, and is told why in that `Waited`, once; a source that does not accept it
+refuses it at its door (`NotAccepted`), and the tap shows that refusal, so no such source waits
+unwoken in silence.
 
 **A source takes each wake by claiming anew**, unchanged or not. A claim the wait finds ready
 again before that is a source that did not take what woke it, and the wait holds it no longer
@@ -619,8 +623,9 @@ why and polls, and the thread never spins on it. The wait ends at the deadline t
 whatever its sources do, so nothing stalls it either.
 
 **What it holds is bounded**: at most
-<!-- value kMaxWaitedHandles -->62<!-- /value --> handles in one wait, sources and console together
-(a Windows wait takes 64, one the message queue and one the deadline's timer). Roles are held
+<!-- value kMaxWaitedHandles -->62<!-- /value --> handles in one wait, sources, console and what
+the host serves itself together, each handle counted once (a Windows wait takes 64, one the
+message queue and one the deadline's timer). Roles are held
 in the order the host trusted them; a claim that would pass the bound is not held, and its source
 is told why ([bounds](../reference/bounds.md#a-hosts-one-wait)).
 
@@ -634,9 +639,13 @@ thread sets once a line is whole (Windows), or standard input (POSIX); that thre
 and does nothing else, and the bus is only ever touched by the thread that turns it. A
 `BridgeServer`'s is its listener, its connections, and a signal it raises when a turn handed it
 something to send, so an answer leaves when the wait wakes rather than at the next poll
-([bridge](../reference/bridge.md#a-server-a-host-waits-on)). A `BridgeClient`'s socket, a link
-to another host, is not one: while a link is mounted the supplied host's wait ends every few
-milliseconds to read it.
+([bridge](../reference/bridge.md#a-server-a-host-waits-on)). A `BridgeClient`'s, a link to
+another host, is its socket and a signal it raises when a send is queued, so a far host's frame
+is read in the turn it arrives and a send leaves in the turn it is made
+([bridge](../reference/bridge.md#a-client-a-host-waits-on)). The supplied host waits on its door
+and every link it mounts as what it serves itself, and at most
+<!-- value kMaxLinks -->8<!-- /value --> links, so all of them always fit beside a full door; a
+boot plan's link row past that is not mounted, and the boot says so.
 
 ### A source that is due at a time
 
@@ -657,7 +666,14 @@ puts a handle there; a weave that wants time asks such a source by message.
 suite gives a `loom::host::ManualClock`, which moves only when told: the wait then only looks at
 its handles, and when nothing is ready it moves the clock to its soonest deadline and wakes what is
 due there. A case runs its host's real loop and asks for a time, and every timer due by then
-fires, in order, with no wait counted as time:
+fires, in order, with no wait counted as time. A clock has a date beside it, `date_ms()`, the
+calendar for a person and a record, never a deadline: the machine's, or the one a
+`ManualClock(start, date)` is given, which moves with its readings. When the wait ends it reads
+both and hands them to the bus, and every delivery of the turn it begins carries them
+(`mail.turn_ms()`, `mail.turn_date_ms()`; [messaging](../reference/messaging.md#the-turns-time-on-a-delivery)),
+so a handler acts on the time its turn was handed and reads no clock of its own. The supplied
+host's own dates, a session's start and the run manager's stamps, are its clock's calendar. A
+case's loop:
 
 ```cpp
 loom::host::ManualClock clock;
@@ -669,10 +685,8 @@ while (clock.now_ms() < 5000) {
 }
 ```
 
-A source that claimed the first version of `WaitSet`, built before times, is still held and is
-answered in the first version of `Waited`. On Windows a wait's deadline is a high-resolution
-waitable timer where Windows gives one, and lasts the scheduler's tick, about 15.6 ms, where it
-does not.
+On Windows a wait's deadline is a high-resolution waitable timer where Windows gives one, and
+lasts the scheduler's tick, about 15.6 ms, where it does not.
 
 ## 10. Link to another host
 

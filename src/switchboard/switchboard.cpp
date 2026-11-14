@@ -2614,6 +2614,7 @@ void Switchboard::deliver_one(Envelope env) {
     Message trusted(std::move(a).value(), env.msg.sender, env.msg.reply_to, env.msg.correlation);
     trusted.provenance = env.msg.provenance; // Loom's own word, set at enqueue and only there
     trusted.addressed_role = env.role;       // the role this envelope was addressed to, if any
+    trusted.turn = ev.turn = turn_.now();     // the turn's time, when a wait began this turn
     // Shown before it runs, or not run (SENSE-06). A weave behind a value the bus published
     // under its key is shown it here, before its handler. A showing that does not complete, or
     // a weave already held, refuses this delivery: `ApplicationFailed` in the journal and on
@@ -2734,9 +2735,8 @@ void Switchboard::drain_until_idle() {
     if (in_dispatch_) {
         return; // non-reentrant: a handler's sends were enqueued, not nested
     }
-    // Scoped, because a native handler that throws unwinds straight past this
-    // line — and a dispatch flag left standing makes every later turn believe
-    // itself reentrant and return without delivering anything (MSG-10).
+    // Scoped: a native handler's throw unwinds past this line, and a dispatch flag left standing
+    // would make every later turn believe itself reentrant and deliver nothing (MSG-10).
     const DispatchGuard dispatching(*this);
     stop_requested_ = false;
     while (!queue_.empty() && !stop_requested_) {
@@ -2759,9 +2759,8 @@ std::size_t Switchboard::dispatch_at_most(std::size_t budget) {
     const DispatchGuard dispatching(*this); // unpoisoned by a throw, as drain_until_idle() is
     stop_requested_ = false;
     std::size_t dispatched = 0;
-    // `dispatched < budget` is checked against deliveries ACTUALLY MADE, so an
-    // envelope a handler enqueues during this loop is as bounded as one that was
-    // already waiting. That is the whole point: the producer this exists to
+    // `dispatched < budget` counts deliveries ACTUALLY MADE, so an envelope a handler enqueues
+    // during this loop is as bounded as one already waiting: the producer this exists to
     // contain is precisely the one that re-arms itself from inside its handler.
     while (dispatched < budget && !queue_.empty() && !stop_requested_) {
         deliver_one(take_front());
@@ -3330,6 +3329,7 @@ void Switchboard::deliver_admission(Envelope env) {
     // registry is touched. `current_target_`, the delivery facts and the attestation stand.
     Message trusted(std::move(*admitted), env.msg.sender, env.msg.reply_to, env.msg.correlation);
     trusted.provenance = env.msg.provenance; // Loom's own word, set at enqueue and only there
+    trusted.turn = ev.turn = turn_.now(); // the turn's time, when a wait began this turn
     // SHOWN BEFORE ITS FIRST BREATH, OR NOT BREATHED -- see deliver_one. A candidate is
     // sealed and offers nothing, so a pending publication here is unreachable by the
     // mechanism; the discipline is kept in one shape at both doors regardless. The

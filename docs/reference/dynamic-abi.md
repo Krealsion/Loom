@@ -1,6 +1,6 @@
 # Dynamic ABI — reference
 
-The C seam a weave library and the host agree on. Current version: **v<!-- value ZEN_ABI_VERSION -->15<!-- /value -->**
+The C seam a weave library and the host agree on. Current version: **v<!-- value ZEN_ABI_VERSION -->16<!-- /value -->**
 (`ZEN_ABI_VERSION` in `include/zen/kernel/abi.h`), and the oldest a host loads is
 `ZEN_ABI_OLDEST`, beside it ([the number and the sizes](#the-number-and-the-sizes)). Laws:
 [KERN-01, KERN-04](../laws/kernel-laws.md),
@@ -8,6 +8,14 @@ The C seam a weave library and the host agree on. Current version: **v<!-- value
 [ANS-06](../laws/answer-authority-laws.md),
 [MSG-07](../laws/messaging-laws.md#msg-07--role-authorship-is-explicit),
 [SENSE-01..07](../laws/sense-laws.md).
+
+**v16 appends the turn's time** to `ZenDelivery`: `turn` (`ZEN_TURN_KNOWN` or 0), `turn_ms`
+and `turn_date_ms`, the readings the host's wait took when it began the turn the delivery is
+dispatched in, read as `Mail::turn_ms()` and `Mail::turn_date_ms()` by a native, a loaded, a
+boxed and an isolated weave alike ([the turn's time](#the-turns-time)); nothing else moved. An
+image built against v15's header (`tests/abi_kept/v15/`) loads and works on this host, handed
+none of it: its delivery's size ends before them. A v16 image on a v15 host is refused before any
+callback, as needing abi_version 16.
 
 **v15 appends the ask door** ([the ask door](#the-ask-door)): one host door, `ask`, a
 provenance value, `ZEN_PROV_ASK_ENDED`, and a status, `ZEN_ERR_ASK_ENDED_NOT_ACCEPTED`, and nothing
@@ -275,6 +283,17 @@ is handed only with a shape the library declares it accepts for that value, so a
 later, with a shape of its own, never reaches an image built before it; a status a reader does not
 know reads as its slot says, never as success.
 
+### The turn's time
+
+Every delivery carries the turn's time and date when the host's wait began the turn it is
+dispatched in, and none otherwise: a suite turning the bus by hand hands none. They are delivery
+facts beside the sender and the correlation, which the bus writes at dispatch and no sender can
+set, never fields of a shape. An image in the host's process is told them whatever its grant; a
+box writes them into its module's delivery, and the isolation pipe appends them to a delivery's
+facts, only for a weave whose grant gives it the time (`Grant::with_time`): each withholds the
+clock otherwise ([capabilities](capabilities.md#the-box-a-weave-built-as-a-webassembly-module);
+[the decision](../decisions/the-turns-time-on-every-delivery.md)).
+
 A box judges the same facts: a module's version and manifest version through its glue's exports
 (`zw_abi_version`, read first, so a module built against another table is refused by its version
 and not by the exports it lacks, and `zw_abi_manifest_version`), and its host table by its
@@ -447,7 +466,8 @@ delivery was addressed to, into the library shim, so `mail.answers_ask()` /
 `mail.addressed_role()` read the same on both sides. The addressed role is no
 attestation: it says where the delivery went, and an isolated child is told it too. A library could lie
 to *itself* here; it buys nothing — provenance has no wire form and the host
-recomputes its own truth.
+recomputes its own truth. Since v16 it carries the turn's time and date, when a wait began the
+turn, read as `mail.turn_ms()` and `mail.turn_date_ms()` on both sides.
 
 Since v8 the **claimant's joint-publication door**: `sense_offer` outbound
 (`Mail::offer` on the library side), and `claim_published` inbound — not a
