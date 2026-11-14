@@ -18,7 +18,8 @@ using namespace calling;
 
 namespace {
 
-#if defined(CALL_PROBE_V2)
+#if defined(CALL_PROBE_CALLER_ONLY)
+#elif defined(CALL_PROBE_V2)
 constexpr std::int64_t kBy = 2;
 #else
 constexpr std::int64_t kBy = 1;
