@@ -109,6 +109,7 @@ void fill_from_event(HistoryRecord& rec, const BusEvent& e) {
         break;
     case EventKind::Died:
     case EventKind::Revived:
+    case EventKind::Called: // never recorded: `Recorder::observe` and `Logger::observe` pass it by
         rec.outcome = RecordedOutcome::None;
         break;
     }

@@ -505,25 +505,22 @@ WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant
 
     // One transaction for the whole vocabulary (LIFE-08): every shape this weave needs
     // resolvable is claimed together, so a conflict over the last leaves no trace of the first.
-    // The vocabulary is the closure, not the four lists' roots: every component a declared
-    // shape nests is claimed beside it, so two weaves nesting `Part v1` under different outer
-    // names, or one declaration nesting two, still meet the registry's one comparison. The
-    // claim lives in the record built below and dies when that record is erased.
+    // The vocabulary is the closure, not the lists' roots: every component a declared shape nests
+    // is claimed beside it, so two weaves nesting `Part v1` under different outer names, or one
+    // declaration nesting two, still meet the registry's one comparison. The claim lives in the
+    // record built below and dies when that record is erased. Provided functions' shapes too.
     std::vector<std::shared_ptr<const Schema>> vocabulary;
-    auto declare = [&vocabulary](const std::shared_ptr<const Schema>& s) {
-        collect_referenced(*s, vocabulary); // components first; identity-deduplicated
-        vocabulary.push_back(s);
+    auto declare = [&vocabulary](const std::vector<std::shared_ptr<const Schema>>& list) {
+        for (const auto& s : list) {
+            collect_referenced(*s, vocabulary); // components first; identity-deduplicated
+            vocabulary.push_back(s);
+        }
     };
-    for (const auto& s : accept) {
-        declare(s);
-    }
-    for (const auto& s : claims) {
-        declare(s);
-    }
-    for (const auto& s : emits) {
-        declare(s);
-    }
-    declare(state_schema);
+    declare(accept);
+    declare(claims);
+    declare(emits);
+    declare(provided_shapes(*incoming));
+    declare({state_schema});
     SchemaClaimScope schemas = registry_.claim(vocabulary);
     // ...and the shapes this weave may speak but does not define (LIFE-08). A producer needs its
     // named send shapes resolvable at the seam as a consumer's door does, or once the defining
@@ -4017,20 +4014,17 @@ ReviveOutcome Switchboard::swap_state(WeaveId id, std::string_view candidate_byt
         // every component every declared shape nests, so the same wall reads the
         // same set through both doors and a code swap cannot narrow it.
         std::vector<std::shared_ptr<const Schema>> vocabulary;
-        auto declare = [&vocabulary](const std::shared_ptr<const Schema>& s) {
-            collect_referenced(*s, vocabulary);
-            vocabulary.push_back(s);
+        auto declare = [&vocabulary](const std::vector<std::shared_ptr<const Schema>>& list) {
+            for (const auto& s : list) {
+                collect_referenced(*s, vocabulary);
+                vocabulary.push_back(s);
+            }
         };
-        for (const auto& s : rec->accept) {
-            declare(s);
-        }
-        for (const auto& s : fresh) {
-            declare(s);
-        }
-        for (const auto& s : fresh_emits) {
-            declare(s);
-        }
-        declare(rec->state_schema);
+        declare(rec->accept);
+        declare(fresh);
+        declare(fresh_emits);
+        declare(provided_shapes(*rec->weave));
+        declare({rec->state_schema});
         SchemaClaimScope next = registry_.claim(vocabulary);
         // The grant did not change under the new code, so its producer claim is
         // re-taken into the successor scope. Forgetting this would let a code

@@ -110,26 +110,54 @@ inline std::shared_ptr<const Schema> capability_ask_schema() {
     return s;
 }
 
-inline std::shared_ptr<const Schema> manifest_schema() {
-    // The manifest: `referenced` (the nested schemas, listed before whatever references
-    // them, so the manifest is self-contained), `accepted`, `state`, and the optional
-    // `requests` (the ask), `claims` (the claim-set) and `emits` (the emit-set: vocabulary the
-    // host claims into its agreement wall, never authority). An image built for an older
-    // manifest is refused by the manifest version its descriptor names, before its manifest is
-    // read. docs/decisions/declared-vocabulary-is-agreed-at-admission.md
-    static const auto s = SchemaBuilder("zen.Manifest", kManifestVersion)
-                              .list("referenced", type_message(shape_desc_schema()),
-                                    /*required=*/false)
-                              .list("accepted", type_message(shape_desc_schema()))
-                              .message("state", shape_desc_schema())
-                              .message("requests", capability_ask_schema(), /*required=*/false)
-                              .list("claims", type_message(shape_desc_schema()),
-                                    /*required=*/false)
-                              .list("emits", type_message(shape_desc_schema()),
-                                    /*required=*/false)
+/// One function a weave provides: the shape it takes and the shape it answers.
+inline std::shared_ptr<const Schema> provided_desc_schema() {
+    static const auto s = SchemaBuilder("zen.Provided", 1)
+                              .message("input", shape_desc_schema())
+                              .message("output", shape_desc_schema())
                               .build();
     return s;
 }
+
+namespace detail {
+inline std::shared_ptr<const Schema> build_manifest_schema(std::uint32_t version) {
+    SchemaBuilder b("zen.Manifest", version);
+    b.list("referenced", type_message(shape_desc_schema()), /*required=*/false)
+        .list("accepted", type_message(shape_desc_schema()))
+        .message("state", shape_desc_schema())
+        .message("requests", capability_ask_schema(), /*required=*/false)
+        .list("claims", type_message(shape_desc_schema()), /*required=*/false)
+        .list("emits", type_message(shape_desc_schema()), /*required=*/false);
+    if (version >= 7) {
+        b.list("provides", type_message(provided_desc_schema()), /*required=*/false);
+    }
+    return b.build();
+}
+} // namespace detail
+
+/// The manifest at `version`, from `kManifestOldest` to `kManifestVersion`, or null for one this
+/// build does not read: `referenced` (the nested schemas, listed before whatever references them,
+/// so the manifest is self-contained), `accepted`, `state`, and the optional `requests` (the ask),
+/// `claims` (the claim-set), `emits` (the emit-set: vocabulary the host claims into its agreement
+/// wall, never authority) and, from version 7, `provides` (the functions the weave provides). A
+/// host reads a manifest at the version its descriptor names, and refuses one outside the range
+/// before it is read. docs/decisions/declared-vocabulary-is-agreed-at-admission.md
+inline std::shared_ptr<const Schema> manifest_schema(std::uint32_t version) {
+    static const auto v6 = detail::build_manifest_schema(6);
+    static const auto v7 = detail::build_manifest_schema(7);
+    static_assert(kManifestOldest == 6 && kManifestVersion == 7,
+                  "each manifest version this build reads is built here");
+    return version == 7 ? v7 : version == 6 ? v6 : nullptr;
+}
+
+/// The manifest this build writes.
+inline std::shared_ptr<const Schema> manifest_schema() { return manifest_schema(kManifestVersion); }
+
+/// One provided function's two shapes, as a manifest carries them.
+struct ProvidedShapes {
+    std::shared_ptr<const Schema> input;
+    std::shared_ptr<const Schema> output;
+};
 
 // ---- encode (Schema -> descriptor Value) -------------------------------------
 
@@ -239,11 +267,26 @@ inline Value encode_capability_ask(const CapabilityAsk& ask) {
 // identity, so two definitions of one (name, version) both travel and the loader refuses the
 // manifest. `ask` may be null: then no requests section is written. `referenced` is written
 // only when a declared shape nests something, and `emits` only when an emit-set is declared.
+//
+// `provides` is written only when a function is provided; `version` is the manifest's, and one
+// before 7 has no section for it, so a function given to one is refused here rather than dropped.
 inline Value encode_manifest(const std::vector<std::shared_ptr<const Schema>>& accepted,
                              const Schema& state, const CapabilityAsk* ask = nullptr,
                              const std::vector<std::shared_ptr<const Schema>>* claims = nullptr,
-                             const std::vector<std::shared_ptr<const Schema>>* emits = nullptr) {
-    Value m(manifest_schema());
+                             const std::vector<std::shared_ptr<const Schema>>* emits = nullptr,
+                             const std::vector<ProvidedShapes>* provides = nullptr,
+                             std::uint32_t version = kManifestVersion) {
+    const std::shared_ptr<const Schema> door = manifest_schema(version);
+    if (door == nullptr) {
+        throw std::invalid_argument("encode_manifest: zen.Manifest version " +
+                                    std::to_string(version) + " is not one this build writes");
+    }
+    if (provides != nullptr && !provides->empty() && version < 7) {
+        throw std::invalid_argument("encode_manifest: zen.Manifest version " +
+                                    std::to_string(version) +
+                                    " has no section for provided functions");
+    }
+    Value m(door);
     std::vector<std::shared_ptr<const Schema>> referenced;
     for (const auto& s : accepted) {
         collect_referenced(*s, referenced);
@@ -258,6 +301,12 @@ inline Value encode_manifest(const std::vector<std::shared_ptr<const Schema>>& a
     if (emits != nullptr) {
         for (const auto& s : *emits) {
             collect_referenced(*s, referenced);
+        }
+    }
+    if (provides != nullptr) {
+        for (const ProvidedShapes& f : *provides) {
+            collect_referenced(*f.input, referenced);
+            collect_referenced(*f.output, referenced);
         }
     }
     if (!referenced.empty()) {
@@ -293,6 +342,17 @@ inline Value encode_manifest(const std::vector<std::shared_ptr<const Schema>>& a
             em.push_back(Cell::message(encode_shape(*s)));
         }
         m.set("emits", Cell::list(std::move(em)));
+    }
+    if (provides != nullptr && !provides->empty()) {
+        std::vector<Cell> pr;
+        pr.reserve(provides->size());
+        for (const ProvidedShapes& f : *provides) {
+            Value one(provided_desc_schema());
+            one.set("input", Cell::message(encode_shape(*f.input)));
+            one.set("output", Cell::message(encode_shape(*f.output)));
+            pr.push_back(Cell::message(std::move(one)));
+        }
+        m.set("provides", Cell::list(std::move(pr)));
     }
     return m;
 }

@@ -381,10 +381,14 @@ int main() {
         case loom::EventKind::HandlerFailed:
             kind = "HandlerFailed";
             break;
+        case loom::EventKind::Called:
+            kind = "Called";
+            break;
         }
         tap.push_back(Seen{kind, e.schema_name,
-                           e.kind == loom::EventKind::Refused ? loom::name_of(e.refusal.reason)
-                                                              : "",
+                           e.kind == loom::EventKind::Refused  ? loom::name_of(e.refusal.reason)
+                           : e.kind == loom::EventKind::Called ? loom::name_of(e.call_refusal)
+                                                               : "",
                            e.sender, e.target});
     });
 

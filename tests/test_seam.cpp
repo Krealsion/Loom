@@ -148,7 +148,8 @@ TEST_CASE("a host reads a descriptor's slots as far as its size reaches, and a s
                                         .handle = nullptr,
                                         .claim_published = nullptr,
         .describe_creation = nullptr,
-        .create_with = nullptr};
+        .create_with = nullptr,
+        .provide = nullptr};
         return &abi;
     }();
     ZenWeaveAbi shorter = *full;
@@ -226,8 +227,9 @@ TEST_CASE("an image needing what this host lacks is refused before any slot of i
     SUBCASE("a manifest this host does not read, refused before create()") {
         refused_before_any_slot(
             ZEN_SO_NEEDS_UNREAD_MANIFEST,
-            {"zen.Manifest version " + std::to_string(kManifestVersion - 1u),
-             "it reads version " + std::to_string(kManifestVersion)});
+            {"zen.Manifest version " + std::to_string(kManifestOldest - 1u),
+             "it reads versions " + std::to_string(kManifestOldest) + " to " +
+                 std::to_string(kManifestVersion)});
     }
     SUBCASE("a descriptor too short to hold its handle slot") {
         refused_before_any_slot(

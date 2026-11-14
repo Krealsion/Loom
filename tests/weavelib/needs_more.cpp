@@ -28,7 +28,7 @@ constexpr std::uint32_t kHostSize = static_cast<std::uint32_t>(sizeof(ZenHostApi
 #endif
 
 #if defined(NEEDS_UNREAD_MANIFEST)
-constexpr std::uint32_t kManifest = loom::kManifestVersion - 1u;
+constexpr std::uint32_t kManifest = loom::kManifestOldest - 1u;
 #else
 constexpr std::uint32_t kManifest = loom::kManifestVersion;
 #endif
@@ -56,6 +56,7 @@ extern "C" ZEN_KERNEL_EXPORT const ZenWeaveAbi* zen_weave_abi(void) {
                                     .handle = nullptr,
                                     .claim_published = nullptr,
         .describe_creation = nullptr,
-        .create_with = nullptr};
+        .create_with = nullptr,
+        .provide = nullptr};
     return &abi;
 }

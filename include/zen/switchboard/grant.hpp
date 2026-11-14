@@ -14,12 +14,13 @@
 //
 //   SendRule       read at every delivery
 //   ObserveRule    read at every observation
+//   CallRule       read at every call
 //   os_cap         read once, at IsolationHost::mount, to choose the child's network namespace
 //   FsAccess       read once, to build the child's mount-namespace view
 //   ResourceLimits read once, to write the child's cgroup leaf
 //
-// The first two are the stored value, so changing them changes enforcement. The last three are
-// consumed into kernel state no later write can move, so only the first two form a
+// The first three are the stored value, so changing them changes enforcement. The last three are
+// consumed into kernel state no later write can move, so only the first three form a
 // `LiveAuthority`, the half the delegation door can change.
 
 #include <zen/switchboard/door.hpp>
@@ -95,6 +96,17 @@ struct ObserveRule {
     std::uint32_t shape_version = 0;
 };
 
+/// One call rule: may call the function the holder of `role` provides for the input shape
+/// (name, version), inside the caller's own turn. Not a `SendRule` and not an `ObserveRule`: a call
+/// delivers nothing and reads no claim, so neither is consulted for one, and this is consulted for
+/// nothing else. Exact on both axes: one role and one input shape.
+/// docs/reference/capabilities.md#a-call-rule
+struct CallRule {
+    std::string role;
+    std::string shape_name;
+    std::uint32_t shape_version = 0;
+};
+
 /// Resource limits, a quantitative capability (tier B5, a cgroup-v2 leaf). `0` means the host's
 /// conservative default; a positive value is an explicit raise. `unlimited_memory` lifts only
 /// the memory cap: pids stay bounded and cpu stays a fair-share weight.
@@ -105,8 +117,8 @@ struct ResourceLimits {
     bool unlimited_memory = false;  ///< opt out of the MEMORY cap only; pids stays bounded
 };
 
-/// The half of an authority that answers at the moment of use (GATE-05): send and observe rules,
-/// and nothing else. Each is read off the live record when needed, so replacing this value
+/// The half of an authority that answers at the moment of use (GATE-05): send, observe and call
+/// rules, and nothing else. Each is read off the live record when needed, so replacing this value
 /// changes enforcement at once. The containment fields of a `Grant` are not here: they were
 /// consumed into kernel state when the child was spawned, and this type has no word for them.
 /// A value, owning nothing a subject's lifetime affects.
@@ -162,6 +174,12 @@ public:
     /// May read the latest claim of ANY shape.
     LiveAuthority& allow_observe_any() {
         observe_.push_back(ObserveRule{true, std::string{}, 0});
+        return *this;
+    }
+    /// May call the function the holder of `role` provides for the input shape (name, version).
+    LiveAuthority& allow_call(std::string role, std::string shape_name,
+                              std::uint32_t shape_version) {
+        calls_.push_back(CallRule{std::move(role), std::move(shape_name), shape_version});
         return *this;
     }
 
@@ -222,6 +240,18 @@ public:
         return false;
     }
 
+    /// True iff some rule permits calling the function `role`'s holder provides for this input
+    /// shape.
+    bool permits_call(std::string_view role, std::string_view shape_name,
+                      std::uint32_t shape_version) const {
+        for (const CallRule& r : calls_) {
+            if (r.role == role && r.shape_name == shape_name && r.shape_version == shape_version) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /// Attenuation: is `inner` entirely within this authority? Semantic, not textual. A rule is
     /// a box of shape selector by target selector by door, each "any" or one exact atom:
     ///
@@ -234,8 +264,9 @@ public:
     /// The target's second line matters: a role rule follows whoever holds the role at
     /// delivery and an id rule follows one weave, so relating them would turn today's routing
     /// into permanent authority. The door's keeps containment the predicate's: a rule without a
-    /// door, an any rule included, answers no door question, so it contains no door rule. Send
-    /// and observe rules are checked in their own dimensions and never cross.
+    /// door, an any rule included, answers no door question, so it contains no door rule. Send,
+    /// observe and call rules are checked in their own dimensions and never cross, and a call
+    /// rule is contained only by the same rule.
     /// A rule is covered when one rule here contains it; where that is ever conservative it
     /// refuses a legal delegation, never admits an illegal one. The empty authority is contained
     /// by everything, so revocation is always possible.
@@ -265,14 +296,20 @@ public:
                 return false;
             }
         }
+        for (const CallRule& want : inner.calls_) {
+            if (!permits_call(want.role, want.shape_name, want.shape_version)) {
+                return false;
+            }
+        }
         return true;
     }
 
     /// Does this authority say anything? An empty one permits nothing.
-    bool empty() const noexcept { return rules_.empty() && observe_.empty(); }
+    bool empty() const noexcept { return rules_.empty() && observe_.empty() && calls_.empty(); }
 
     const std::vector<SendRule>& rules() const noexcept { return rules_; }
     const std::vector<ObserveRule>& observe_rules() const noexcept { return observe_; }
+    const std::vector<CallRule>& call_rules() const noexcept { return calls_; }
 
 private:
     static bool shape_contains(const SendRule& outer, const SendRule& inner) {
@@ -317,6 +354,7 @@ private:
 
     std::vector<SendRule> rules_;
     std::vector<ObserveRule> observe_;
+    std::vector<CallRule> calls_;
 };
 
 /// What a Weave may do: the admission envelope a host names when it admits a subject,
@@ -372,6 +410,13 @@ public:
     /// May read the latest claim of any shape: for an inspector, a renderer, a console.
     Grant& allow_observe_any() {
         live_.allow_observe_any();
+        return *this;
+    }
+    /// May call the function the holder of `role` provides for the input shape (name, version),
+    /// inside its own turn. Absent by default, as observing is; no send or observe rule is read
+    /// for a call. docs/reference/capabilities.md#a-call-rule
+    Grant& allow_call(std::string role, std::string shape_name, std::uint32_t shape_version) {
+        live_.allow_call(std::move(role), std::move(shape_name), shape_version);
         return *this;
     }
     /// Record OS-capability flags, enforced out of process (tier B3); the in-process Switchboard
@@ -431,6 +476,13 @@ public:
         return live_.permits_observe(shape_name, shape_version);
     }
 
+    /// True iff a call rule permits calling `role`'s function for this input shape; no send or
+    /// observe rule is consulted.
+    bool permits_call(std::string_view role, std::string_view shape_name,
+                      std::uint32_t shape_version) const {
+        return live_.permits_call(role, shape_name, shape_version);
+    }
+
     /// The baseline live authority this admission established (GATE-05): what a delegated overlay
     /// is measured against and added to. Read-only: it stays what the host said at
     /// `register_weave` for the subject's life.
@@ -449,9 +501,10 @@ public:
     const std::vector<ObserveRule>& observe_rules() const noexcept {
         return live_.observe_rules();
     }
+    const std::vector<CallRule>& call_rules() const noexcept { return live_.call_rules(); }
 
 private:
-    /// Speech and observation: the rules read at every delivery and observation.
+    /// Speech, observation and calls: the rules read at every delivery, observation and call.
     LiveAuthority live_;
     /// The containment policy, consumed once, out of process, into namespace, mount view and
     /// cgroup state this process cannot revisit, so the delegation door cannot reach it.
@@ -487,6 +540,13 @@ inline bool effective_permits_observe(const LiveAuthority& base, const LiveAutho
                                       std::string_view shape_name, std::uint32_t shape_version) {
     return base.permits_observe(shape_name, shape_version) ||
            delegated.permits_observe(shape_name, shape_version);
+}
+
+inline bool effective_permits_call(const LiveAuthority& base, const LiveAuthority& delegated,
+                                   std::string_view role, std::string_view shape_name,
+                                   std::uint32_t shape_version) {
+    return base.permits_call(role, shape_name, shape_version) ||
+           delegated.permits_call(role, shape_name, shape_version);
 }
 
 /// The right to administer one subject's delegated live authority (GATE-05), so an
@@ -590,6 +650,10 @@ struct AuthorityView {
     bool permits_role(std::string_view shape_name, std::uint32_t shape_version,
                       std::string_view role, const Door& door) const {
         return effective_permits_role(base, delegated, shape_name, shape_version, role, door);
+    }
+    bool permits_call(std::string_view role, std::string_view shape_name,
+                      std::uint32_t shape_version) const {
+        return effective_permits_call(base, delegated, role, shape_name, shape_version);
     }
     bool permits_observe(std::string_view shape_name, std::uint32_t shape_version) const {
         return effective_permits_observe(base, delegated, shape_name, shape_version);

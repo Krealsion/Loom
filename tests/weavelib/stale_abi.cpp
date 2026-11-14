@@ -26,6 +26,7 @@ extern "C" ZEN_KERNEL_EXPORT const ZenWeaveAbi* zen_weave_abi(void) {
                                     .handle      = nullptr,
                                     .claim_published = nullptr,
         .describe_creation = nullptr,
-        .create_with = nullptr};
+        .create_with = nullptr,
+        .provide = nullptr};
     return &abi;
 }

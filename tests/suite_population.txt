@@ -57,6 +57,7 @@ host_policy        portable  38
 host_input         portable  13
 host_reactor       portable  20
 turn               portable  3
+call               portable  7
 dispatch_refusal   portable  15
 ask                portable  16
 dispatch_loaded    kernel    10
@@ -64,6 +65,7 @@ seam               kernel    8
 creation           kernel    9
 ask_loaded         kernel    3
 turn_loaded        kernel    2
+call_loaded        kernel    6
 admission          kernel    21
 joint              kernel    24
 session            portable  13

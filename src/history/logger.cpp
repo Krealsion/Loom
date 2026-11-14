@@ -351,6 +351,9 @@ bool Logger::open() const noexcept { return static_cast<bool>(out_); }
 
 void Logger::observe(const BusEvent& e) {
     ++counters_.observed;
+    if (e.kind == EventKind::Called) {
+        return; // a call is no delivery and no life, so no record of the log's (MSG-14)
+    }
     // THE REJECTION PATH, AND IT IS THE ONE THAT RUNS. Two branch tests and one
     // map lookup keyed on a name the event already holds; no record is built, no
     // string is copied, nothing is serialized and nothing touches a disk. That is

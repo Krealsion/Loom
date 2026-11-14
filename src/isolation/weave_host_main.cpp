@@ -275,7 +275,9 @@ int main(int argc, char** argv) {
                    .sense_offer          = nullptr,
                    // ...and no ask door: the pipe carries no attestation back, so an ask's end
                    // would have nowhere to go (ANS-08)
-                   .ask                  = nullptr};
+                   .ask                  = nullptr,
+                   // ...and no call door: a call does not cross the pipe (MSG-14)
+                   .call                 = nullptr};
 
     for (;;) {
         Op op = Op::Hello;

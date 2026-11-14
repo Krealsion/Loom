@@ -1,6 +1,6 @@
 # Dynamic ABI — reference
 
-The C seam a weave library and the host agree on. Current version: **v<!-- value ZEN_ABI_VERSION -->16<!-- /value -->**
+The C seam a weave library and the host agree on. Current version: **v<!-- value ZEN_ABI_VERSION -->17<!-- /value -->**
 (`ZEN_ABI_VERSION` in `include/zen/kernel/abi.h`), and the oldest a host loads is
 `ZEN_ABI_OLDEST`, beside it ([the number and the sizes](#the-number-and-the-sizes)). Laws:
 [KERN-01, KERN-04](../laws/kernel-laws.md),
@@ -8,6 +8,15 @@ The C seam a weave library and the host agree on. Current version: **v<!-- value
 [ANS-06](../laws/answer-authority-laws.md),
 [MSG-07](../laws/messaging-laws.md#msg-07--role-authorship-is-explicit),
 [SENSE-01..07](../laws/sense-laws.md).
+
+**v17 appends calls** ([the call door and the provide slot](#the-call-door-and-the-provide-slot)):
+one host door, `call`, one descriptor slot, `provide`, which takes no instance, and a status,
+`ZEN_ERR_CALL_BASE`, and nothing else moved. The manifest a v17 image writes is the next version
+of `zen.Manifest`, which lists the functions it provides; a host reads that version and the one
+before it. An image built against v16's header (`tests/abi_kept/v16/`) loads and works on this
+host: it writes the earlier manifest, provides nothing, and has no call, its host table's size
+ending before the door. A v17 image on a v16 host is refused before any callback, as needing
+abi_version 17.
 
 **v16 appends the turn's time** to `ZenDelivery`: `turn` (`ZEN_TURN_KNOWN` or 0), `turn_ms`
 and `turn_date_ms`, the readings the host's wait took when it began the turn the delivery is
@@ -256,6 +265,36 @@ image built against an earlier header has no ask, as it had no door, and loads a
 isolation pipe supplies no ask door and refuses a manifest accepting `zen.AskEnded`
 ([asks](messaging.md#asks-and-how-each-one-ends)).
 
+## The call door and the provide slot
+
+Since 17 a loaded or boxed weave calls through one appended host door, `call`: the role, the
+argument's value bytes, and the output shape by name and version. The host admits the argument at
+the shape it names, then the gated bus's call door decides the rest -- the rule, the holder, the
+function, both gates -- and the answer crosses back as value bytes through a sink, which the
+library re-admits against its own definition of the output shape, as it does a reading. A call
+with no answer returns `ZEN_ERR_CALL_BASE` minus the `loom::CallRefusal` enumerator, with the
+gate's or the provider's words through a second sink; a status naming no enumerator reads as
+`Failed`. Nothing is delivered and no handler runs
+([calls](messaging.md#calls-a-function-of-its-argument-alone)).
+
+A provider's functions are in its manifest, `zen.Manifest` from version 7, each an input and an
+output shape, so a host knows them before the image runs, and claims their shapes through the same
+wall as the rest. The descriptor's `provide` slot runs one, of its argument alone: no instance and
+no host table cross, and the argument's shape names the function. A manifest naming functions for
+an image with no `provide` slot, or two functions from one shape, is refused at load. While a
+function runs every host door refuses, before reading its context, so a table the image kept from
+an earlier delivery reaches nothing.
+
+- **A box** imports the door as `zen_host.call`, its two sinks crossing as handles written back
+  through `zw_sink_deliver`, and exports `zw_provide`, which the box calls in a store of its own,
+  made for the call and dropped after it, with no weave made in it, the box's default memory, one
+  entry's steps and no delivery's doors.
+- **The isolation pipe** supplies no call door, so a contained weave's call is `NotOffered`; a
+  child whose manifest provides a function is refused at the mount, by name; and a call to an
+  isolated child's role is `Isolated`.
+- **A link** carries no call: a call to its role is `Linked`, and a far function is asked by
+  message.
+
 ## The number and the sizes
 
 From v13 the version says what an image needs: a host loads every version from
@@ -272,7 +311,7 @@ the host has:
 | newer than the host | `the image needs abi_version ...`, which the host lacks |
 | a descriptor whose size does not reach `handle` | its size, and the size `handle` needs |
 | built against a larger host table | both tables' sizes |
-| writing a manifest version the host does not read | both manifest versions, before `create()` |
+| writing a manifest version the host does not read | the image's manifest version and the ones the host reads, before `create()` |
 
 What it loads it reads as far as each size reaches. A slot past the descriptor's size is a NULL
 slot, whose meaning the slot's comment says (`claim_published`: shown nothing, read as Failed). The
@@ -443,7 +482,11 @@ back as the precise `ZEN_ERR_ROLE_AUTHORSHIP_DENIED` (never downgraded to a
 personal send). A holder at its waiting bound is `ZEN_ERR_PENDING_PER_SENDER`
 instead, on those doors and on an ordinary send. `role_publish` carries its
 recipient count out-of-band so "authorized, zero listeners" and "denied" stay
-distinct.
+distinct. Since v17 the **call door**, `call`, has a function's answer back
+inside the handler, or the refusal's own status
+([the call door and the provide slot](#the-call-door-and-the-provide-slot)); while
+a function runs, every door answers `ZEN_ERR_REFUSED` (`defer_answer` no token)
+before reading its context.
 
 **No exception crosses a door, in either direction.** A loaded image may carry
 its own C++ runtime ([KERN-05](../laws/kernel-laws.md)), under which an

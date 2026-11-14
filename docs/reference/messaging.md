@@ -509,6 +509,80 @@ answer attempt is never silently retried as ordinary speech.
 This behaviour lives in the authoring headers, not in the ABI: rebuild an artifact compiled
 against older headers before relying on its substrate replies to settle a strict asker.
 
+## Calls: a function of its argument alone
+
+A weave may call a function another weave provides, inside its own handler, and
+have the answer or a refusal before the handler goes on
+([MSG-14](../laws/messaging-laws.md#msg-14--a-call-is-a-function-of-its-argument-alone)).
+The function is handed its argument and nothing else: never its provider's
+instance, never a bus, never a claim. No handler runs and nothing is delivered,
+so a call nests no delivery ([MSG-01](../laws/messaging-laws.md#msg-01--single-threaded-fifo-non-reentrant)).
+
+```cpp
+// The provider: one function per input shape, static, so it reaches no instance.
+class Arith : public loom::WeaveBase<Arith, State, loom::Accept<>, loom::Emit<>, loom::Claims<>,
+                                     loom::Provides<Add>> {
+public:
+    static Sum provide(const Add& add) { return Sum{add.a + add.b}; }
+};
+
+// The caller, granted Grant::allow_call("arith", "Add", 1).
+void on(const Work& w, loom::Mail& mail) {
+    loom::Called<Sum> r = mail.call<Sum>("arith", Add{w.a, w.b});
+    if (r) { use(r->value); } else { say(loom::name_of(r.refusal()), r.words()); }
+}
+```
+
+The call names the role that provides the function and the argument, whose
+shape names the function: one input shape names one function of a provider,
+and a second is refused at registration and at load. The role resolves to its
+holder at that moment, as a send to the role does, so a provider replaced
+between two calls answers the second with its successor's code; nothing is held
+between them. The argument is admitted at the function's input shape and the
+answer at its output shape, which must be the shape the caller asked for: a
+provider cannot hand back a value the caller's shape does not admit. A call
+needs a call rule, absent by default; no send or observe rule is read for one
+([a call rule](capabilities.md#a-call-rule)). A caller that needs a provider's
+state reads its claim, under its own observe rule, and passes it in.
+
+Every way a call ends without an answer is its own word (`loom::CallRefusal`),
+in the order they are decided:
+
+| refusal | what it means |
+|---|---|
+| `NotOffered` | this bus has no call door: an isolated child's, or a library's on a host table built before the door |
+| `NotAuthorized` | the caller's grant has no call rule for the role and the input shape; asked before the role is resolved, so the caller learns nothing of who holds it |
+| `NoHolder` | nobody holds the role now |
+| `Isolated` | the holder runs in an isolated child: a call does not cross the pipe |
+| `Linked` | the holder is a link to another host: a call does not cross a link, and a far function is asked by message |
+| `NotProvided` | the holder provides no function from the argument's shape to the shape asked for |
+| `ArgumentRefused` | the gate refused the argument at the function's input shape; the function never ran |
+| `Failed` | the provider's code threw, trapped, ran out of its steps or wrote no answer, with its words |
+| `AnswerRefused` | the gate refused the answer at the output shape |
+
+**"Pure" is imposed in a box and asked of native code.** A boxed provider's
+function runs in a store made for the call and dropped after it, inside one
+entry's steps, with every door refusing: it can reach no weave, its own
+included, and keep nothing
+([the box](capabilities.md#the-box-a-weave-built-as-a-webassembly-module)). A
+native function shares the host's process: it is static and handed nothing, and
+every host door refuses while a loaded image's function runs, so a table it kept
+from an earlier delivery reaches nothing; but nothing stops native code writing
+its own memory, and a grant bounds what code says, never what it touches. A
+native function's time is not bounded, as a native handler's is not.
+
+**The tap tells each call and how it ended**, as `EventKind::Called`, inside the
+caller's delivery (its `seq`) and before that delivery's own event: an observer
+told a handler finished has been told first of every call inside it that failed.
+A failed call is the caller's to treat: its handler goes on, and its delivery
+ends as the handler does. History keeps no record of a call, and a bridge
+session's tap does not carry one.
+
+**Across the seam** a loaded weave calls and provides as a native one does, a
+boxed one too; the isolation pipe and a link carry no call, each refused by name
+([the call door and the provide slot](dynamic-abi.md#the-call-door-and-the-provide-slot)).
+[Decision](../decisions/a-call-is-a-function-of-its-argument-alone.md).
+
 ## Self-description — what may be said to this weave
 
 **Ask the target.** Every woven weave (`WeaveBase`) carries a fifth substrate

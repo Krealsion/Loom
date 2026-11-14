@@ -130,14 +130,24 @@ inline std::string render_rule(const ObserveRule& rule) {
            std::to_string(rule.shape_version);
 }
 
+inline std::string render_rule(const CallRule& rule) {
+    return "call " + safe_weaver_text(rule.role, kMaxNameBytes) + " with " +
+           safe_weaver_text(rule.shape_name, kMaxNameBytes) + " v" +
+           std::to_string(rule.shape_version);
+}
+
 /// Every rule of one authority, rendered in the order the authority holds them.
 inline std::vector<std::string> render_authority(const LiveAuthority& authority) {
     std::vector<std::string> out;
-    out.reserve(authority.rules().size() + authority.observe_rules().size());
+    out.reserve(authority.rules().size() + authority.observe_rules().size() +
+                authority.call_rules().size());
     for (const SendRule& r : authority.rules()) {
         out.push_back(render_rule(r));
     }
     for (const ObserveRule& r : authority.observe_rules()) {
+        out.push_back(render_rule(r));
+    }
+    for (const CallRule& r : authority.call_rules()) {
         out.push_back(render_rule(r));
     }
     return out;

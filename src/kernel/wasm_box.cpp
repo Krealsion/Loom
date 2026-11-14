@@ -184,9 +184,11 @@ void keep(const std::string& digest, std::shared_ptr<BoxModule> module) {
 struct Exports {
     wasmtime_func_t initialize{}, abi_version{}, alloc{}, free{}, create{}, destroy{}, describe{},
         snapshot{}, policy{}, revive{}, handle{}, claim_published{}, sink_deliver{}, manifest_version{},
-        describe_creation{}, create_with{};
+        describe_creation{}, create_with{}, provide{};
     /// Whether the module exports the two creation doors (ABI 14 on).
     bool creation = false;
+    /// Whether the module exports the provide door (ABI 17 on).
+    bool provides = false;
 };
 
 struct Box {
@@ -203,8 +205,10 @@ struct Box {
     bool knows_time = false;
     /// The doors of the delivery in progress, and null outside one.
     const ZenHostApi* host = nullptr;
-    /// The host sink `zen_host.sink_write` hands bytes to while a slot writes.
+    /// The host sink `zen_host.sink_write` hands bytes to while a slot writes (handle 0), and the
+    /// one a provided function's words go to (handle 1).
     ZenByteSink sink{};
+    ZenByteSink words{};
     /// The linear memory the store may grow to; negative is wasm32's own ceiling.
     std::int64_t memory_limit = kBoxDefaultMemoryBytes;
     /// Whether `memory_limit` is the box's default, the grant having named no memory.
@@ -379,6 +383,9 @@ BOX_CB(zh_sink_write) {
     }
     if (u32(args, 0) == 0 && d.b.sink.write != nullptr) {
         d.b.sink.write(d.b.sink.ctx, p, u32(args, 2)); // the host's sink copies at once
+    }
+    if (u32(args, 0) == 1 && d.b.words.write != nullptr) {
+        d.b.words.write(d.b.words.ctx, p, u32(args, 2));
     }
     return nullptr;
 }
@@ -750,6 +757,36 @@ BOX_CB(zh_sense_observe_role) {
     return answer(results, st);
 }
 
+/// A call (MSG-14): the answer (0) and the words (1) are written back into the module's own sinks
+/// through `zw_sink_deliver` while the import is on the stack, as a reading is. No door, outside a
+/// delivery or in a function's store, is `NotOffered`.
+BOX_CB(zh_call) {
+    BOX_UNUSED;
+    Door d(caller);
+    if (!d.open(&ZenHostApi::call)) {
+        return answer(results, ZEN_ERR_CALL_BASE - static_cast<ZenStatus>(CallRefusal::NotOffered));
+    }
+    std::string role;
+    std::string output;
+    if (!name_at(d.cx, d.b.memory, u32(args, 0), role) ||
+        !name_at(d.cx, d.b.memory, u32(args, 3), output)) {
+        return outside_name();
+    }
+    const std::uint8_t* p = nullptr;
+    if (!d.bytes(u32(args, 1), u32(args, 2), &p)) {
+        return outside_bytes();
+    }
+    Held held[2];
+    const ZenStatus st = d.b.host->call(d.b.host->ctx, role.c_str(), p, u32(args, 2),
+                                        output.c_str(), u32(args, 4),
+                                        ZenByteSink{&held[0], &held_write},
+                                        ZenByteSink{&held[1], &held_write});
+    if (wasm_trap_t* t = deliver_reading(d.b, 0, ZenSenseBy{}, held)) {
+        return t;
+    }
+    return answer(results, st);
+}
+
 BOX_CB(zh_sense_offer) {
     BOX_UNUSED;
     Door d(caller);
@@ -885,6 +922,7 @@ constexpr Import kImports[] = {
     {kHost, "sense_observe_role", "iiii", "i", zh_sense_observe_role},
     {kHost, "sense_offer", "Iii", "i", zh_sense_offer},
     {kHost, "ask", "iIiIIiii", "i", zh_ask},
+    {kHost, "call", "iiiii", "i", zh_call},
     {kWasi, "environ_sizes_get", "ii", "i", wasi_empty_sizes},
     {kWasi, "environ_get", "ii", "i", wasi_empty_list},
     {kWasi, "args_sizes_get", "ii", "i", wasi_empty_sizes},
@@ -1047,6 +1085,8 @@ bool instantiate(Box& b, std::string& why, bool judging = false) {
     }
     b.fn.creation = missing_creation.empty();
     b.missing_creation = missing_creation;
+    // The door appended at 17: an older module provides nothing.
+    b.fn.provides = export_func(b, "zw_provide", b.fn.provide);
     if (!call(b.cx, b.fn.initialize, nullptr, 0, nullptr, 0, why)) {
         why = "the module trapped in its static initialisation: " + why;
         return false;
@@ -1390,6 +1430,10 @@ ZenStatus box_slot_handle(void* instance, const ZenDelivery* d, const uint8_t* p
     return st;
 }
 
+ZenStatus box_slot_provide(const std::uint8_t*, std::size_t, ZenByteSink, ZenByteSink) {
+    return ZEN_ERR;
+}
+
 const ZenWeaveAbi kBoxAbi = {.abi_version     = ZEN_ABI_VERSION,
                              .size            = sizeof(ZenWeaveAbi),
                              .host_size       = sizeof(ZenHostApi),
@@ -1403,7 +1447,10 @@ const ZenWeaveAbi kBoxAbi = {.abi_version     = ZEN_ABI_VERSION,
                              .handle          = box_slot_handle,
                              .claim_published = box_slot_claim_published,
         .describe_creation = nullptr,
-        .create_with = nullptr};
+        .create_with = nullptr,
+        // A boxed function runs through `box_provide`, which knows its module; this slot only
+        // says the box can run one, and refuses if called.
+        .provide = box_slot_provide};
 
 bool read_file(const std::string& path, std::string& bytes, std::string& error) {
     std::ifstream in(path, std::ios::binary);
@@ -1522,6 +1569,43 @@ ZenStatus box_describe_creation(const std::shared_ptr<BoxModule>& module, ZenByt
         }
     }
     drop_store(probe);
+    return st;
+}
+
+ZenStatus box_provide(const std::shared_ptr<BoxModule>& module, const std::uint8_t* argument,
+                      std::size_t len, ZenByteSink answer, ZenByteSink words) {
+    // A store of its own, with no delivery's doors (`host` stays null) and no weave made in it.
+    Box fn;
+    fn.module = module;
+    std::string why;
+    ZenStatus st = ZEN_ERR;
+    if (!instantiate(fn, why)) {
+        why = "the function's store could not be made: " + why;
+    } else if (!fn.fn.provides) {
+        why = "the module exports no provide door";
+    } else {
+        const std::int32_t p = copy_in(fn, argument, len, why);
+        if (p != 0) {
+            refuel(fn);
+            fn.sink = answer;
+            fn.words = words;
+            wasmtime_val_t a[4] = {i32v(p), i32v(static_cast<std::int32_t>(len)), i32v(0),
+                                   i32v(1)};
+            wasmtime_val_t r;
+            if (call(fn.cx, fn.fn.provide, a, 4, &r, 1, why)) {
+                st = r.of.i32;
+                why.clear();
+            } else {
+                why = "the function trapped: " + why;
+            }
+            fn.sink = ZenByteSink{};
+            fn.words = ZenByteSink{};
+        }
+    }
+    drop_store(fn);
+    if (!why.empty() && words.write != nullptr) {
+        words.write(words.ctx, reinterpret_cast<const std::uint8_t*>(why.data()), why.size());
+    }
     return st;
 }
 

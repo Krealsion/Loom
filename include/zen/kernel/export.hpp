@@ -299,6 +299,47 @@ public:
         return decode_reading(st, bytes, authored, by, shape);
     }
 
+#if ZEN_ABI_VERSION >= 17
+    // ---- a call across the seam (MSG-14) -------------------------------------------
+    // The output is named by (name, version) and the answer re-admitted here against this
+    // library's own definition, as a reading is: the library never holds a value its own gate
+    // did not pass. No door, or a host table that does not reach it, is `NotOffered`.
+    loom::CallResult call(std::string_view role, loom::Value argument,
+                          std::shared_ptr<const loom::Schema> output) override {
+        if (!LOOM_HOST_DOOR(call) || output == nullptr) {
+            return loom::CallResult{};
+        }
+        const std::string bytes = loom::serialize(argument);
+        const std::string role_z(role);
+        HeldBytes answer;
+        HeldBytes words;
+        const ZenStatus st = host_->call(
+            host_->ctx, role_z.c_str(), reinterpret_cast<const std::uint8_t*>(bytes.data()),
+            bytes.size(), output->name().c_str(), output->version(),
+            ZenByteSink{&answer, &collect_bytes}, ZenByteSink{&words, &collect_bytes});
+        loom::CallResult out;
+        out.words = words.bytes;
+        if (st != ZEN_OK) {
+            out.refusal = call_refusal_of(st);
+            return out;
+        }
+        if (answer.lost) {
+            out.refusal = loom::CallRefusal::AnswerRefused;
+            out.words = "the answer was more than this library could hold";
+            return out;
+        }
+        loom::Admission a = loom::admit(loom::parse(answer.bytes), output);
+        if (!a.ok()) {
+            out.refusal = loom::CallRefusal::AnswerRefused;
+            out.words = a.first_error().message();
+            return out;
+        }
+        out.refusal = loom::CallRefusal::None;
+        out.answer = std::move(a).value();
+        return out;
+    }
+#endif
+
     // ---- Joint publication: the claimant's one verb across the seam ---------------
     // A missing door refuses with `NoLiveDelivery`. The initiator's verbs do not cross: a loaded
     // weave inherits `loom::Bus`'s refusing defaults for them, since the authority is a native
@@ -341,6 +382,19 @@ private:
         }
         return loom::JointRefusal::NoLiveDelivery;
     }
+
+#if ZEN_ABI_VERSION >= 17
+    /// ZEN_ERR_CALL_BASE minus the enumerator, back to the enumerator; anything else, `None`
+    /// included, reads as `Failed`, never as an answer.
+    static loom::CallRefusal call_refusal_of(ZenStatus st) {
+        const int why = ZEN_ERR_CALL_BASE - st;
+        if (why > static_cast<int>(loom::CallRefusal::None) &&
+            why <= static_cast<int>(loom::CallRefusal::AnswerRefused)) {
+            return static_cast<loom::CallRefusal>(why);
+        }
+        return loom::CallRefusal::Failed;
+    }
+#endif
 
     /// The host's status, back to the four refusals; an unknown status becomes `NoClaim`, never
     /// a success.
@@ -535,6 +589,25 @@ void do_destroy(void* instance) {
     delete static_cast<S*>(instance);
 }
 
+/// The functions the weave provides, read from its class with no instance: what `Provides<...>`
+/// declares. A weave not built on `WeaveBase` provides nothing across the seam.
+template <class S>
+std::vector<loom::ProvidedFunction> provided_of() {
+    if constexpr (requires { S::zen_provided(); }) {
+        return S::zen_provided();
+    } else {
+        return {};
+    }
+}
+
+/// The manifest an image built against this header writes: one built before the provided
+/// functions writes the version that has no section for them.
+#if ZEN_ABI_VERSION >= 17
+inline constexpr std::uint32_t kImageManifestVersion = ::loom::kManifestVersion;
+#else
+inline constexpr std::uint32_t kImageManifestVersion = ::loom::kManifestOldest;
+#endif
+
 template <class S>
 ZenStatus do_describe(void* instance, ZenByteSink sink) {
     try {
@@ -552,9 +625,14 @@ ZenStatus do_describe(void* instance, ZenByteSink sink) {
         // accept-set so a divergent definition refuses at load. Read through the virtual a native
         // weave answers, so a raw `loom::Weave` sends no section. Vocabulary only.
         const std::vector<std::shared_ptr<const loom::Schema>> emits = s->emitted_schemas();
-        sink_write(sink, loom::serialize(loom::encode_manifest(accepted, state.schema(),
-                                                                     ask ? &*ask : nullptr,
-                                                                     &claims, &emits)));
+        // The functions it provides, so a host knows them before the image runs (MSG-14).
+        std::vector<loom::ProvidedShapes> provides;
+        for (const loom::ProvidedFunction& f : provided_of<S>()) {
+            provides.push_back(loom::ProvidedShapes{f.input, f.output});
+        }
+        sink_write(sink, loom::serialize(loom::encode_manifest(
+                             accepted, state.schema(), ask ? &*ask : nullptr, &claims, &emits,
+                             &provides, kImageManifestVersion)));
         return ZEN_OK;
     } catch (...) {
         return ZEN_ERR;
@@ -633,6 +711,44 @@ ZenStatus do_revive(void* instance, const std::uint8_t* state, std::size_t len) 
         }
         s->revive(a.value());
         return ZEN_OK;
+    } catch (...) {
+        return ZEN_ERR;
+    }
+}
+
+/// One provided function, of its argument alone (MSG-14): no instance and no host table reach it.
+/// The argument's shape names the function, and its bytes are re-admitted here against the
+/// library's own input shape; the answer is written as value bytes. A refused argument is
+/// ZEN_ERR_REFUSED, a shape this image provides nothing for ZEN_ERR_UNKNOWN_SCHEMA, and a
+/// function that threw ZEN_ERR, each with its words.
+template <class S>
+ZenStatus do_provide(const std::uint8_t* argument, std::size_t len, ZenByteSink answer,
+                     ZenByteSink words) {
+    try {
+        loom::Unverified u = loom::parse(as_view(argument, len));
+        for (const loom::ProvidedFunction& f : provided_of<S>()) {
+            if (f.input->name() != u.claimed_name() || f.input->version() != u.claimed_version()) {
+                continue;
+            }
+            loom::Admission a = loom::admit(u, f.input);
+            if (!a.ok()) {
+                say_refusal(words, "the argument is refused by this image's gate: " +
+                                       a.first_error().message());
+                return ZEN_ERR_REFUSED;
+            }
+            loom::ProvidedAnswer out = f.compute(a.value());
+            if (!out.value) {
+                say_refusal(words, out.failure);
+                return ZEN_ERR;
+            }
+            sink_write(answer, loom::serialize(*out.value));
+            return ZEN_OK;
+        }
+        say_refusal(words, "this image provides no function from " + u.claimed_name());
+        return ZEN_ERR_UNKNOWN_SCHEMA;
+    } catch (const std::exception& e) {
+        say_refusal(words, e.what());
+        return ZEN_ERR;
     } catch (...) {
         return ZEN_ERR;
     }
@@ -739,6 +855,16 @@ ZenStatus do_handle(void* instance, const ZenDelivery* d, const std::uint8_t* pa
 #define ZEN_DETAIL_CREATION_THUNKS(WeaveClass)
 #define ZEN_DETAIL_CREATION_SLOTS
 #endif
+#if ZEN_ABI_VERSION >= 17
+#define ZEN_DETAIL_PROVIDE_THUNK(WeaveClass)                                                       \
+    static ZenStatus zen__abi_provide(const uint8_t* a, size_t n, ZenByteSink r, ZenByteSink w) {  \
+        return ::loom::detail::do_provide<WeaveClass>(a, n, r, w);                                 \
+    }
+#define ZEN_DETAIL_PROVIDE_SLOT , .provide = zen__abi_provide
+#else
+#define ZEN_DETAIL_PROVIDE_THUNK(WeaveClass)
+#define ZEN_DETAIL_PROVIDE_SLOT
+#endif
 
 // Generate the C ABI for a Weave class: thunks with C linkage forwarding to the helpers above.
 // Exactly one ZEN_EXPORT_WEAVE per library.
@@ -772,11 +898,12 @@ ZenStatus do_handle(void* instance, const ZenDelivery* d, const std::uint8_t* pa
         return ::loom::detail::do_claim_published<WeaveClass>(i, v, n);                     \
     }                                                                                              \
     ZEN_DETAIL_CREATION_THUNKS(WeaveClass)                                                          \
+    ZEN_DETAIL_PROVIDE_THUNK(WeaveClass)                                                            \
     ZEN_KERNEL_EXPORT const ZenWeaveAbi* zen_weave_abi(void) {                                      \
         static const ZenWeaveAbi abi = {.abi_version     = ZEN_ABI_VERSION,                         \
                                         .size            = sizeof(ZenWeaveAbi),                    \
                                         .host_size       = sizeof(ZenHostApi),                     \
-                                        .manifest_version = ::loom::kManifestVersion,              \
+                                        .manifest_version = ::loom::detail::kImageManifestVersion, \
                                         .create          = zen__abi_create,                        \
                                         .destroy         = zen__abi_destroy,                       \
                                         .describe        = zen__abi_describe,                      \
@@ -785,7 +912,7 @@ ZenStatus do_handle(void* instance, const ZenDelivery* d, const std::uint8_t* pa
                                         .revive          = zen__abi_revive,                        \
                                         .handle          = zen__abi_handle,                        \
                                         .claim_published = zen__abi_claim_published               \
-                                        ZEN_DETAIL_CREATION_SLOTS};                                \
+                                        ZEN_DETAIL_CREATION_SLOTS ZEN_DETAIL_PROVIDE_SLOT};        \
         return &abi;                                                                               \
     }                                                                                              \
     }
