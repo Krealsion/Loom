@@ -129,8 +129,8 @@ registered in the change that found it.
 
 ### The checks
 
-Four entries on the official lane hold this, each naming the file and line of what it
-refuses:
+Each check `tests/text_checks.cmake` names holds this, one bullet a check, and names the
+file and line of what it refuses:
 
 - `source_comments` (`tests/check_source_comments.cmake`) reads first-party C/C++, CMake, the
   two population manifests, Python and shell, and the session tooling's launchers: a comment
@@ -156,10 +156,15 @@ refuses:
   top-level folder, as the tail of a path (`test_gate.cpp`, `zen/kernel/control.hpp`). A name the
   tree does not hold, a file the host writes or a build's tree, is a row of
   [`tests/doc_names.txt`](tests/doc_names.txt), and a row no page needs is a red. A suite, an
-  entry or a gate named beside that word is one the population files declare, and every law in a
-  range such as `POP-01..05` is declared.
+  entry or a gate named beside that word is one the population files declare, and so is a
+  backticked name in parentheses after a path in the routing table, which is an entry. Every law
+  in a range such as `POP-01..05` is declared. The bullets under this heading name the checks
+  `tests/text_checks.cmake` lists, and a missing or an extra name is a red.
 - `code_values` (`tests/check_code_values.cmake`) holds the values the code owns, as the
   section above says.
+- `census` (`tests/check_census.cmake`) holds every row of
+  [`tests/census.txt`](tests/census.txt) exactly, in either direction: a file's lines, a class's
+  members, a table's doors. A row marked `falls` is refused when it has risen against the base.
 
 What a private id is, `tests/private_ids.cmake` says once for both. Every current-facing
 document and every first-party source file is held to this standard; vendored code is not. No

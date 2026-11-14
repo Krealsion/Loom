@@ -264,8 +264,8 @@ Laws POP-01 to POP-05 in [population](../laws/population-laws.md); the manifests
 ## Documentation and its checks
 
 [Comments and documents](../../CONTRIBUTING.md#comments-and-documents) and
-[the checks](../../CONTRIBUTING.md#the-checks); the entries `doc_links`, `doc_names`,
-`source_comments`, `doc_standard` and `code_values`, run together by `cmake -P tests/documentation_lane.cmake`.
+[the checks](../../CONTRIBUTING.md#the-checks); the entries `tests/text_checks.cmake` lists
+(`ZEN_TEXT_CHECKS`), run together by `cmake -P tests/documentation_lane.cmake`.
 
 - **A change that touches no compiled line is verified by the documentation lane.**
   [Build and test](../../AGENTS.md#build-and-test)

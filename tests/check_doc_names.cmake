@@ -1,10 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (c) 2026 Joshua DeMoss
 #
-# The `doc_names` entry (CONTRIBUTING.md#the-checks): does each name the routers and the
-# contributor's pages give still name something -- a file or folder of this tree, a suite, a CTest
-# entry or a gate the population files declare, and for a range of laws, each law in it? doc_links
-# holds the Markdown links and doc_standard a single law id; these names are this check's.
+# The `doc_names` entry (CONTRIBUTING.md#the-checks): a name still names a file or folder, a
+# suite, an entry or a gate, a backticked name in parentheses after a routing-table path (an
+# entry), or each law in a range, and the bullets under "The checks" are ZEN_TEXT_CHECKS.
 #   cmake -P tests/check_doc_names.cmake    (from the repository root, or -DZEN_REPO=<repo>)
 
 cmake_minimum_required(VERSION 3.16)
@@ -18,6 +17,7 @@ if(NOT EXISTS "${ZEN_REPO}/AGENTS.md")
                         "(no AGENTS.md). Pass -DZEN_REPO=<repository root>.")
 endif()
 include("${CMAKE_CURRENT_LIST_DIR}/private_ids.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/text_checks.cmake")
 
 # ---- scope ------------------------------------------------------------------------------------
 # The pages read: the two routers and the pages a contributor is sent to. A guide names the files
@@ -40,6 +40,8 @@ string(REPLACE ";" "|" ZEN_NAMES_EXT_RX "${ZEN_NAMES_EXTENSIONS}")
 set(ZEN_NAMES_PATH_RX "^[A-Za-z0-9_.*{][A-Za-z0-9_.+*{},/-]*(/|[.](${ZEN_NAMES_EXT_RX}))$")
 # A path written bare in a routing table's cell: no `*`, no choice, maybe climbing with `../`.
 set(ZEN_NAMES_BARE_RX "([.][.]/)*[A-Za-z0-9_][A-Za-z0-9_.+-]*(/[A-Za-z0-9_.+-]+)*([.](${ZEN_NAMES_EXT_RX})|/)")
+# That path, then a parenthesis whose only contents are one backticked name: the name is an entry.
+set(ZEN_NAMES_ENTRY_RX "${ZEN_NAMES_BARE_RX} \\(`[a-z][a-z0-9_]*`\\)")
 set(ZEN_NAMES_ID "`[a-z][a-z0-9_]*`")
 set(ZEN_NAMES_SEP "(, and | and | or |, )")
 # A suite, an entry or a gate named in a sentence: the names before the word, or the names after.
@@ -298,6 +300,20 @@ function(zen_names_page label dir text)
                 set(routing TRUE)
             elseif(routing AND NOT line MATCHES "^[|][-| :]+$")
                 string(REGEX REPLACE "^[|][^|]*[|]" "" cells "${line}")
+                # Before the backticks go: a bare path then (`name`) names an entry.
+                string(REGEX MATCHALL "${ZEN_NAMES_ENTRY_RX}" paren_entries "${cells}")
+                foreach(paren_entry IN LISTS paren_entries)
+                    math(EXPR read "${read} + 1")
+                    if(NOT paren_entry MATCHES "\\(`([a-z][a-z0-9_]*)`\\)$")
+                        continue()
+                    endif()
+                    set(bare "${CMAKE_MATCH_1}")
+                    if(bare IN_LIST ZEN_NAMES_SUITES)
+                        continue()
+                    endif()
+                    set_property(GLOBAL APPEND PROPERTY ZEN_NAMES_PROBLEMS
+                        "${label}:${n}: `${bare}` is named as a suite or a CTest entry, and tests/suite_population.txt and tests/entry_population.txt declare none of that name")
+                endforeach()
                 string(REGEX REPLACE "`[^`]*`" " " cells "${cells}")
                 string(REGEX REPLACE "https?://[^ )]*" " " cells "${cells}")
                 string(REGEX MATCHALL "${ZEN_NAMES_BARE_RX}" bare_paths "${cells}")
@@ -340,6 +356,82 @@ function(zen_names_page label dir text)
     set_property(GLOBAL PROPERTY ZEN_NAMES_READ ${total})
 endfunction()
 
+# The bullets under "### The checks", to the next heading. The first backticked name on each is a
+# check, and the set is exactly `checks` (ZEN_TEXT_CHECKS on the real page). No heading names
+# every check missing. A second occurrence is twice. Either difference is a problem.
+function(zen_names_checks_held label raw checks)
+    zen_names_swap("${raw}" text)
+    string(REPLACE "\n" ";" lines "${text}")
+    set(in FALSE)
+    set(heading 0)
+    set(named "")
+    set(where "")
+    set(n 0)
+    set(read 0)
+    foreach(line IN LISTS lines)
+        math(EXPR n "${n} + 1")
+        if(NOT in)
+            if(line MATCHES "^### The checks[ \t]*$")
+                set(in TRUE)
+                set(heading ${n})
+            endif()
+            continue()
+        endif()
+        if(line MATCHES "^#+ ")
+            break()
+        endif()
+        if(NOT line MATCHES "^[ \t]*- ")
+            continue()
+        endif()
+        string(REGEX MATCH "`[^`]*`" span "${line}")
+        if(span STREQUAL "")
+            continue()
+        endif()
+        string(REPLACE "`" "" name "${span}")
+        if(NOT name MATCHES "^[a-z][a-z0-9_]*$")
+            continue()
+        endif()
+        math(EXPR read "${read} + 1")
+        if(name IN_LIST named)
+            set_property(GLOBAL APPEND PROPERTY ZEN_NAMES_PROBLEMS
+                "${label}:${n}: `${name}` is named twice in this list")
+            continue()
+        endif()
+        list(APPEND named "${name}")
+        list(APPEND where "${n}")
+    endforeach()
+    if(heading EQUAL 0)
+        foreach(check IN LISTS checks)
+            set_property(GLOBAL APPEND PROPERTY ZEN_NAMES_PROBLEMS
+                "${label}:1: `${check}` is one of ZEN_TEXT_CHECKS and this list does not name it")
+        endforeach()
+    else()
+        foreach(check IN LISTS checks)
+            if(check IN_LIST named)
+                continue()
+            endif()
+            set_property(GLOBAL APPEND PROPERTY ZEN_NAMES_PROBLEMS
+                "${label}:${heading}: `${check}` is one of ZEN_TEXT_CHECKS and this list does not name it")
+        endforeach()
+        list(LENGTH named named_count)
+        if(named_count GREATER 0)
+            math(EXPR last "${named_count} - 1")
+            foreach(i RANGE 0 ${last})
+                list(GET named ${i} name)
+                list(GET where ${i} at)
+                if(name IN_LIST checks)
+                    continue()
+                endif()
+                set_property(GLOBAL APPEND PROPERTY ZEN_NAMES_PROBLEMS
+                    "${label}:${at}: `${name}` is named in this list and is not one of ZEN_TEXT_CHECKS")
+            endforeach()
+        endif()
+    endif()
+    get_property(total GLOBAL PROPERTY ZEN_NAMES_READ)
+    math(EXPR total "0${total} + ${read}")
+    set_property(GLOBAL PROPERTY ZEN_NAMES_READ ${total})
+endfunction()
+
 # ---- the self-test: a canary page over a canary tree ------------------------------------------
 # Each line of the canary holds names that resolve beside names that do not, and the reading must
 # name exactly the second kind, by page, line and name, before the tree is asked anything.
@@ -370,7 +462,7 @@ string(CONCAT st_page
     "\n"
     "| Topic | Read | Laws | Tests | Why |\n"                                                  # 19
     "|---|---|---|---|---|\n"
-    "| a topic/ of topic/lost.md | reference/kernel.md#an-anchor, reference/lost.md | MSG-01 | tests/test_gate.cpp, test_schema.cpp, session/test_client.py, test_lost.cpp, lost_dir/ | (why)(laws/kernel-laws.md), ../include/zen/kernel/control.hpp, https://example.org/a/b.md |\n"  # 21
+    "| a topic/ of topic/lost.md | reference/kernel.md#an-anchor, reference/lost.md | MSG-01 | tests/test_gate.cpp, test_schema.cpp, session/test_client.py, test_lost.cpp, lost_dir/, tests/test_gate.cpp (`population`), tests/test_gate.cpp (`gone_f`), tests/test_gate.cpp (the `gone_g` cases) | (why)(laws/kernel-laws.md), ../include/zen/kernel/control.hpp, https://example.org/a/b.md |\n"  # 21
     "\n"
     "| Other | table |\n"
     "|---|---|\n"
@@ -396,6 +488,7 @@ set(st_want
     "canary/page.md:14: `gone_b` is named as a suite or a CTest entry, and tests/suite_population.txt and tests/entry_population.txt declare none of that name"
     "canary/page.md:16: `gone_c` is named as a suite or a CTest entry, and tests/suite_population.txt and tests/entry_population.txt declare none of that name"
     "canary/page.md:16: `gone_d` is named as a gate, and no row of tests/suite_population.txt or tests/entry_population.txt rides it"
+    "canary/page.md:21: `gone_f` is named as a suite or a CTest entry, and tests/suite_population.txt and tests/entry_population.txt declare none of that name"
     "canary/page.md:21: `reference/lost.md` names no file or folder of this tree"
     "canary/page.md:21: `test_lost.cpp` names no file or folder of this tree"
     "canary/page.md:21: `lost_dir/` names no file or folder of this tree")
@@ -408,6 +501,66 @@ get_property(st_used GLOBAL PROPERTY ZEN_NAMES_USED)
 if(NOT st_used STREQUAL "made.json;share/loom/")
     message(FATAL_ERROR "doc-names: SELF-TEST FAILED -- the canary used the rows '${st_used}', "
                         "want 'made.json;share/loom/'")
+endif()
+set_property(GLOBAL PROPERTY ZEN_NAMES_PROBLEMS "")
+set_property(GLOBAL PROPERTY ZEN_NAMES_USED "")
+set_property(GLOBAL PROPERTY ZEN_NAMES_READ 0)
+
+# The list's canary: a missing name and an extra name are red, and the same names are green.
+set(st_checks "doc_links;doc_names")
+string(CONCAT st_list
+    "### The checks\n"
+    "\n"
+    "- `doc_links` refuses a link.\n"
+    "- `extra_one` refuses something.\n")
+zen_names_checks_held("canary/checks.md" "${st_list}" "${st_checks}")
+get_property(st_problems GLOBAL PROPERTY ZEN_NAMES_PROBLEMS)
+set(st_want
+    "canary/checks.md:1: `doc_names` is one of ZEN_TEXT_CHECKS and this list does not name it"
+    "canary/checks.md:4: `extra_one` is named in this list and is not one of ZEN_TEXT_CHECKS")
+if(NOT st_problems STREQUAL st_want)
+    string(REPLACE ";" "\n  " st_shown "${st_problems}")
+    string(REPLACE ";" "\n  " st_wanted "${st_want}")
+    message(FATAL_ERROR "doc-names: SELF-TEST FAILED -- the check list read as\n  ${st_shown}\nwant\n  ${st_wanted}")
+endif()
+string(CONCAT st_list
+    "### The checks\n"
+    "\n"
+    "- `doc_names` refuses a name.\n"
+    "- `doc_links` refuses a link.\n")
+set_property(GLOBAL PROPERTY ZEN_NAMES_PROBLEMS "")
+zen_names_checks_held("canary/checks-green.md" "${st_list}" "${st_checks}")
+get_property(st_problems GLOBAL PROPERTY ZEN_NAMES_PROBLEMS)
+if(NOT st_problems STREQUAL "")
+    message(FATAL_ERROR "doc-names: SELF-TEST FAILED -- a list that matches read as '${st_problems}'")
+endif()
+string(CONCAT st_list
+    "### The checks\n"
+    "\n"
+    "- `doc_links` once.\n"
+    "- `doc_names` once.\n"
+    "- `doc_links` again.\n")
+set_property(GLOBAL PROPERTY ZEN_NAMES_PROBLEMS "")
+zen_names_checks_held("canary/checks-twice.md" "${st_list}" "${st_checks}")
+get_property(st_problems GLOBAL PROPERTY ZEN_NAMES_PROBLEMS)
+set(st_want
+    "canary/checks-twice.md:5: `doc_links` is named twice in this list")
+if(NOT st_problems STREQUAL st_want)
+    string(REPLACE ";" "\n  " st_shown "${st_problems}")
+    string(REPLACE ";" "\n  " st_wanted "${st_want}")
+    message(FATAL_ERROR "doc-names: SELF-TEST FAILED -- a repeated check read as\n  ${st_shown}\nwant\n  ${st_wanted}")
+endif()
+set(st_list "A page with no such heading.\n- `doc_links` sits outside it.\n")
+set_property(GLOBAL PROPERTY ZEN_NAMES_PROBLEMS "")
+zen_names_checks_held("canary/checks-none.md" "${st_list}" "${st_checks}")
+get_property(st_problems GLOBAL PROPERTY ZEN_NAMES_PROBLEMS)
+set(st_want
+    "canary/checks-none.md:1: `doc_links` is one of ZEN_TEXT_CHECKS and this list does not name it"
+    "canary/checks-none.md:1: `doc_names` is one of ZEN_TEXT_CHECKS and this list does not name it")
+if(NOT st_problems STREQUAL st_want)
+    string(REPLACE ";" "\n  " st_shown "${st_problems}")
+    string(REPLACE ";" "\n  " st_wanted "${st_want}")
+    message(FATAL_ERROR "doc-names: SELF-TEST FAILED -- a page with no check list read as\n  ${st_shown}\nwant\n  ${st_wanted}")
 endif()
 set_property(GLOBAL PROPERTY ZEN_NAMES_PROBLEMS "")
 set_property(GLOBAL PROPERTY ZEN_NAMES_USED "")
@@ -500,6 +653,9 @@ endforeach()
 # ---- the pages --------------------------------------------------------------------------------
 foreach(page IN LISTS page_files)
     file(READ "${ZEN_REPO}/${page}" text)
+    if(page STREQUAL "CONTRIBUTING.md")
+        zen_names_checks_held("${page}" "${text}" "${ZEN_TEXT_CHECKS}")
+    endif()
     zen_names_swap("${text}" text)
     get_filename_component(dir "${page}" DIRECTORY)
     zen_names_page("${page}" "${dir}" "${text}")
@@ -527,9 +683,12 @@ if(problems)
     message(FATAL_ERROR "doc-names FAILED: ${problem_count} problem(s):\n  ${shown}\n"
                         "A path a page names is a file or folder of this tree, read from the root, from "
                         "the page's folder or as the tail of a path, or a row of tests/doc_names.txt; a "
-                        "suite, an entry or a gate it names is one the population files declare; a "
-                        "range of laws names laws docs/laws/ declares.")
+                        "suite, an entry or a gate it names is one the population files declare, and so "
+                        "is a backticked name in parentheses after a path in the routing table; the "
+                        "bullets under The checks are ZEN_TEXT_CHECKS; a range of laws names laws "
+                        "docs/laws/ declares.")
 endif()
 message(STATUS "doc-names: PASSED -- every path the routers and the contributor's pages name is in the "
-               "tree or in tests/doc_names.txt, every suite, entry and gate they name is declared, and "
-               "every range of laws is whole")
+               "tree or in tests/doc_names.txt, every suite, entry and gate they name is declared, a "
+               "backticked name in parentheses after a routing-table path is an entry that is too, the "
+               "bullets under The checks are ZEN_TEXT_CHECKS, and every range of laws is whole")
