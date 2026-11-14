@@ -201,6 +201,10 @@ public:
     /// connections change.
     host::WaitSet wait_set();
 
+    /// Whether a live connection's output waits unwritten: what a host ending its session waits to
+    /// see leave, after the turn that queued it and the service that writes it.
+    bool owes() const noexcept;
+
     // ---- the decision seam, after the fact ----------------------------------------------
 
     /// SETTLE A DEFERRED CONNECTION. Admit registers its proxy under the verdict's grant and sends

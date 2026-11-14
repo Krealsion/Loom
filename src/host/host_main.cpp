@@ -78,19 +78,24 @@ constexpr bool kPackaged = LOOM_HOST_PACKAGED != 0;
 /// open, the command says PENDING, and the answer prints when it arrives.
 constexpr int kSettleTurns = 16;
 
-/// HOW OFTEN AN IDLE HOST LOOKS AT ITS LINKS. The host rests in one wait over its console and,
-/// serving, its door, and wakes the moment either has something; a link's socket is not in that
-/// wait, so while a link is mounted the wait ends this often to read it. The interactive host's
-/// is a console's latency; serve mode's, `kServeLinkLookMs`, a service's.
-constexpr int kLinkLookMs = 100;
+/// THE MOST LINKS ONE HOST MOUNTS. The host rests in one wait over its console, its links and,
+/// serving, its door, and each link takes its places in that wait (`LinkWeave::wait_set`): its
+/// signal and, on POSIX, its socket. This many always fit beside a full door, so a link is never
+/// left out of the wait. A boot plan's row past it is not mounted, and says so.
+constexpr std::size_t kMaxLinks = 8;
+static_assert(1 /* the console */ + 2 /* the door's signal and listener */ +
+                      loom::BridgeServer::kMaxWeaverConnections + 2 * kMaxLinks <=
+                  loom::host::kMaxWaitedHandles,
+              "the console, a full door and every link fit in the host's one wait");
 
 /// How long a boot waits on a far host's Welcome or Denied for one link. A far host that
 /// answers nothing in this time is reported as such; the link stays mounted and unlinked.
 constexpr int kLinkConnectMs = 3000;
 
-/// How often an idle session host looks at its links: the longest a far host's frame waits unread
-/// there. Its clients' requests wake it at once, through its door.
-constexpr int kServeLinkLookMs = 5;
+/// The longest a session host's end waits for its last answers to leave and for the client that
+/// asked for the end to go: the turns that deliver them, and the wait on the door's sockets. A
+/// client that has stopped reading, or stays connected, does not hold the host open past it.
+constexpr int kLastAnswerMs = 1000;
 
 // ---- launch parameters ------------------------------------------------------
 //
@@ -358,6 +363,13 @@ public:
     std::vector<std::string> mount_links(const std::vector<loom::host::LinkEntry>& entries) {
         std::vector<std::string> said;
         for (const loom::host::LinkEntry& e : entries) {
+            if (links_.size() >= kMaxLinks) {
+                said.push_back("  link " + e.name + " -> " + e.connect +
+                               ": not mounted -- a host mounts at most " +
+                               std::to_string(kMaxLinks) + " links, each in its one wait, and the "
+                               "plan's first " + std::to_string(kMaxLinks) + " are mounted");
+                continue;
+            }
             auto link = std::make_unique<loom::host::LinkWeave>(e.name, e.connect, e.identity,
                                                                 e.credential);
             loom::host::LinkWeave* raw = link.get();
@@ -1798,8 +1810,8 @@ int main(int argc, char** argv) {
         //
         // Both parties get served, every pass: one bounded bus turn, then the person. Nothing here
         // can fail to return because a participant keeps talking: a busy bus only looks, and an idle
-        // host rests in the one wait over its console and door (zen/host/reactor.hpp), which a line,
-        // a client and an answer the door owes each end at once.
+        // host rests in the one wait (zen/host/reactor.hpp) over its console, links and door, which
+        // a line, a far frame, a send queued, a client and an answer owed each end at once.
         loom::host::LineInput input;
         bool prompt_shown = false;
         bool running = true;
@@ -1811,18 +1823,23 @@ int main(int argc, char** argv) {
         bool console_open = true;
         loom::host::Reactor rest(session.bus());
         rest.watch(&input);
-        if (door != nullptr && door->server() != nullptr) {
-            loom::BridgeServer* const server = door->server();
-            rest.watch_own([server] { return server->wait_set(); });
+        // What the host serves itself after each turn, in one set: the door's and every link's.
+        loom::BridgeServer* const server = door != nullptr ? door->server() : nullptr;
+        if (server != nullptr || !session.links().empty()) {
+            rest.watch_own([&session, server] {
+                loom::host::WaitSet set = server != nullptr ? server->wait_set()
+                                                            : loom::host::WaitSet{};
+                for (loom::host::LinkWeave* l : session.links()) {
+                    const loom::host::WaitSet one = l->wait_set();
+                    set.handles.insert(set.handles.end(), one.handles.begin(), one.handles.end());
+                    set.writable.insert(set.writable.end(), one.writable.begin(),
+                                        one.writable.end());
+                }
+                return set;
+            });
         }
-        const auto rest_after_turn = [&session, &rest, door] {
-            if (session.busy()) {
-                return rest.after_turn(0);
-            }
-            if (!session.links().empty()) {
-                return rest.after_turn(door != nullptr ? kServeLinkLookMs : kLinkLookMs);
-            }
-            return rest.after_turn();
+        const auto rest_after_turn = [&session, &rest] {
+            return session.busy() ? rest.after_turn(0) : rest.after_turn();
         };
         while (running) {
             session.turn();
@@ -1875,12 +1892,26 @@ int main(int argc, char** argv) {
             print_new_notes(store, &notes_shown);
         }
         if (door != nullptr) {
-            // THE LAST ANSWER LEAVES BEFORE THE PROCESS DOES. The Shutdown's Ack was queued in the
-            // turn that saw it; a few more bounded turns deliver it to the client's session and
-            // flush its socket. Bounded: a client that stopped reading does not hold the host open.
-            for (int i = 0; i < 8; ++i) {
+            // THE LAST ANSWER LEAVES BEFORE THE PROCESS DOES. The turns after the Shutdown deliver
+            // its Ack, the wait on the door's sockets lasts until it is written, and the client
+            // that asked is served until it goes. Done when the bus is idle, the door owes nothing
+            // and that client has gone; bounded by `kLastAnswerMs`, so a client that stopped
+            // reading, or stays, does not hold the host open.
+            const auto until =
+                std::chrono::steady_clock::now() + std::chrono::milliseconds(kLastAnswerMs);
+            for (;;) {
                 session.turn();
-                (void)rest.after_turn(kServeLinkLookMs);
+                if (!session.busy() && (server == nullptr || !server->owes()) &&
+                    !door->asker_connected()) {
+                    break;
+                }
+                const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                      until - std::chrono::steady_clock::now())
+                                      .count();
+                if (left <= 0) {
+                    break;
+                }
+                (void)rest.after_turn(session.busy() ? 0 : left);
             }
             const std::string reason = door->ending() ? door->ending_reason()
                                                       : std::string("ended at its console");
