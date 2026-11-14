@@ -600,6 +600,8 @@ Reactor::Woke Reactor::Impl::after_turn(std::optional<std::int64_t> ms) {
 
     Woke woke;
     woke.now_ms = clock.now_ms();
+    woke.date_ms = clock.date_ms(); // read with it, and handed to the bus with it
+    bus.begin_turn(TurnFacts{woke.now_ms, woke.date_ms}); // the turn this wait begins
     woke.line = found.line;
     woke.own = found.own;
     woke.deadline = host_deadline && woke.now_ms >= *host_until;

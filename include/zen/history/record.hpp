@@ -16,6 +16,7 @@
 #include <zen/switchboard.hpp>
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -117,6 +118,9 @@ struct HistoryRecord {
     std::uint64_t correlation = 0;     ///< 0 == none stated (and a legal choice; ANS-05)
     std::uint64_t dispatch_parent = 0; ///< SYNCHRONOUS ancestry only — see BusEvent
     std::uint64_t handler_elapsed_ns = 0;
+    /// The turn's time and date the delivery was handed, as the bus stamped it: none where no
+    /// wait began its turn. Kept so a handler's time can be read back as it was handed.
+    std::optional<TurnFacts> turn{};
     RecordedOutcome outcome = RecordedOutcome::None;
     RefusalReason refusal = RefusalReason::None;
     std::string refusal_detail; ///< the gate's field path / expected / actual, where there is one

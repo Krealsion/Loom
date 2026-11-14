@@ -399,6 +399,14 @@ public:
         res_.unlimited_memory = true;
         return *this;
     }
+    /// May be told the time: the turn's time and date on its deliveries. A weave running in the
+    /// host's process is told them whatever its grant, since it can read the clock as easily; a
+    /// boxed or contained one, which cannot, is told them only with this.
+    /// docs/reference/capabilities.md#the-box-a-weave-built-as-a-webassembly-module
+    Grant& with_time() {
+        time_ = true;
+        return *this;
+    }
 
     /// True iff some rule permits sending shape (name, version) to `target`.
     bool permits(std::string_view shape_name, std::uint32_t shape_version, WeaveId target) const {
@@ -429,6 +437,8 @@ public:
     const LiveAuthority& live() const noexcept { return live_; }
 
     std::uint32_t os_capabilities() const noexcept { return os_; }
+    /// Whether a boxed or contained weave is told the turn's time (`with_time`).
+    bool knows_time() const noexcept { return time_; }
     bool has_os_capability(std::uint32_t cap) const noexcept {
         return cap != 0 && (os_ & cap) == cap;
     }
@@ -446,6 +456,7 @@ private:
     /// The containment policy, consumed once, out of process, into namespace, mount view and
     /// cgroup state this process cannot revisit, so the delegation door cannot reach it.
     std::uint32_t os_ = 0;
+    bool time_ = false; // told the turn's time, boxed or contained (`with_time`)
     FsAccess fs_ = FsAccess::None; // safe default
     std::string fs_path_;          // the tree ReadOnly exposes (empty otherwise)
     ResourceLimits res_;           // bounded-by-default resource limits

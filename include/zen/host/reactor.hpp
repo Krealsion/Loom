@@ -85,6 +85,8 @@ public:
         bool own = false;         ///< what the host serves itself (`watch_own`) is ready
         bool deadline = false;    ///< the host's own deadline came
         std::int64_t now_ms = 0;  ///< the clock when the wait ended
+        std::int64_t date_ms = 0; ///< its date then; both are handed to the bus as the next
+                                  ///< turn's time (Switchboard::begin_turn)
     };
 
     /// AFTER A TURN: read every trusted role's claim, tell each whether the wait holds it, wait

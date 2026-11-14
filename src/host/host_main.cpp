@@ -1725,10 +1725,7 @@ int main(int argc, char** argv) {
         facts.lifetime = lifetime;
         facts.host = kVersion;
         facts.abi = ZEN_ABI_VERSION;
-        facts.started_ms = static_cast<std::int64_t>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::system_clock::now().time_since_epoch())
-                .count());
+        facts.started_ms = loom::host::MachineClock{}.date_ms(); // the host's clock's calendar
 #ifdef _WIN32
         facts.pid = static_cast<std::int64_t>(_getpid());
 #else

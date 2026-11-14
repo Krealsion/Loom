@@ -666,7 +666,14 @@ puts a handle there; a weave that wants time asks such a source by message.
 suite gives a `loom::host::ManualClock`, which moves only when told: the wait then only looks at
 its handles, and when nothing is ready it moves the clock to its soonest deadline and wakes what is
 due there. A case runs its host's real loop and asks for a time, and every timer due by then
-fires, in order, with no wait counted as time:
+fires, in order, with no wait counted as time. A clock has a date beside it, `date_ms()`, the
+calendar for a person and a record, never a deadline: the machine's, or the one a
+`ManualClock(start, date)` is given, which moves with its readings. When the wait ends it reads
+both and hands them to the bus, and every delivery of the turn it begins carries them
+(`mail.turn_ms()`, `mail.turn_date_ms()`; [messaging](../reference/messaging.md#the-turns-time-on-a-delivery)),
+so a handler acts on the time its turn was handed and reads no clock of its own. The supplied
+host's own dates, a session's start and the run manager's stamps, are its clock's calendar. A
+case's loop:
 
 ```cpp
 loom::host::ManualClock clock;

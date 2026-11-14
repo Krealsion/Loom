@@ -4,10 +4,12 @@
 #ifndef ZEN_SWITCHBOARD_MESSAGE_HPP
 #define ZEN_SWITCHBOARD_MESSAGE_HPP
 
+#include <zen/switchboard/turn.hpp>
 #include <zen/value.hpp>
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -230,6 +232,10 @@ struct Message {
     /// and no authority. Written by the Switchboard at dispatch, on a message it builds there,
     /// so a sender's value never reaches a recipient.
     std::string addressed_role{};
+    /// The turn's time and date, when the host's wait began the turn this is delivered in; none
+    /// otherwise. Written by the Switchboard at dispatch, as `addressed_role` is, so no sender's
+    /// value reaches a recipient (zen/switchboard/turn.hpp).
+    std::optional<TurnFacts> turn{};
 
     explicit Message(Value payload_, WeaveId sender_ = {}, WeaveId reply_to_ = {},
                      std::uint64_t correlation_ = 0)

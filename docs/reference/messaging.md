@@ -74,6 +74,18 @@ with a shape this Loom has never heard of — rejected at the library/host seam
 before routing, so no target was ever consulted; a publication addresses nothing
 and is not refused for this, see [diagnostics](#diagnostics-and-the-seam)).
 
+### The turn's time on a delivery
+
+A delivery carries the turn's time and date when the host's wait began the turn it is dispatched
+in: `mail.turn_ms()`, the host's steady clock then, for durations and deadlines, and
+`mail.turn_date_ms()`, the calendar at that moment, for a person and a record. Every delivery of
+one turn carries the same two readings, whatever its source. The bus writes them at dispatch, as
+it writes the addressed role, so no sender sets them and no shape holds them. A dispatch call that
+follows no wait carries none: a suite turning the bus by hand hands none, and one running its
+host's loop on a `ManualClock` hands that clock's readings. A boxed or contained weave is handed
+them only where its grant gives it time (`Grant::with_time`), and history keeps both with each
+delivery ([the decision](../decisions/the-turns-time-on-every-delivery.md)).
+
 ## Addressing
 
 - **Directed** — `send(WeaveId, msg)`.

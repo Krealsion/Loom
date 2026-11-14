@@ -965,6 +965,7 @@ OutOfProcessResult IsolationHost::mount(const std::string& name, const std::stri
     OutOfProcessWeave* raw = proxy.get();
     loom::WeaveId id;
     try {
+        link->knows_time = grant.knows_time();
         id = bus_.register_weave(std::move(proxy), std::move(grant), roles);
     } catch (const std::exception& e) {
         teardown_child(*link);
@@ -988,6 +989,14 @@ void IsolationHost::ship_deliver(Link& link, const loom::Message& in) {
     put_u64(facts, in.reply_to.value);
     put_u64(facts, in.correlation);
     put_bytes(facts, in.addressed_role);
+    // The turn's time, appended, and only for a child whose grant gives it: a flag, then both
+    // readings when it is set.
+    const bool told = link.knows_time && in.turn.has_value();
+    put_u8(facts, told ? 1 : 0);
+    if (told) {
+        put_u64(facts, static_cast<std::uint64_t>(in.turn->ms));
+        put_u64(facts, static_cast<std::uint64_t>(in.turn->date_ms));
+    }
     std::string frame;
     put_bytes(frame, facts);
     frame.append(bytes);
