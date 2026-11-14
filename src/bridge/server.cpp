@@ -639,6 +639,11 @@ void BridgeServer::on_tap(const loom::BusEvent& e) {
     if (!anyone) {
         return;
     }
+    // The tap a session is told carries deliveries and lives; a call is this host's own fact,
+    // told on its tap and to its console, and is not framed for a session (MSG-14).
+    if (e.kind == loom::EventKind::Called) {
+        return;
+    }
     std::uint8_t kind = kTapDelivered;
     switch (e.kind) {
     case loom::EventKind::Delivered:
@@ -656,6 +661,8 @@ void BridgeServer::on_tap(const loom::BusEvent& e) {
     case loom::EventKind::HandlerFailed:
         kind = kTapHandlerFailed;
         break;
+    case loom::EventKind::Called:
+        return;
     }
     std::string body;
     put_u8(body, kind);

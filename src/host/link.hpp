@@ -48,6 +48,10 @@ class LinkWeave final
                             observe::Release, observe::Acknowledge, observe::StatusRequested,
                             observe::Status>> {
 public:
+    /// The far host's functions are its own: a call to this link's role is refused `Linked`, and
+    /// a far function is asked by message (MSG-14).
+    loom::CallRefusal elsewhere() const override { return loom::CallRefusal::Linked; }
+
     /// The most crossings one link holds open at once. Each holds a deferred answer, which is
     /// host-side state the whole bus shares (`Switchboard::kMaxDeferredAnswers`), so a link
     /// keeps well inside it. Past it a new Ask is told `refused` at once, and every open one is

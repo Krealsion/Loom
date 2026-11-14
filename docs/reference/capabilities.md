@@ -24,8 +24,20 @@ EFFECTIVE  baseline union delegated — what the bus checks, at delivery
 ```
 
 `Grant` therefore has two halves, and the type says which is which: a
-`LiveAuthority` (send rules + observe rules), plus containment policy. Only the
-first is delegable, because only it is read at the moment of use.
+`LiveAuthority` (send rules, observe rules and call rules), plus containment
+policy. Only the first is delegable, because only it is read at the moment of use.
+
+### A call rule
+
+`Grant::allow_call(role, shape, version)` lets a weave call the function the
+holder of `role` provides for the input shape (`shape`, `version`)
+([calls](messaging.md#calls-a-function-of-its-argument-alone)). Absent by default,
+as an observe rule is, and exact on both axes: one role, one input shape, no
+wildcard. A send rule and an observe rule are never read for a call, and a call
+rule is read for nothing else: it is narrower than observing, since a caller
+learns one answer and never sees what the function's provider holds. It is read
+at each call, from the caller's effective authority, before the role is resolved;
+it is delegable as the other live rules are, and contained only by the same rule.
 
 ## Live delegation
 
@@ -263,7 +275,7 @@ its own, not B2 plus something: it needs no child process. Against the tiers:
   on every access and the box checks on every span and name a door is handed.
   Since it runs inside the host's own delivery it keeps every door a B2 child
   nulls: answers, deferred answers, role speech, claims and observations, joint
-  offers, and the provenance a delivery carries.
+  offers, calls, and the provenance a delivery carries.
 - **B3 and B4: nothing to project.** The module can import no socket, no
   descriptor and no clock, and every import outside the host's doors is refused
   when the module is opened. A grant giving an OS capability or a filesystem
@@ -308,6 +320,12 @@ as its runtime:
   speculative-execution channels are not addressed. A contained child is handed the
   turn's time across the pipe on the same grant
   ([the turn's time](dynamic-abi.md#the-turns-time)).
+- **A provider's function, imposed pure.** A boxed weave's provided function runs
+  in a store of its own, made for the call and dropped after it: no weave is made
+  in it, it is held to the box's default memory and one entry's steps, and every
+  door refuses there. It can reach no weave, its own included, and nothing it
+  writes outlives the call
+  ([calls](messaging.md#calls-a-function-of-its-argument-alone)).
 - **Not denial of service through the host.** Host-side decode of the module's
   bytes spends the decode bound
   ([below](#work-the-host-does-on-behalf-of-a-contained-participant)), and queues,

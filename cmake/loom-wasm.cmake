@@ -65,7 +65,8 @@ endfunction()
 set(_LOOM_WASM_CORE
     src/schema.cpp src/value.cpp src/gate.cpp src/registry.cpp src/serialize.cpp
     src/content_id.cpp src/detail/json.cpp src/detail/base64.cpp src/detail/binary.cpp
-    src/switchboard/asks.cpp src/switchboard/switchboard.cpp CACHE INTERNAL "")
+    src/switchboard/asks.cpp src/switchboard/calls.cpp src/switchboard/switchboard.cpp
+    CACHE INTERNAL "")
 
 function(loom_wasm_weave target)
     cmake_parse_arguments(PARSE_ARGV 1 _w "" "OUTPUT" "SOURCES;INCLUDE_DIRECTORIES;DEFINITIONS")

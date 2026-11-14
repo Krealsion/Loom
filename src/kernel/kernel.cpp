@@ -305,6 +305,20 @@ public:
                                            : abi->create_with(refusal, bytes, value.size());
     }
 
+    /// One of the image's functions, of its argument alone: no instance and no host table cross.
+    /// A NULL slot, or one past the descriptor's size, provides nothing and fails.
+    ZenStatus provide(const ZenWeaveAbi* abi, const std::string& argument, ZenByteSink answer,
+                      ZenByteSink words) const {
+        const auto* bytes = reinterpret_cast<const std::uint8_t*>(argument.data());
+#if defined(LOOM_ENABLE_WASM)
+        if (module_) {
+            return detail::box_provide(module_, bytes, argument.size(), answer, words);
+        }
+#endif
+        return abi->provide == nullptr ? ZEN_ERR
+                                       : abi->provide(bytes, argument.size(), answer, words);
+    }
+
     /// Give `instance` what its grant asks of the image itself. A library shares the host's
     /// process and takes nothing here; a box carries memory from the grant and refuses, in `why`,
     /// a grant whose reach it cannot give.
@@ -386,13 +400,31 @@ struct HostBytes {
     bool lost = false;
 };
 
+/// How many provided functions are running on this thread now. While one is, every host door
+/// refuses: a function has no table, and a table it kept from an earlier delivery reaches nothing,
+/// whatever its context points at (MSG-14).
+thread_local int t_functions_running = 0;
+
+/// One provided function's run, holding every door shut for its length.
+class FunctionRunning {
+public:
+    FunctionRunning() noexcept { ++t_functions_running; }
+    ~FunctionRunning() { --t_functions_running; }
+    FunctionRunning(const FunctionRunning&) = delete;
+    FunctionRunning& operator=(const FunctionRunning&) = delete;
+};
+
 /// Every host callback below runs its body through this, because no exception crosses the seam
 /// (zen/kernel/abi.h): the library that called may carry its own C++ runtime, under which an
 /// exception thrown here is undefined. Whatever stopped the host -- its delivery sequence
 /// exhausted, an observer that threw while a refusal was recorded, memory -- reaches the library
-/// as ZEN_ERR_REFUSED, the status that already says the host did not take the request.
+/// as ZEN_ERR_REFUSED, the status that already says the host did not take the request. So does
+/// a door called while a provided function runs, before its context is read.
 template <class Body>
 ZenStatus seam_guarded(Body&& body) noexcept {
+    if (t_functions_running > 0) {
+        return ZEN_ERR_REFUSED;
+    }
     try {
         return body();
     } catch (...) {
@@ -565,6 +597,9 @@ static ZenStatus zen_host_send_to_role(void* ctx, const char* role, std::uint64_
 // the ctx a library can reach is only ever the one for its own live delivery.
 static uint64_t zen_host_defer_answer(void* ctx) {
     // Its status is the token: 0, no conversation, whatever stopped the host (seam_guarded).
+    if (t_functions_running > 0) {
+        return 0;
+    }
     try {
         auto* h = static_cast<HostCtx*>(ctx);
         return h->gated->make_deferred_answer().opaque_token();
@@ -619,6 +654,9 @@ static ZenStatus zen_host_answer(void* ctx, const std::uint8_t* payload, std::si
 
 static void zen_host_release_deferred(void* ctx, uint64_t token) {
     // It answers nothing, so what stopped the host stays on the host's side (seam_guarded).
+    if (t_functions_running > 0) {
+        return;
+    }
     try {
         auto* h = static_cast<HostCtx*>(ctx);
         h->gated->release_deferred(loom::DeferredAnswer::from_host_token(token));
@@ -751,6 +789,65 @@ static ZenStatus zen_host_role_publish(void* ctx, const char* as_role, std::uint
         }
         if (p.refusal == loom::RefusalReason::PendingPerSender) {
             return ZEN_ERR_PENDING_PER_SENDER;
+        }
+        return ZEN_OK;
+    });
+}
+
+// ---- calls (MSG-14) --------------------------------------------------------
+// The argument is admitted here at the shape it names, as an outbound payload is, then the gated
+// WeaveBus's call door decides the rest: authority, the holder, the function, both gates. The
+// answer crosses back as value bytes the library re-admits against its own output shape. A call
+// the seam refuses before the door is told to the tap by the call unit, authority first.
+
+static void say_words(ZenByteSink sink, const std::string& words) {
+    if (sink.write != nullptr && !words.empty()) {
+        sink.write(sink.ctx, reinterpret_cast<const std::uint8_t*>(words.data()), words.size());
+    }
+}
+
+static ZenStatus call_status(loom::CallRefusal r) {
+    return ZEN_ERR_CALL_BASE - static_cast<ZenStatus>(r);
+}
+
+static ZenStatus zen_host_call(void* ctx, const char* role, const std::uint8_t* argument,
+                               std::size_t len, const char* output_name,
+                               std::uint32_t output_version, ZenByteSink answer,
+                               ZenByteSink words) {
+    return seam_guarded([&]() -> ZenStatus {
+        auto* h = static_cast<HostCtx*>(ctx);
+        const std::string_view to(role == nullptr ? "" : role);
+        loom::Unverified u = loom::parse(loom::as_view(argument, len));
+        std::shared_ptr<const loom::Schema> door =
+            h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
+        std::shared_ptr<const loom::Schema> output =
+            output_name == nullptr ? nullptr : h->sb->resolve_schema(output_name, output_version);
+        auto refused = [&](loom::CallRefusal why, std::string said) {
+            const loom::CallResult r = loom::CallDoor::refuse(
+                *h->sb, h->self, to, u.claimed_name(), u.claimed_version(), why, std::move(said));
+            say_words(words, r.words);
+            return call_status(r.refusal);
+        };
+        if (!door || !output) {
+            return refused(loom::CallRefusal::NotProvided,
+                           "no function takes or answers a shape this host does not know");
+        }
+        loom::Admission a = loom::admit(u, door, h->sb->registry());
+        if (!a.ok()) {
+            return refused(loom::CallRefusal::ArgumentRefused, a.first_error().message());
+        }
+        const loom::CallResult r = h->gated->call(to, std::move(a).value(), output);
+        say_words(words, r.words);
+        if (r.refusal != loom::CallRefusal::None) {
+            return call_status(r.refusal);
+        }
+        if (!r.answer) {
+            return call_status(loom::CallRefusal::Failed); // an answer that did not come
+        }
+        const std::string bytes = loom::serialize(*r.answer);
+        if (answer.write != nullptr) {
+            answer.write(answer.ctx, reinterpret_cast<const std::uint8_t*>(bytes.data()),
+                         bytes.size());
         }
         return ZEN_OK;
     });
@@ -945,9 +1042,10 @@ public:
                 std::vector<std::shared_ptr<const Schema>> accepted,
                 std::shared_ptr<const Schema> state_schema, loom::Switchboard* bus,
                 std::vector<std::shared_ptr<const Schema>> claims = {},
-                std::vector<std::shared_ptr<const Schema>> emits = {})
+                std::vector<std::shared_ptr<const Schema>> emits = {},
+                std::vector<ProvidedShapes> provides = {})
         : abi_(abi), instance_(instance), lib_(std::move(lib)), accepted_(std::move(accepted)),
-          claims_(std::move(claims)), emits_(std::move(emits)),
+          claims_(std::move(claims)), emits_(std::move(emits)), provides_(std::move(provides)),
           state_schema_(std::move(state_schema)), bus_(bus) {}
 
     /// The one place a live dynamic artifact ends, whoever caused it: the Kernel unloading, a
@@ -982,11 +1080,14 @@ public:
     void rebind(const ZenWeaveAbi* new_abi, void* new_instance,
                 std::shared_ptr<LoadedLibrary> new_lib,
                 std::vector<std::shared_ptr<const Schema>> new_claims,
-                std::vector<std::shared_ptr<const Schema>> new_emits) {
+                std::vector<std::shared_ptr<const Schema>> new_emits,
+                std::vector<ProvidedShapes> new_provides) {
         destroy_instance(abi_, instance_);
         abi_ = new_abi;
         instance_ = new_instance;
         lib_ = std::move(new_lib);
+        // The functions belong to the code too: a call after this reaches the successor's.
+        provides_ = std::move(new_provides);
         // The successor's declared sets are its own. The accept-set was required equal
         // before this ran; the claim-set and emit-set may differ, and the bus reads both again
         // at `swap_state` (SENSE-04: the claim-set belongs to the code).
@@ -1037,6 +1138,41 @@ public:
         return emits_;
     }
 
+    /// The functions the manifest says the image provides (MSG-14). Each runs the image's
+    /// `provide` slot, handed the argument's bytes and no instance or table, with every host door
+    /// shut for its length; the library and its descriptor are held for the run, never the
+    /// instance.
+    std::vector<loom::ProvidedFunction> provided_functions() const override {
+        std::vector<loom::ProvidedFunction> out;
+        out.reserve(provides_.size());
+        for (const ProvidedShapes& f : provides_) {
+            out.push_back(loom::ProvidedFunction{
+                f.input, f.output,
+                [lib = lib_, abi = abi_](const loom::Value& argument) -> loom::ProvidedAnswer {
+                    HostBytes answer;
+                    HostBytes words;
+                    ZenStatus st = ZEN_ERR;
+                    {
+                        const FunctionRunning shut;
+                        st = lib->provide(abi, loom::serialize(argument),
+                                          ZenByteSink{&answer, &zen_host_sink},
+                                          ZenByteSink{&words, &zen_host_sink});
+                    }
+                    if (st != ZEN_OK || answer.lost) {
+                        std::string said = words.bytes;
+                        if (said.empty()) {
+                            said = answer.lost ? "the host could not hold the function's answer"
+                                               : "the function failed with status " +
+                                                     std::to_string(st);
+                        }
+                        return loom::ProvidedAnswer{std::nullopt, std::nullopt, std::move(said)};
+                    }
+                    return loom::ProvidedAnswer{std::nullopt, std::move(answer.bytes), {}};
+                }});
+        }
+        return out;
+    }
+
     void handle(const loom::Message& in, loom::Bus& bus) override {
         const std::string bytes = loom::serialize(in.payload);
         // `bus` is the per-delivery WeaveBus (it gates by this loaded Weave's id);
@@ -1065,8 +1201,10 @@ public:
                        .sense_observe_role = &zen_host_sense_observe_role,
                        // the claimant's joint offer; its type is unique in this table
                        .sense_offer          = &zen_host_sense_offer,
-                       // since 15, last in declaration order; its type is unique too
-                       .ask                  = &zen_host_ask};
+                       // since 15; its type is unique too
+                       .ask                  = &zen_host_ask,
+                       // since 17, last in declaration order; its type is unique
+                       .call                 = &zen_host_call};
         // Provenance crosses as host-computed facts beside the sender, and it
         // crosses ONE WAY ONLY: the role doors above carry REQUESTS the host
         // verifies, never attested facts, so the seam is a place a loaded weave
@@ -1171,6 +1309,7 @@ private:
     std::vector<std::shared_ptr<const Schema>> accepted_;
     std::vector<std::shared_ptr<const Schema>> claims_; ///< the declared claim-set
     std::vector<std::shared_ptr<const Schema>> emits_;  ///< the declared emit-set
+    std::vector<ProvidedShapes> provides_;              ///< the functions it provides
     std::shared_ptr<const Schema> state_schema_;
     loom::Switchboard* bus_;
     loom::WeaveId self_{};
@@ -1278,7 +1417,15 @@ Kernel::Manifest Kernel::reconstruct(const ZenWeaveAbi* abi, void* instance) {
         throw DllBoundaryError("library describe() failed with status " + std::to_string(st));
     }
     loom::Unverified u = loom::parse(held_bytes(out, "describe()"));
-    loom::Admission a = loom::admit(u, manifest_schema()); // the gate, for the schema descriptor
+    // The manifest at the version it claims, among the ones this host reads; the descriptor's
+    // version was judged before the image ran.
+    const std::shared_ptr<const Schema> meta = manifest_schema(u.claimed_version());
+    if (meta == nullptr) {
+        throw DllBoundaryError("library manifest is zen.Manifest version " +
+                               std::to_string(u.claimed_version()) +
+                               ", which this host does not read");
+    }
+    loom::Admission a = loom::admit(u, meta); // the gate, for the schema descriptor
     if (!a.ok()) {
         throw DllBoundaryError("library manifest refused by the gate: " + a.first_error().message());
     }
@@ -1319,6 +1466,31 @@ Kernel::Manifest Kernel::reconstruct(const ZenWeaveAbi* abi, void* instance) {
             auto s = decode_schema(*c.as_message(), registry_);
             vocabulary.push_back(s);
             result.emits.push_back(std::move(s));
+        }
+    }
+    // The functions it provides (MSG-14), each shape claimed through the same wall: a function's
+    // input or output two images define differently refuses the load. The image must carry the
+    // slot that runs them, and one input names one function.
+    if (const loom::Cell* provides = manifest.get("provides")) {
+        if (abi->provide == nullptr) {
+            throw DllBoundaryError("library manifest names provided functions, and the image has "
+                                   "no provide slot to run them");
+        }
+        for (const loom::Cell& c : provides->as_list()) {
+            const loom::Value& one = *c.as_message();
+            ProvidedShapes f{decode_schema(*one.get("input")->as_message(), registry_),
+                             decode_schema(*one.get("output")->as_message(), registry_)};
+            for (const ProvidedShapes& g : result.provides) {
+                if (g.input->name() == f.input->name() &&
+                    g.input->version() == f.input->version()) {
+                    throw DllBoundaryError("library manifest names two functions from " +
+                                           f.input->name() + " v" +
+                                           std::to_string(f.input->version()));
+                }
+            }
+            vocabulary.push_back(f.input);
+            vocabulary.push_back(f.output);
+            result.provides.push_back(std::move(f));
         }
     }
     // The ask, if the artifact emitted one. READ AND CARRIED, NEVER CONSULTED: it
@@ -1484,7 +1656,7 @@ LoadResult Kernel::load_impl(const std::string& name, const std::string& path,
         Grant baseline = grant;
         adapter = std::make_unique<HostAdapter>(abi, instance, lib, std::move(mf.accepted),
                                                 std::move(mf.state), &bus_, std::move(mf.claims),
-                                                std::move(mf.emits));
+                                                std::move(mf.emits), std::move(mf.provides));
         adapter_built = true;
         HostAdapter* raw = adapter.get();
         // A loaded library shares this address space and can reach syscalls directly, so its
@@ -1658,6 +1830,10 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
         for (const auto& s : cand.emits) {
             declare(s);
         }
+        for (const ProvidedShapes& f : cand.provides) {
+            declare(f.input);
+            declare(f.output);
+        }
         declare(cand.state);
         for (const auto& s : closure) {
             const std::shared_ptr<const Schema> live = bus_.resolve_schema(s->name(), s->version());
@@ -1717,7 +1893,8 @@ ReloadResult Kernel::reload_from(const std::string& name, const std::string& new
     // unavailable rather than rolling back (the honest edge named in the header).
     const std::shared_ptr<LoadedLibrary> old_lib = rec.lib;
     const loom::WeaveId id = rec.id;
-    rec.adapter->rebind(new_abi, new_inst, new_lib, std::move(cand.claims), std::move(cand.emits));
+    rec.adapter->rebind(new_abi, new_inst, new_lib, std::move(cand.claims), std::move(cand.emits),
+                        std::move(cand.provides));
     rec.abi = new_abi;
     rec.lib = new_lib;
     // The claim crosses with the code, without a gap (LIFE-08): the candidate's claim was

@@ -54,6 +54,50 @@ struct Emit {};
 template <class... S>
 struct Claims {};
 
+/// The functions a weave provides, each named by its input shape (MSG-14): for each `In` listed,
+/// the weave declares `static Out provide(const In&)`, a function of its argument alone. Static,
+/// so it is handed nothing of an instance; it has no Mail, so it sends, claims and reads nothing.
+/// Registered with the vocabulary, carried in a library's manifest, and called by another weave's
+/// `mail.call<Out>(role, In{...})` through the role this weave holds. Pure is asked of native
+/// code and imposed in a box: docs/reference/messaging.md#calls-a-function-of-its-argument-alone
+template <class... In>
+struct Provides {};
+
+/// Whether `Self` provides a function from `In`: a static `provide` taking it, so no instance is
+/// reached through it.
+template <class Self, class In>
+concept provides_from = requires(const In& in) {
+    { Self::provide(in) };
+};
+
+/// A call's end as the caller holds it: the answer, as the shape `T` it asked for, or the refusal
+/// and the words that came with it. Converted only from a value the bus admitted at `T`'s shape.
+template <class T>
+class Called {
+public:
+    explicit Called(loom::CallResult result)
+        : refusal_(result.refusal), words_(std::move(result.words)) {
+        if (refusal_ == loom::CallRefusal::None && result.answer) {
+            value_ = from_value<T>(*result.answer);
+        } else if (refusal_ == loom::CallRefusal::None) {
+            refusal_ = loom::CallRefusal::Failed; // an answer that did not come is no answer
+        }
+    }
+
+    explicit operator bool() const noexcept { return value_.has_value(); }
+    const T& operator*() const { return *value_; }
+    const T* operator->() const { return &*value_; }
+    /// `None` exactly when there is an answer.
+    loom::CallRefusal refusal() const noexcept { return refusal_; }
+    /// The gate's or the provider's words, where the refusal has any.
+    const std::string& words() const noexcept { return words_; }
+
+private:
+    std::optional<T> value_;
+    loom::CallRefusal refusal_;
+    std::string words_;
+};
+
 /// The Switchboard's lifecycle-policy grammar, typed. Not a registered shape: it targets
 /// lifecycle_policy_schema() directly.
 struct LifecyclePolicy {
@@ -135,6 +179,22 @@ public:
     loom::Ticket ask_role(std::string_view role, const T& msg, std::uint64_t correlation = 0) {
         return bus_.ask_role(role,
                              loom::Message(to_value(msg), self_, loom::WeaveId{}, correlation));
+    }
+
+    // ---- calls (MSG-14) ------------------------------------------------------
+    // A function of its argument alone, provided by whichever weave holds `role` now, run inside
+    // this handler: the answer or the refusal is here before the next line. Nothing is delivered
+    // and no handler runs; the grant needs a call rule (`Grant::allow_call`).
+    //
+    //     loom::Called<Sum> r = mail.call<Sum>("arith", Add{2, 3});
+    //     if (r) { use(r->value); } else { say(loom::name_of(r.refusal()), r.words()); }
+    //
+    // docs/reference/messaging.md#calls-a-function-of-its-argument-alone
+
+    /// Call `role`'s function from `In` to `Out` with `argument`.
+    template <class Out, class In>
+    loom::Called<Out> call(std::string_view role, const In& argument) {
+        return loom::Called<Out>(bus_.call(role, to_value(argument), schema_of<Out>()));
     }
 
     // ---- deliberate role authorship (MSG-07) ------------------------------
@@ -409,13 +469,15 @@ inline void release_deferred(const loom::DeferredAnswer& pending, Mail& mail) {
 ///   class Node : public WeaveBase<Node, Counter, Accept<Ping>, Emit<Pong>> {
 ///       void on(const Ping&, loom::Mail&) { ... }   // one per accepted shape
 ///   };
-/// with a ZEN_SHAPE State; the protected `state_` is the live state.
+/// with a ZEN_SHAPE State; the protected `state_` is the live state. A weave that provides
+/// functions lists them last, `Provides<Add>`, beside `static Sum provide(const Add&)`.
 template <class Self, class State, class AcceptList, class EmitList = Emit<>,
-          class ClaimList = Claims<>>
+          class ClaimList = Claims<>, class ProvideList = Provides<>>
 class WeaveBase;
 
-template <class Self, class State, class... A, class... E, class... C>
-class WeaveBase<Self, State, Accept<A...>, Emit<E...>, Claims<C...>> : public loom::Weave {
+template <class Self, class State, class... A, class... E, class... C, class... P>
+class WeaveBase<Self, State, Accept<A...>, Emit<E...>, Claims<C...>, Provides<P...>>
+    : public loom::Weave {
     // The zen.Poke* shapes are the construction layer's doors, answered from the declared
     // access model so a woven Weave cannot misreport its structure; one listed in Accept<...>
     // could never fire. The is_base_of terms reject a derived alias sharing the content id.
@@ -461,6 +523,17 @@ public:
     /// as discovery, and checked by the claim doors. `final`, like the accept-set.
     std::vector<std::shared_ptr<const loom::Schema>> claimed_schemas() const final {
         return {schema_of<C>()...};
+    }
+
+    /// The functions this Weave provides (MSG-14): one per `Provides<...>` entry, each the
+    /// weaver's static `provide`, handed the admitted argument and nothing of this instance.
+    /// `final`, like the accept-set.
+    std::vector<loom::ProvidedFunction> provided_functions() const final { return zen_provided(); }
+
+    /// The same functions with no instance, which the export layer reads to fill an image's
+    /// `provide` slot and its manifest.
+    static std::vector<loom::ProvidedFunction> zen_provided() {
+        return {provided_function<P>()...};
     }
 
     loom::Value snapshot() const override { return to_value(state_); }
@@ -562,6 +635,22 @@ protected:
     loom::WeaveId self_{};
 
 private:
+    // One provided function: static, so the lambda captures nothing and reaches no instance.
+    template <class In>
+    static loom::ProvidedFunction provided_function() {
+        static_assert(provides_from<Self, In>,
+                      "loom: each shape in Provides<...> needs `static Out provide(const In&)` in "
+                      "the weave: a function of its argument alone, never a member");
+        using Out = std::remove_cvref_t<decltype(Self::provide(std::declval<const In&>()))>;
+        static_assert(!std::is_void_v<Out>, "loom: a provided function answers a shape");
+        return loom::ProvidedFunction{
+            schema_of<In>(), schema_of<Out>(), [](const loom::Value& argument) {
+                return loom::ProvidedAnswer{to_value(Self::provide(from_value<In>(argument))),
+                                            std::nullopt,
+                                            {}};
+            }};
+    }
+
     // Select the handler as the bus selected the door: by same_identity, which compares name,
     // version and content id. Matching on content id alone could, on a hash collision within
     // one accept-set, convert a value the gate checked against another schema; the name and

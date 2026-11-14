@@ -6,6 +6,7 @@
 
 #include <zen/schema.hpp>
 #include <zen/switchboard/bus.hpp>
+#include <zen/switchboard/calls.hpp>
 #include <zen/switchboard/message.hpp>
 #include <zen/value.hpp>
 
@@ -76,6 +77,19 @@ public:
     /// either. Empty by default.
     /// docs/decisions/declared-vocabulary-is-agreed-at-admission.md
     virtual std::vector<std::shared_ptr<const Schema>> emitted_schemas() const { return {}; }
+
+    /// The functions this weave provides, each from an input shape to an output shape (MSG-14).
+    /// A function is a function of its argument alone: handed nothing of this instance, no bus
+    /// and no claim. Registered with the vocabulary, so its shapes meet the agreement wall, and
+    /// found by the bus at each call, so new code provides what it declares. Empty by default;
+    /// `Provides<...>` writes it, and a library's manifest carries it.
+    /// docs/reference/messaging.md#calls-a-function-of-its-argument-alone
+    virtual std::vector<ProvidedFunction> provided_functions() const { return {}; }
+
+    /// Where this participant runs, when it stands for code outside this host's process that a
+    /// call cannot reach: `Isolated` for an isolated child, `Linked` for a link to another host.
+    /// A call to the role it holds is refused by that word. `None` by default.
+    virtual CallRefusal elsewhere() const { return CallRefusal::None; }
 
     /// What a showing came to at this weave (SENSE-06;
     /// docs/reference/joint-publication.md#the-showing-and-its-three-answers).

@@ -88,12 +88,14 @@ struct DispatchPosition {
     Fence fence{};
 };
 
-/// What an observer is told about: deliveries (`Delivered`, `Refused`, `HandlerFailed`) and
-/// lifecycle transitions (`Died`, `Revived`). `HandlerFailed` says only that the handler was
-/// entered and did not complete. It carries no reason and the journal records no outcome
-/// (MSG-10): a native exception goes to the host unexamined, and a loaded weave's is caught at
-/// the ABI boundary, where only a status crosses.
-enum class EventKind : std::uint8_t { Delivered, Refused, Died, Revived, HandlerFailed };
+/// What an observer is told about: deliveries (`Delivered`, `Refused`, `HandlerFailed`),
+/// lifecycle transitions (`Died`, `Revived`) and calls (`Called`). `HandlerFailed` says only that
+/// the handler was entered and did not complete. It carries no reason and the journal records no
+/// outcome (MSG-10): a native exception goes to the host unexamined, and a loaded weave's is caught
+/// at the ABI boundary, where only a status crosses. `Called` is told inside the caller's
+/// delivery, before that delivery's own event, so an observer told a handler finished has been
+/// told first of every call inside it that failed (MSG-14).
+enum class EventKind : std::uint8_t { Delivered, Refused, Died, Revived, HandlerFailed, Called };
 
 struct BusEvent {
     EventKind kind = EventKind::Delivered;
@@ -141,6 +143,13 @@ struct BusEvent {
     /// The turn's time and date the delivery was dispatched with, when the host's wait began
     /// its turn (zen/switchboard/turn.hpp); none otherwise.
     std::optional<TurnFacts> turn{};
+    /// For `Called`, how the call ended: `None` for an answer. Then `sender` is the caller,
+    /// `addressed_role` the role it called, `target` the holder that role resolved to (invalid
+    /// when none was asked or none held it), `schema_name` and `schema_version` the input shape,
+    /// `seq` the caller's delivery, `handler_elapsed_ns` how long the function ran, and
+    /// `call_words` the gate's or the provider's words where there are any.
+    CallRefusal call_refusal = CallRefusal::None;
+    std::string call_words{};
 };
 
 using Observer = std::function<void(const BusEvent&)>;
@@ -1137,6 +1146,10 @@ private:
         SenseReading observe_role(std::string_view role, std::shared_ptr<const Schema> shape) override {
             return sb_.observe_role_as(self_, role, shape->name(), shape->version());
         }
+        CallResult call(std::string_view role, Value argument,
+                        std::shared_ptr<const Schema> output) override {
+            return CallDoor::call(sb_, self_, role, argument, output);
+        }
         GrantChange delegate_authority(const GrantAuthority& authority,
                                        LiveAuthority requested) override {
             return sb_.delegate_authority_as(self_, authority, std::move(requested));
@@ -1175,6 +1188,7 @@ private:
     /// `provenance`: every ordinary enqueue takes the defaults, which clears what the caller's
     /// Message carried.
     friend struct DispatchRefusalProbe; // test-only counter boundary and retained-size witness
+    friend struct CallDoor;             // the call unit: resolves, gates and tells the tap
     std::uint64_t allocate_sequence();
     void capture_refusal_recipient(Envelope& env);
     /// Queue Loom's notice `value`, attested `kind`, for the exact recipient `to` at `life` and

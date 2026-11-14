@@ -326,6 +326,10 @@ private:
         /// emitter refuses at load, and registered with the bus for discovery. Vocabulary, never
         /// authority. Empty when none is declared.
         std::vector<std::shared_ptr<const Schema>> emits;
+        /// The functions the image provides, each an input and an output shape (MSG-14), claimed
+        /// through the same wall. Empty when none is declared, and always for a manifest from
+        /// before version 7.
+        std::vector<ProvidedShapes> provides;
         /// The manifest's `requests` section, the artifact's CapabilityAsk if it made one: shown
         /// to the admission policy as advice, and consulted by nothing here.
         bool declared_present = false;

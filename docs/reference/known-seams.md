@@ -232,6 +232,28 @@ by the adapter and checking the initiator's exact incarnation at every verb,
 with its own witnesses. That is a design of its own, not yet made
 ([joint publication](joint-publication.md#what-crosses-the-abi)).
 
+## What a call does not carry
+
+**Status: KNOWN SEAM, each part refused by name or said where it is.**
+
+A call is a function of its argument alone
+([calls](messaging.md#calls-a-function-of-its-argument-alone)), and what lies outside it:
+
+- **A provider's own state.** A function is handed no claim; a caller that needs one reads it and
+  passes it in. Handing a function its provider's claims beside the argument is the wider form,
+  left until a caller cannot do without it.
+- **A call from a function.** A function has no bus and no table: it calls nothing.
+- **The isolation pipe.** A contained weave's call is `NotOffered`, a child that provides is
+  refused at the mount, and a call to a child's role is `Isolated`. A child's call could be served
+  once the pipe has a request frame, since an answer a moment later is the same answer; a call
+  into an isolated provider would make the host's one thread wait on another process.
+- **A link.** A call to a link's role is `Linked`; a far function is asked by message.
+- **History and a session's tap.** The tap tells a call; the Recorder, the log and a bridge
+  session's tap do not keep one.
+- **The supplied host's words for a rule.** A call rule is given by a host in code
+  (`Grant::allow_call`, a `LiveAuthority`); the authority file and the weaver's commands have no
+  word for one yet.
+
 ## Rejections at the dynamic seam
 
 **Status: CLOSED — current, law-backed ([MSG-08](../laws/messaging-laws.md)).**

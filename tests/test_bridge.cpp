@@ -2144,7 +2144,39 @@ TEST_CASE("the absent-schema memo is bounded — a host cannot grow it forever")
 
 TEST_SUITE_END();
 
+namespace linkcall {
+struct Add {
+    std::int64_t a = 0;
+    ZEN_SHAPE(Add, 1, ZEN_FIELD(a));
+};
+/// Calls the link's role, and keeps how the call ended.
+struct Caller final : public loom::WeaveBase<Caller, Add, loom::Accept<Add>> {
+    loom::CallRefusal seen = loom::CallRefusal::None;
+    void on(const Add& add, loom::Mail& mail) {
+        seen = mail.call<Add>(loom::link::role_of("far"), add).refusal();
+    }
+};
+} // namespace linkcall
+
 TEST_SUITE("bridge") {
+TEST_CASE("link: a call does not cross a link: a call to the link's role is refused Linked") {
+    using linkcall::Add;
+    using linkcall::Caller;
+    loom::Switchboard near;
+    auto link = std::make_unique<loom::host::LinkWeave>("far", "127.0.0.1:1", "agent", "none");
+    loom::host::LinkWeave* raw = link.get();
+    raw->zen_set_self(
+        near.register_weave(std::move(link), loom::Grant{}, loom::link::role_of("far")));
+    auto caller = std::make_unique<Caller>();
+    Caller* c = caller.get();
+    const loom::WeaveId id = near.register_weave(
+        std::move(caller), loom::Grant{}.allow_call(loom::link::role_of("far"), "Add", 1));
+    c->zen_set_self(id);
+    near.send(id, loom::Message(loom::to_value(Add{1})));
+    near.drain_until_idle();
+    CHECK(c->seen == loom::CallRefusal::Linked);
+}
+
 TEST_CASE("wire-originated refusal-shaped speech cannot acquire Loom attestation") {
     Switchboard bus;
     auto recipient=sbfx::register_probe(bus,{schema_of<DispatchRefused>()});

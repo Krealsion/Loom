@@ -19,6 +19,7 @@ to unmake without knowing what rejected them. How Loom came to be this way is in
 | [dispatch-refusal-returns-to-its-author](dispatch-refusal-returns-to-its-author.md) | authenticated later refusal, exact attempts, original incarnation and ordinary consumer ownership |
 | [an-ask-is-told-its-end](an-ask-is-told-its-end.md) | an ask is the asker's, followed by Loom to its answer or to one attested ending at the stage it ended; owed work is a kept answer, bounded per respondent |
 | [the-turns-time-on-every-delivery](the-turns-time-on-every-delivery.md) | every delivery carries the turn's time and date as facts the bus writes, from the host's wait; empty where no wait began the turn, and for a box or a contained weave not given time |
+| [a-call-is-a-function-of-its-argument-alone](a-call-is-a-function-of-its-argument-alone.md) | a weave calls a function another provides, in its own turn, handed its argument alone: no nested delivery, no provider's claims, no door at creation; pure imposed in a box and asked of native code |
 | [declared-vocabulary-is-agreed-at-admission](declared-vocabulary-is-agreed-at-admission.md) | every declared shape and component — accepted, claimed, emitted, persisted — meets one wall at the door, natively and across the seam; a declaration is never authority |
 | [Zengine's timer-continuity decision](https://github.com/Krealsion/Zengine/blob/main/timer/docs/timer-continuity-carries-remaining-duration.md), a separate repository | durations cross; due times cannot |
 

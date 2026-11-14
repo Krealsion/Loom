@@ -15,6 +15,7 @@
 #include "enforcement_gate.hpp"
 #include "switchboard_fixtures.hpp"
 #include "weavelib/addressed_protocol.hpp"
+#include "weavelib/call_protocol.hpp"
 #include "weavelib/turn_protocol.hpp"
 #include "weavelib/made_protocol.hpp"
 #include "weavelib/role_protocol.hpp"
@@ -2074,6 +2075,51 @@ TEST_CASE("an isolated image that can hear an ask's end is refused explicitly: i
     CHECK_FALSE(result.ok);
     CHECK(result.error.find("isolated pipe cannot attest an ask's end")!=std::string::npos);
     CHECK(bus.list_weaves().empty());
+}
+
+TEST_CASE("an isolated image that provides a function is refused by name: a call does not cross "
+          "the pipe") {
+    Switchboard bus;
+    IsolationHost host(bus, kHostExe);
+    auto result = host.mount("adder", ZEN_SO_CALL_PROBE, Grant{});
+    INFO(result.error);
+    CHECK_FALSE(result.ok);
+    CHECK(result.error.find("an isolated weave cannot provide a function") != std::string::npos);
+    CHECK(bus.list_weaves().empty());
+}
+
+namespace {
+/// A native caller of `role`'s CallAdd function, keeping how its one call ended.
+class IsoCaller final
+    : public WeaveBase<IsoCaller, calling::CallHeard, Accept<calling::CallKnock>> {
+public:
+    void on(const calling::CallKnock& k, Mail& mail) {
+        state_.refusal = static_cast<std::int64_t>(
+            mail.call<calling::CallSum>(k.role, calling::CallAdd{k.a, k.b}).refusal());
+    }
+};
+} // namespace
+
+TEST_CASE("a call does not cross the pipe either way: an isolated weave's call is NotOffered, and "
+          "a call to its role is Isolated") {
+    Switchboard bus;
+    IsolationHost host(bus, kHostExe);
+    OutOfProcessResult child = host.mount(
+        "caller", ZEN_SO_CALL_CALLER, Grant{}.allow_call("arith", "CallAdd", 1), "iso.a");
+    REQUIRE_MESSAGE(child.ok, child.error);
+    const auto heard = [&] { return from_value<calling::CallHeard>(bus.weave(child.id)->snapshot()); };
+    bus.send_to_role("iso.a", Message(to_value(calling::CallKnock{"arith", 1, 1})));
+    REQUIRE(host.run_until([&] { return heard().knocks == 1; }, 2000));
+    CHECK(heard().refusal == static_cast<std::int64_t>(CallRefusal::NotOffered));
+
+    auto caller = std::make_unique<IsoCaller>();
+    IsoCaller* raw = caller.get();
+    const WeaveId c = bus.register_weave(std::move(caller), Grant{}.allow_call("iso.a", "CallAdd", 1));
+    raw->zen_set_self(c);
+    bus.send(c, Message(to_value(calling::CallKnock{"iso.a", 1, 1})));
+    bus.drain_until_idle();
+    CHECK(from_value<calling::CallHeard>(bus.weave(c)->snapshot()).refusal ==
+          static_cast<std::int64_t>(CallRefusal::Isolated));
 }
 
 TEST_CASE("an isolated image requesting dispatch-refusal attestation is refused explicitly") {

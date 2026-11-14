@@ -59,6 +59,14 @@ void* box_create_with(const std::shared_ptr<BoxModule>& module, ZenByteSink refu
 /// the creation value.
 ZenStatus box_describe_creation(const std::shared_ptr<BoxModule>& module, ZenByteSink sink);
 
+/// One of the functions the module's weave provides, run in a store of its own, made for this
+/// call and dropped after it: no weave is made in it, it is held to the box's default memory and
+/// one entry's steps, and every door refuses there, so the function can reach no weave, its own
+/// included, and nothing outlives the call. The answer goes to `answer`, a failure's words, a
+/// trap's included, to `words`.
+ZenStatus box_provide(const std::shared_ptr<BoxModule>& module, const std::uint8_t* argument,
+                      std::size_t len, ZenByteSink answer, ZenByteSink words);
+
 /// Project `grant` onto the instance's box, or refuse in `why` the parts it cannot carry: the
 /// box gives memory from `ResourceLimits` and reaches nothing outside the host's doors, so an OS
 /// capability, a filesystem level or a cpu share is refused, never narrowed.

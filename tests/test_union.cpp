@@ -579,7 +579,8 @@ TEST_CASE("a shape's description says a union, its bare cases and an open field,
     empty_union.set("name", Cell::text("U")).set("version", Cell::integer(1));
     empty_union.set("cases", Cell::list({}));
     CHECK_THROWS_AS(decode_union(empty_union, deps), std::invalid_argument);
-    CHECK(manifest_schema()->version() == 6);
+    CHECK(manifest_schema()->version() == kManifestVersion);
+    CHECK(manifest_schema(kManifestOldest)->version() == kManifestOldest);
     // A consumer's own shape that keeps a list of records' descriptions reads as a manifest's
     // list of shape descriptions does.
     const auto carried = SchemaBuilder("Carried", 1)

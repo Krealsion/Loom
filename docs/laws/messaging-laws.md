@@ -33,7 +33,9 @@ DOES NOT MEAN
   that sender's speech. Those are the bus's own acts and are not counted;
 - that an answer, immediate or deferred, is this speech. Each spends a right one
   delivery created, so answers cannot outgrow what was delivered. The bound
-  neither counts an answer nor refuses one.
+  neither counts an answer nor refuses one;
+- that a call nests a delivery: it runs no handler and delivers nothing
+  ([MSG-14](#msg-14--a-call-is-a-function-of-its-argument-alone)).
 
 PROVEN BY — `Switchboard::drain_until_idle` / `pump_pending` (the shared
 `in_dispatch_` guard); `kMaxPendingPerSender`; suites `switchboard`
@@ -503,3 +505,48 @@ aborting a replacement; a two-role incumbent's replacement refused), suite
 `manager` (a library loaded into a set, the control door's list, release and
 the older load; a two-role holder's swap refused), suite `host_policy` (a boot
 row's `roles`). [Decision](../decisions/a-weave-answers-to-the-roles-it-is-loaded-with.md).
+
+## MSG-14 — A call is a function of its argument alone
+
+LAW — A weave may call, inside its own handler, the function the holder of a
+role provides for an argument's shape, and has the answer or a refusal before the
+handler goes on. The function is handed the argument and nothing else: no
+instance, no bus, no claim. It runs no handler and delivers nothing. A call needs
+a call rule; the argument is admitted at the function's input shape and the
+answer at the output shape the caller asked for; every refusal is its own word;
+and the tap tells each call and how it ended, inside the caller's delivery and
+before that delivery's own event.
+
+MEANS
+- the role resolves to its holder at the call, so a provider replaced between two
+  calls answers the second with its successor's code;
+- no send or observe rule is read for a call, and an unauthorized caller is
+  refused before the role is resolved;
+- one input shape names one function of a provider; a function's shapes meet the
+  agreement wall with the rest of its vocabulary;
+- a function that throws, traps or writes no answer is `Failed`, and the caller's
+  delivery goes on;
+- a loaded image's function runs with every host door refusing, so a table it
+  kept from an earlier delivery reaches nothing; a boxed one runs in a store of
+  its own, made for the call and dropped after it;
+- the isolation pipe carries no call either way and a link carries none, each
+  refused by name.
+
+DOES NOT MEAN
+- that native code is pure: it is asked to be. A native function shares the
+  host's process, and nothing stops it writing its own memory; in a box it is
+  imposed;
+- that a function's time is bounded in native code: a native function that loops
+  holds the thread, as a native handler does. A boxed one has its entry's steps;
+- that a call reads the provider's state: a caller that needs it reads the
+  provider's claim and passes it in;
+- that anything is held between two calls, or that a call is recorded by history.
+
+PROVEN BY — `CallDoor` (`zen/switchboard/calls.hpp`), `Mail::call`,
+`Provides<...>`, the kernel's `call` door and `provide` slot, the box's function
+store; suites `call` (the answer, the rule, each refusal, the tap, a successor,
+delegation, the wall), `call_loaded` (a loaded caller and provider, a reload
+between two calls, a forged kept table refused, an image built against ABI 16's
+header), `box` (the boxed twins, a provider unable to change its weave),
+`isolation` (a provider refused at mount, a call refused both ways), `bridge` (a
+link's role). [Decision](../decisions/a-call-is-a-function-of-its-argument-alone.md).

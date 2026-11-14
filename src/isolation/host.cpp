@@ -323,6 +323,8 @@ public:
     loom::Value snapshot() const override { return *link_->snapshot_value; }
     loom::Value policy() const override { return *link_->policy_value; }
     void revive(const loom::Value& state) override { host_->respawn_and_revive(*link_, state); }
+    /// The child runs in another process: a call to its role is refused `Isolated`.
+    CallRefusal elsewhere() const override { return CallRefusal::Isolated; }
 
 private:
     IsolationHost* host_;
@@ -621,11 +623,24 @@ void IsolationHost::reconstruct_and_cache(Link& link, const std::string& manifes
     // gate against the kernel's meta-schema and reconstructed exactly as a loaded
     // library's manifest is.
     loom::Unverified um = loom::parse(manifest);
-    loom::Admission am = loom::admit(um, loom::manifest_schema());
+    const std::shared_ptr<const Schema> meta = loom::manifest_schema(um.claimed_version());
+    if (meta == nullptr) {
+        throw std::runtime_error("manifest refused: zen.Manifest version " +
+                                 std::to_string(um.claimed_version()) +
+                                 " is not one this host reads");
+    }
+    loom::Admission am = loom::admit(um, meta);
     if (!am.ok()) {
         throw std::runtime_error("manifest refused: " + am.first_error().message());
     }
     const loom::Value& mv = am.value();
+    // A function the child provides could only be run by the host's one thread waiting on another
+    // process, so a call does not cross the pipe, and a child that provides is refused by name.
+    if (const loom::Cell* provides = mv.get("provides");
+        provides != nullptr && !provides->as_list().empty()) {
+        throw std::runtime_error("an isolated weave cannot provide a function: a call does not "
+                                 "cross the isolation pipe");
+    }
 
     std::vector<std::shared_ptr<const Schema>> accept;
     for (const loom::Cell& c : mv.get("accepted")->as_list()) {

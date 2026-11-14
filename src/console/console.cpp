@@ -72,6 +72,8 @@ const char* event_kind_name(loom::EventKind k) {
         return "Revived";
     case loom::EventKind::HandlerFailed:
         return "HandlerFailed";
+    case loom::EventKind::Called:
+        return "Called";
     }
     return "?";
 }
@@ -183,7 +185,9 @@ void ConsoleEngine::record_tap(const loom::BusEvent& e) {
     t.target = e.target;
     t.sender = e.sender;
     t.schema = e.schema_name;
-    t.refusal = e.kind == loom::EventKind::Refused ? loom::name_of(e.refusal.reason) : "";
+    t.refusal = e.kind == loom::EventKind::Refused  ? loom::name_of(e.refusal.reason)
+                : e.kind == loom::EventKind::Called ? loom::name_of(e.call_refusal)
+                                                    : "";
     tap_.push(std::move(t)); // bounded window: the oldest event is evicted and counted, never lost
                              // silently (Console::evicted().tap, surfaced in the tap pane's title)
 

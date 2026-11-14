@@ -61,6 +61,10 @@ LOOM_WASM_IMPORT(sense_offer) int32_t zh_sense_offer(uint64_t op, const uint8_t*
 LOOM_WASM_IMPORT(ask) int32_t zh_ask(const char* as_role, uint64_t target, const char* to_role,
                                      uint64_t reply_to, uint64_t correlation, const uint8_t* p,
                                      size_t n, uint64_t* attempt_out);
+// A call's two library sinks cross as handles, 0 the answer and 1 the words, written back through
+// `zw_sink_deliver` before the import returns.
+LOOM_WASM_IMPORT(call) int32_t zh_call(const char* role, const uint8_t* p, size_t n,
+                                       const char* output_name, uint32_t output_version);
 
 } // extern "C"
 
@@ -148,6 +152,11 @@ ZenStatus g_ask(void*, const char* as, uint64_t t, const char* to, uint64_t r, u
                 const uint8_t* p, size_t n, uint64_t* a) {
     return zh_ask(as, t, to, r, c, p, n, a);
 }
+ZenStatus g_call(void*, const char* role, const uint8_t* p, size_t n, const char* output_name,
+                 uint32_t output_version, ZenByteSink answer, ZenByteSink words) {
+    const ObserveSinks held(answer, words);
+    return zh_call(role, p, n, output_name, output_version);
+}
 
 // By name, in declaration order (KERN-04).
 const ZenHostApi kHostApi{.size                 = sizeof(ZenHostApi),
@@ -167,7 +176,8 @@ const ZenHostApi kHostApi{.size                 = sizeof(ZenHostApi),
                           .sense_observe        = &g_sense_observe,
                           .sense_observe_role = &g_sense_observe_role,
                           .sense_offer          = &g_sense_offer,
-                          .ask                  = &g_ask};
+                          .ask                  = &g_ask,
+                          .call                 = &g_call};
 
 } // namespace
 
@@ -232,8 +242,17 @@ LOOM_WASM_EXPORT(zw_claim_published) int32_t zw_claim_published(void* instance,
     const ZenWeaveAbi* abi = zen_weave_abi();
     return abi->claim_published == nullptr ? ZEN_ERR : abi->claim_published(instance, value, len);
 }
-// The host writes an observed value (handle 0) or role (handle 1) into the library's own sink,
-// while the observation's import is still on the stack.
+// One of the weave's functions (ABI 17), of its argument alone: no instance and no host table.
+// The answer goes to the host's sink `answer_sink`, the words of a failure to `words_sink`.
+LOOM_WASM_EXPORT(zw_provide) int32_t zw_provide(const uint8_t* argument, size_t len,
+                                                int32_t answer_sink, int32_t words_sink) {
+    const ZenWeaveAbi* abi = zen_weave_abi();
+    return abi->provide == nullptr
+               ? ZEN_ERR
+               : abi->provide(argument, len, host_sink(answer_sink), host_sink(words_sink));
+}
+// The host writes an observed value (handle 0) or role (handle 1), or a call's answer (0) or
+// words (1), into the library's own sink, while the import is still on the stack.
 LOOM_WASM_EXPORT(zw_sink_deliver) void zw_sink_deliver(int32_t handle, const uint8_t* data,
                                                        size_t len) {
     if (handle < 0 || handle > 1) {

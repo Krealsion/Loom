@@ -320,7 +320,8 @@ private:
 
     /// Does `one` (a single parsed rule) address only a role `registrar` holds right now?
     bool own_role(const LiveAuthority& one, WeaveId registrar) const {
-        if (bus_ == nullptr || !one.observe_rules().empty() || one.rules().size() != 1) {
+        if (bus_ == nullptr || !one.observe_rules().empty() || !one.call_rules().empty() ||
+            one.rules().size() != 1) {
             return false;
         }
         const SendRule& r = one.rules().front();
@@ -351,6 +352,9 @@ private:
             } else {
                 g.allow_observe(o.shape_name, o.shape_version);
             }
+        }
+        for (const CallRule& c : a.call_rules()) {
+            g.allow_call(c.role, c.shape_name, c.shape_version);
         }
     }
 

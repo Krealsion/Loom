@@ -17,10 +17,14 @@
 
 namespace loom {
 
-/// The `zen.Manifest` version this build's `describe` writes and its host reads
-/// (zen/kernel/schema_codec.hpp). It moves without the ABI's version: a descriptor says which it
-/// writes, and a host refuses by name one it does not read.
-inline constexpr std::uint32_t kManifestVersion = 6;
+/// The `zen.Manifest` version this build's `describe` writes (zen/kernel/schema_codec.hpp). It
+/// moves without the ABI's version: a descriptor says which it writes, and a host reads every
+/// version from `kManifestOldest` to this one and refuses by name one it does not read.
+inline constexpr std::uint32_t kManifestVersion = 7;
+
+/// The oldest `zen.Manifest` version a host reads: the one an image built against a header from
+/// before the provided functions writes, which has no section for them.
+inline constexpr std::uint32_t kManifestOldest = 6;
 
 namespace detail {
 
@@ -63,10 +67,10 @@ inline bool read_descriptor(const ZenWeaveAbi* abi, ZenWeaveAbi& out, std::strin
               " bytes)";
         return false;
     }
-    if (abi->manifest_version != kManifestVersion) {
+    if (abi->manifest_version < kManifestOldest || abi->manifest_version > kManifestVersion) {
         why = "the image writes zen.Manifest version " + std::to_string(abi->manifest_version) +
-              ", which this host does not read (it reads version " +
-              std::to_string(kManifestVersion) + ")";
+              ", which this host does not read (it reads versions " +
+              std::to_string(kManifestOldest) + " to " + std::to_string(kManifestVersion) + ")";
         return false;
     }
     const std::size_t reach = abi->size < sizeof(ZenWeaveAbi) ? abi->size : sizeof(ZenWeaveAbi);

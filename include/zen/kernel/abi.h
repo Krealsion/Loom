@@ -28,7 +28,7 @@ extern "C" {
  * version from ZEN_ABI_OLDEST to its own, and refuses one from before ZEN_ABI_OLDEST, or one
  * newer than itself, before calling into it, at load and as a replacement for a live
  * participant, naming both versions. What each version carried: docs/reference/dynamic-abi.md */
-#define ZEN_ABI_VERSION 16u
+#define ZEN_ABI_VERSION 17u
 
 /* The oldest version a host loads: the first whose tables say their size. */
 #define ZEN_ABI_OLDEST 13u
@@ -87,6 +87,9 @@ enum {
     /* A refused joint offer: ZEN_ERR_JOINT_BASE minus the loom::JointRefusal enumerator. A
      * status below the base naming no enumerator reads as NoLiveDelivery, never as accepted. */
     ZEN_ERR_JOINT_BASE = -100,
+    /* Since 17: a call with no answer: ZEN_ERR_CALL_BASE minus the loom::CallRefusal
+     * enumerator. A status naming no enumerator reads as Failed, never as an answer. */
+    ZEN_ERR_CALL_BASE = -200,
     /* The one status that is neither OK nor an error, returned only by claim_published: the
      * library, functioning, did not apply the value and keeps state of its own. */
     ZEN_CLAIM_DECLINED = 1
@@ -235,6 +238,16 @@ typedef struct ZenHostApi {
     ZenStatus (*ask)(void* ctx, const char* as_role, uint64_t target, const char* to_role,
                      uint64_t reply_to, uint64_t correlation, const uint8_t* payload,
                      size_t len, uint64_t* attempt_out);
+    /* Since 17: a call, what a native weave reaches through `mail.call(...)`: the function the
+     * holder of `role` provides for the argument's shape, answering the shape (`output_name`,
+     * `output_version`), run now, before this door returns. `argument` is value bytes the host
+     * admits at the function's input shape; the answer, admitted at its output shape, is written
+     * to `answer` as value bytes, and the gate's or the provider's words to `words`. ZEN_OK with
+     * the answer written, or ZEN_ERR_CALL_BASE minus the refusal. Nothing is delivered and no
+     * handler runs. The isolated pipe supplies NULL: a call does not cross it. */
+    ZenStatus (*call)(void* ctx, const char* role, const uint8_t* argument, size_t len,
+                      const char* output_name, uint32_t output_version, ZenByteSink answer,
+                      ZenByteSink words);
 } ZenHostApi;
 
 /* The descriptor a Weave library exposes through zen_weave_abi(), over an opaque instance
@@ -303,6 +316,16 @@ typedef struct ZenWeaveAbi {
      * size, declares none and makes nothing with a value. */
     ZenStatus (*describe_creation)(ZenByteSink sink);
     void* (*create_with)(ZenByteSink refusal, const uint8_t* value, size_t len);
+
+    /* Since 17: one of the functions the manifest says this image provides, of its argument
+     * alone: no instance and no host table cross, so it can reach no weave and no door. The
+     * argument's shape names the function; its bytes are the value the host admitted at that
+     * function's input shape, re-admitted here against the library's own. The answer goes to
+     * `answer` as value bytes, the words of a failure to `words`. ZEN_OK with an answer written;
+     * any other status is the function failed. A NULL slot, or one past the descriptor's size,
+     * provides nothing, and a manifest naming a function for it is refused at load. */
+    ZenStatus (*provide)(const uint8_t* argument, size_t len, ZenByteSink answer,
+                         ZenByteSink words);
 } ZenWeaveAbi;
 
 /* The export decoration, on the declaration as well as the definition: MSVC counts it as part

@@ -47,6 +47,8 @@ set(ZEN_TEST_SOURCES_PORTABLE
     test_host_reactor.cpp
     # The turn's time on every delivery: the wait hands it, the bus stamps it, history keeps it.
     test_turn.cpp
+    # Calls: a function of its argument alone, provided by the holder of a role.
+    test_call.cpp
     test_session.cpp
     test_observe.cpp)
 # Kernel-dependent suites: compiled wherever the kernel target exists.
@@ -63,6 +65,8 @@ set(ZEN_TEST_SOURCES_KERNEL
     test_ask_loaded.cpp
     # The turn's time across the seam: loaded, from an earlier header, and boxed.
     test_turn_loaded.cpp
+    # Calls across the seam: loaded and boxed, as caller and as provider, and the forge.
+    test_call_loaded.cpp
     test_handoff.cpp
     test_manager.cpp
     test_capabilities.cpp
@@ -119,7 +123,7 @@ set(LOOM_WASM_MODULES "" CACHE PATH
 set(zen_box_module_names
     box_probe box_probe_path_open box_probe_env box_stale_abi box_counter box_counter_reaching
     box_defers box_senses box_role_worker box_dispatch box_joint box_versioned_v1
-    box_versioned_v2 box_addressed box_made box_ask box_ask_deaf box_turn)
+    box_versioned_v2 box_addressed box_made box_ask box_ask_deaf box_turn box_call)
 set(zen_box_modules "")
 if(LOOM_WASI_SDK)
     set(zen_box_modules "${CMAKE_BINARY_DIR}/wasm")
@@ -160,13 +164,15 @@ if(LOOM_WASI_SDK)
                     SOURCES weavelib/ask_probe.cpp DEFINITIONS ASK_PROBE_DEAF)
     loom_wasm_weave(zen_box_turn_wasm OUTPUT "${zen_box_modules}/box_turn.wasm"
                     SOURCES weavelib/turn_probe.cpp)
+    loom_wasm_weave(zen_box_call_wasm OUTPUT "${zen_box_modules}/box_call.wasm"
+                    SOURCES weavelib/call_probe.cpp)
     add_custom_target(loom-wasm-modules DEPENDS
         zen_box_probe_wasm zen_box_probe_path_open_wasm zen_box_probe_env_wasm
         zen_box_stale_abi_wasm zen_box_counter_wasm zen_box_counter_reaching_wasm
         zen_box_defers_wasm zen_box_senses_wasm zen_box_role_worker_wasm zen_box_dispatch_wasm
         zen_box_joint_wasm zen_box_versioned_v1_wasm zen_box_versioned_v2_wasm
         zen_box_addressed_wasm zen_box_made_wasm zen_box_ask_wasm zen_box_ask_deaf_wasm
-        zen_box_turn_wasm)
+        zen_box_turn_wasm zen_box_call_wasm)
 elseif(LOOM_WASM_MODULES)
     set(zen_box_modules "${LOOM_WASM_MODULES}")
 endif()
@@ -216,6 +222,7 @@ if(LOOM_ENABLE_WASM AND TARGET zen-kernel)
         "ZEN_BOX_ASK_PROBE=\"${zen_box_modules}/box_ask.wasm\""
         "ZEN_BOX_ASK_PROBE_DEAF=\"${zen_box_modules}/box_ask_deaf.wasm\""
         "ZEN_BOX_TURN_PROBE=\"${zen_box_modules}/box_turn.wasm\""
+        "ZEN_BOX_CALL_PROBE=\"${zen_box_modules}/box_call.wasm\""
         "ZEN_SO_BOX_COUNTER=\"$<TARGET_FILE:zen_box_counter>\"")
     loom_wasm_runtime_beside(zen-tests)
     # The demo, and its run as a CTest entry: one live weave reloaded into its module and back
@@ -589,6 +596,42 @@ add_library(zen_test_turn_probe SHARED weavelib/turn_probe.cpp)
 target_link_libraries(zen_test_turn_probe PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
 loom_weave_build_contract(zen_test_turn_probe)
 
+# The addressed-role probe compiled against ABI 16's kept header: an image from before the call
+# door, loading and working on this host; and the call probe, providing nothing, against the same
+# header: a caller whose table ends before the door.
+add_library(zen_test_abi_v16_image SHARED weavelib/addressed_probe.cpp)
+target_include_directories(zen_test_abi_v16_image BEFORE PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/abi_kept/v16")
+target_link_libraries(zen_test_abi_v16_image PRIVATE loom zen-switchboard zen-warnings
+                                                     zen-sanitize)
+loom_weave_build_contract(zen_test_abi_v16_image)
+add_library(zen_test_abi_v16_caller SHARED weavelib/call_probe.cpp)
+target_include_directories(zen_test_abi_v16_caller BEFORE PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/abi_kept/v16")
+target_compile_definitions(zen_test_abi_v16_caller PRIVATE CALL_PROBE_CALLER_ONLY)
+target_link_libraries(zen_test_abi_v16_caller PRIVATE loom zen-switchboard zen-warnings
+                                                      zen-sanitize)
+loom_weave_build_contract(zen_test_abi_v16_caller)
+
+# The call probe (weavelib/call_probe.cpp), its successor, and the provider that forges with a
+# host table it kept (weavelib/call_forge.cpp).
+add_library(zen_test_call_probe SHARED weavelib/call_probe.cpp)
+target_link_libraries(zen_test_call_probe PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
+loom_weave_build_contract(zen_test_call_probe)
+add_library(zen_test_call_probe_v2 SHARED weavelib/call_probe.cpp)
+target_compile_definitions(zen_test_call_probe_v2 PRIVATE CALL_PROBE_V2)
+target_link_libraries(zen_test_call_probe_v2 PRIVATE loom zen-switchboard zen-warnings
+                                                     zen-sanitize)
+loom_weave_build_contract(zen_test_call_probe_v2)
+add_library(zen_test_call_caller SHARED weavelib/call_probe.cpp)
+target_compile_definitions(zen_test_call_caller PRIVATE CALL_PROBE_CALLER_ONLY)
+target_link_libraries(zen_test_call_caller PRIVATE loom zen-switchboard zen-warnings
+                                                   zen-sanitize)
+loom_weave_build_contract(zen_test_call_caller)
+add_library(zen_test_call_forge SHARED weavelib/call_forge.cpp)
+target_link_libraries(zen_test_call_forge PRIVATE loom zen-switchboard zen-warnings zen-sanitize)
+loom_weave_build_contract(zen_test_call_forge)
+
 # The build contract's own pair: one source, two artifacts, one through
 # loom_weave_build_contract() and one deliberately bypassing it. The bypass twin is the positive
 # control that keeps the question askable, as the stale-ABI fixture keeps "the previous ABI
@@ -630,8 +673,9 @@ set(ZEN_KERNEL_WEAVE_LIBS zen_test_weave zen_test_weave_b zen_test_weave_badsnap
     zen_test_abi_v12_image zen_test_needs_next_version zen_test_needs_larger_host
     zen_test_needs_unread_manifest zen_test_needs_short_descriptor zen_test_addressed
     zen_test_addressed_smaller zen_test_made zen_test_abi_v13_image zen_test_abi_v14_image
-    zen_test_abi_v15_image
-    zen_test_ask_probe zen_test_ask_probe_deaf zen_test_turn_probe)
+    zen_test_abi_v15_image zen_test_abi_v16_image zen_test_abi_v16_caller
+    zen_test_ask_probe zen_test_ask_probe_deaf zen_test_turn_probe
+    zen_test_call_probe zen_test_call_probe_v2 zen_test_call_caller zen_test_call_forge)
 add_dependencies(zen-tests ${ZEN_KERNEL_WEAVE_LIBS})
 
 # Hand the portable fixtures' paths to the tests as string macros.
@@ -667,6 +711,12 @@ target_compile_definitions(zen-tests PRIVATE
     "ZEN_SO_ABI_V14_IMAGE=\"$<TARGET_FILE:zen_test_abi_v14_image>\""
     "ZEN_SO_ABI_V15_IMAGE=\"$<TARGET_FILE:zen_test_abi_v15_image>\""
     "ZEN_SO_TURN_PROBE=\"$<TARGET_FILE:zen_test_turn_probe>\""
+    "ZEN_SO_ABI_V16_IMAGE=\"$<TARGET_FILE:zen_test_abi_v16_image>\""
+    "ZEN_SO_ABI_V16_CALLER=\"$<TARGET_FILE:zen_test_abi_v16_caller>\""
+    "ZEN_SO_CALL_PROBE=\"$<TARGET_FILE:zen_test_call_probe>\""
+    "ZEN_SO_CALL_PROBE_V2=\"$<TARGET_FILE:zen_test_call_probe_v2>\""
+    "ZEN_SO_CALL_FORGE=\"$<TARGET_FILE:zen_test_call_forge>\""
+    "ZEN_SO_CALL_CALLER=\"$<TARGET_FILE:zen_test_call_caller>\""
     "ZEN_SO_ASK_PROBE=\"$<TARGET_FILE:zen_test_ask_probe>\""
     "ZEN_SO_ASK_PROBE_DEAF=\"$<TARGET_FILE:zen_test_ask_probe_deaf>\""
     "ZEN_SO_CONTRACT_APPLIED=\"$<TARGET_FILE:zen_test_contract_applied>\""

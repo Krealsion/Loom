@@ -80,6 +80,11 @@ Recorder::ShapeState& Recorder::state_for(const std::string& shape) {
 
 void Recorder::observe(const BusEvent& e) {
     ++counters_.observed;
+    // A call is told on the tap and kept by no record: a record is about a delivery or a life,
+    // and the caller's own delivery is recorded as it ended (MSG-14).
+    if (e.kind == EventKind::Called) {
+        return;
+    }
     if (e.seq > newest_observed_seq_) {
         newest_observed_seq_ = e.seq;
     }

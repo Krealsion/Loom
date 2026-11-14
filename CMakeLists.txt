@@ -131,6 +131,7 @@ add_library(loom::core ALIAS loom)
 
 add_library(zen-switchboard
     src/switchboard/asks.cpp
+    src/switchboard/calls.cpp
     src/switchboard/switchboard.cpp)
 
 target_include_directories(zen-switchboard

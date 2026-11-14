@@ -5,6 +5,7 @@
 #define ZEN_SWITCHBOARD_BUS_HPP
 
 #include <zen/schema.hpp>
+#include <zen/switchboard/calls.hpp>
 #include <zen/switchboard/grant.hpp>
 #include <zen/switchboard/message.hpp>
 #include <zen/switchboard/sense.hpp>
@@ -316,6 +317,22 @@ public:
         (void)role;
         (void)shape;
         return SenseReading{};
+    }
+
+    // ---- calls (MSG-14) --------------------------------------------------------------------------
+    // A call returns data, as observing does, and delivers nothing: the function the holder of
+    // `role` provides for the argument's shape is handed the argument alone, and its answer is
+    // admitted at `output`, the shape the caller expects. Needs a call rule; no send or observe
+    // rule is read. The default refuses: a bus with no call door says `NotOffered`.
+    // docs/reference/messaging.md#calls-a-function-of-its-argument-alone
+
+    /// Call `role`'s function for `argument`'s shape, answering `output`, now.
+    virtual CallResult call(std::string_view role, Value argument,
+                            std::shared_ptr<const Schema> output) {
+        (void)role;
+        (void)argument;
+        (void)output;
+        return CallResult{};
     }
 
     // ---- administering another subject's live authority (GATE-05) ------------
