@@ -151,6 +151,54 @@ delivery, and the ambient right to answer it
 ([MSG-10](../laws/messaging-laws.md#msg-10--a-callback-that-throws-costs-the-delivery-not-the-bus)).
 A `DeferredAnswer` you had already taken is yours to keep and still spendable.
 
+## Call a function another weave provides
+
+From inside your handler you can call a function another weave provides, and
+have the answer or a refusal before the handler goes on. This is not part of
+the program above. The function is named by its argument's shape, and it is
+handed that argument and nothing else.
+
+```cpp
+struct Add {
+    std::int64_t a;
+    std::int64_t b;
+    ZEN_SHAPE(Add, 1, ZEN_FIELD(a), ZEN_FIELD(b));
+};
+struct Sum {
+    std::int64_t value;
+    ZEN_SHAPE(Sum, 1, ZEN_FIELD(value));
+};
+// State is a declared state struct. provide is static and is handed nothing of it.
+struct State {
+    std::int64_t n;
+    ZEN_SHAPE(State, 1, ZEN_FIELD(n));
+};
+
+// Provides is last, so Claims<> is written to reach it.
+class Arith : public loom::WeaveBase<Arith, State, loom::Accept<>, loom::Emit<>, loom::Claims<>,
+                                     loom::Provides<Add>> {
+public:
+    static Sum provide(const Add& add) { return Sum{add.a + add.b}; }
+};
+
+// The caller, from a handler. Work is the shape it accepts; it carries a and b.
+void on(const Work& w, loom::Mail& mail) {
+    loom::Called<Sum> r = mail.call<Sum>("arith", Add{w.a, w.b});
+    if (r) {
+        // r->value is the Sum
+    } else {
+        // loom::name_of(r.refusal()) and r.words() say why
+    }
+}
+```
+
+`arith` is the role the host bound `Arith` to. `mount<>` binds no role, and the
+grant it builds carries no call rule. The caller's grant has to hold
+`Grant::allow_call("arith", "Add", 1)`; pass that grant to `mount_granted`.
+The rest is the reference
+([calls](../reference/messaging.md#calls-a-function-of-its-argument-alone))
+and [MSG-14](../laws/messaging-laws.md#msg-14--a-call-is-a-function-of-its-argument-alone).
+
 ## Deeper
 
 [Messaging](messaging.md) (answers, roles, publish) ·
