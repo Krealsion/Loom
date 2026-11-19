@@ -116,19 +116,19 @@ in `docs/laws/population-laws.md`.
   artifact that stops taking it is named instead of silently leaving.
 - **Populations are not interchangeable**: cases, suites, OS-enforcement proofs, assertions.
   Assertion totals are reported, never an acceptance oracle.
-- **Documentation is checked too.** `doc_links` resolves every relative link in a current-facing
-  `*.md` and its `#anchor`, and every repository-relative `docs/...md` path in a first-party C/C++
-  or CMake comment (read from the repository root, because a comment moves with its code), and
-  refuses a path outside the repository, whether spelled out or reached by climbing above it
-  with `../`. `doc_names` holds what the routers and the contributor's pages name with no link: a
-  path in backticks or in the routing table, a suite, an entry or a gate, a range of laws
-  ([the checks](CONTRIBUTING.md#the-checks)). `source_comments` and `doc_standard` hold the
-  comment and document standard, and `code_values` the values the code owns, each read from its
-  owner. A broken reference, a name that names nothing, a
-  private id, a page telling its own history or the development process in a form
-  `doc_standard` names, or a copied value out of step or unmarked is a red in the official
-  lane. `docs/history/`, `archive/`, vendored trees and build trees are excluded by written
-  rule.
+- **Documentation is checked too.** The checks `tests/text_checks.cmake` lists (`ZEN_TEXT_CHECKS`)
+  hold this ([the checks](CONTRIBUTING.md#the-checks)). They resolve every relative link in a
+  current-facing `*.md` and its `#anchor`, and every repository-relative `docs/...md` path in a
+  first-party C/C++ or CMake comment (read from the repository root, because a comment moves with
+  its code), and refuse a path outside the repository, whether spelled out or reached by climbing
+  above it with `../`. They hold what the routers and the contributor's pages name with no link: a
+  path in backticks or in the routing table, a suite, an entry or a gate, a range of laws. They
+  hold the comment and document standard and the values the code owns, each read from its owner,
+  and a census of a file's lines, a class's members and a table's doors, exact in either direction.
+  A broken reference, a name that names nothing, a private id, a page telling its own history or
+  the development process in a form the checks name, a copied value out of step or unmarked, or a
+  census row that differs, is a red in the official lane. `docs/history/`, `archive/`, vendored
+  trees and build trees are excluded by written rule.
 
 ## The supplied host, and who decides what a loaded artifact may do
 
