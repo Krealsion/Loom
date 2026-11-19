@@ -4,7 +4,8 @@ For a machine collaborator working in this repository. The router is **`docs/CON
 (topic → reference → laws → tests); the human router is `docs/README.md`. Normative truth is
 `docs/reference/` and `docs/laws/` only; `docs/history/` is a frozen record; `docs/evidence/` is
 not the API contract. What a comment or a page may carry is in
-[CONTRIBUTING.md](CONTRIBUTING.md#comments-and-documents). A `ready` issue goes to a pull request
+[CONTRIBUTING.md](CONTRIBUTING.md#comments-and-documents). Names are verbs that say what happens,
+parameters say what they hold, and a renamed thing's files change with it. A `ready` issue goes to a pull request
 by [taking an issue](docs/contributing/taking-an-issue.md), and
 [best practices](docs/contributing/best-practices.md) names the owner of each practice.
 
@@ -43,10 +44,6 @@ cmake -P tests/documentation_lane.cmake               # the documentation lane, 
   through `tests/run-under-scope.sh ./build/tests/zen-tests`. Outside such a scope every
   OS-enforcement case fails **by design** (failing hard beats skipping silently) and names the
   capability it could not enforce.
-- The `isolation` suite's granted-network positive control opens its own listener on
-  `127.0.0.1:0` and requires a successful connect and a token byte, so no host's closed-port
-  behaviour is consulted anywhere: a failure there is a real failure
-  ([capabilities](docs/reference/capabilities.md#the-granted-network-positive-control-and-the-endpoint-it-uses)).
 - Windows builds the portable subset only, on **MinGW-w64 and MSVC** alike; the kernel lanes are
   opt-in (`LOOM_ENABLE_WINDOWS_KERNEL`). MSVC needs `/Zc:preprocessor` for Loom's public
   `__VA_OPT__` macros, and `loom::core` carries it as an interface option; on the MSVC ABI the whole
@@ -82,53 +79,21 @@ in `docs/laws/population-laws.md`.
   `population` CTest entry enforces it without running any case.
 - **`tests/entry_population.txt`** does the same for the CTest entries that are **not** suites:
   the population checks, the documentation checks, the weave-artifact checks, the host-process
-  witnesses and the rest. The expected set is the suites declared for the active gates together
-  with these, compared with `ctest -N` by name in both directions: declared and missing is a red,
-  and so is registered and undeclared. Adding a CTest entry of any kind is a line in one of the
+  witnesses and the rest. Adding a CTest entry of any kind is a line in one of the
   two files, and which file says what kind of thing it is.
-- **The entry inventory is taken twice, by two doors that do not lean on each other**: in
-  `tests/verify.cmake` before the lane runs anything, and inside the `population` entry as part of
-  its own work. One implementation (`tests/check_entry_population.cmake`), one expectation, two
-  executions: a deleted entry cannot complain about its own deletion, so the lane's door notices a
-  missing `population`; and a lane cannot check itself, so the entry's door asks the build what it
-  registered. The lane's inventory leaves a **receipt** (the run, the build, the gates and the two
-  identity sets it compared), and the entry refuses a run that carries the lane's token and shows
-  no matching receipt. One ordinary deletion on either side is red; removing the lane's call *and*
-  its announcement of itself escapes the doors' notice of each other, and still not the entry's
-  own inventory.
 - **OS-enforcement tallies are per suite and EXACT, not floors.** `isolation` and `policy` each
   expect an exact count of executed enforcement proofs, the same in a dedicated run and in `all`.
   A missing witness fails, and so does an unannounced extra one. Each number is owned by the
   `ZEN_ENFORCEMENT_POPULATION(...)` call at the end of `tests/test_isolation.cpp` and
   `tests/test_policy.cpp`; read it there, it is written nowhere else. A suite that includes
   `tests/enforcement_gate.hpp` must `#define ZEN_ENFORCEMENT_DOMAIN` first.
-- **`ZEN_ALLOW_UNENFORCEABLE=1` / `ZEN_REQUIRE_ENFORCEMENT=0` prove nothing about containment.**
-  They turn missing enforcement into marked, degraded skips so a host that cannot enforce can still
-  run the rest; the coverage case then prints `*** NON-ENFORCEMENT MODE ***` and asserts no
-  population, and the official lane refuses to start. Never quote such a run as enforcement
-  evidence.
-- **Declared absence is not a pass.** The default Windows build carries fewer suites than Linux
-  because the `kernel` and `posix` gates are off; the `population` check prints each of those as
-  `DECLARED ABSENT`. Do not compare the two totals, and do not read an absent suite as a passing
-  one.
-- **The same doctrine covers built artifacts** (POP-05): the `weave_population` entry pins which
-  artifacts must carry the reloadable-weave build contract, derived from the build graph, so an
-  artifact that stops taking it is named instead of silently leaving.
 - **Populations are not interchangeable**: cases, suites, OS-enforcement proofs, assertions.
   Assertion totals are reported, never an acceptance oracle.
 - **Documentation is checked too.** The checks `tests/text_checks.cmake` lists (`ZEN_TEXT_CHECKS`)
-  hold this ([the checks](CONTRIBUTING.md#the-checks)). They resolve every relative link in a
-  current-facing `*.md` and its `#anchor`, and every repository-relative `docs/...md` path in a
-  first-party C/C++ or CMake comment (read from the repository root, because a comment moves with
-  its code), and refuse a path outside the repository, whether spelled out or reached by climbing
-  above it with `../`. They hold what the routers and the contributor's pages name with no link: a
-  path in backticks or in the routing table, a suite, an entry or a gate, a range of laws. They
-  hold the comment and document standard and the values the code owns, each read from its owner,
-  and a census of a file's lines, a class's members and a table's doors, exact in either direction.
-  A broken reference, a name that names nothing, a private id, a page telling its own history or
-  the development process in a form the checks name, a copied value out of step or unmarked, or a
-  census row that differs, is a red in the official lane. `docs/history/`, `archive/`, vendored
-  trees and build trees are excluded by written rule.
+  hold this ([the checks](CONTRIBUTING.md#the-checks)). A broken reference, a name that names
+  nothing, a private id, a page telling its own history or the development process in a form
+  `doc_standard` names, or a copied value out of step or unmarked is a red in the official lane.
+  `docs/history/`, `archive/`, vendored trees and build trees are excluded by written rule.
 
 ## The supplied host, and who decides what a loaded artifact may do
 
@@ -151,22 +116,17 @@ prerequisites: `docs/guides/tools.md`.
    anything.
 3. The loop is `pump_pending()` plus the one wait (`include/zen/host/reactor.hpp`) over the console
    (`include/zen/host/line_input.hpp`) and, serving, the door, never `drain_until_idle()`: one
-   approved self-addressed message would otherwise make `stop` and `quit` unreadable forever. A
-   busy bus only looks; an idle host rests until a line, a client or its own deadline comes. That
-   holds while a line is **half typed**: a Windows console cannot be asked whether a line is
-   finished, so it is read on its own thread, which ends the wait once the line is whole. What the reader holds and
-   refuses is one rule on every platform (`loom::host::HeldInput`): at most `kHeldInputBytes`
-   waiting, and a line over `kMaxCommandBytes` refused whole, never run shortened or split
-   (`docs/reference/bounds.md`).
+   approved self-addressed message would otherwise make `stop` and `quit` unreadable forever.
+   What the reader holds and refuses is one rule on every platform (`loom::host::HeldInput`): at
+   most `kHeldInputBytes` waiting, and a line over `kMaxCommandBytes` refused whole, never run
+   shortened or split (`docs/reference/bounds.md`).
 
 A conversation that has not settled is reported PENDING and stays open; the host never invents a
 completion. The console holds a conversation only for a caller that asks
 (`ConsoleTracking::Tracked`), until that caller takes or forgets it.
 
 **One host owns one decision store while it runs** (`include/zen/host/store_lock.hpp`): the store is
-written whole, so a second writer would restore what the first one revoked. A second host naming
-the same file exits **4** and says how to proceed. Exit codes: 0 ok, 2 bad command line, 3 a file
-would not parse, 4 store (or, serving, session directory) in use, 5 a session could not be opened.
+written whole, so a second writer would restore what the first one revoked.
 
 **Building a capability on a session for some other application to drive** (a guest door, an
 external-host tool package): `docs/guides/session-tools-map.md` routes each question — start and
@@ -178,13 +138,10 @@ holds only what is its own (its admission and guest shapes).
 closes only the console. One loopback door (`src/host/session_door.hpp`) admits the owner's key
 as a client with exactly the session, runs and history vocabularies, and a run manager's one-time
 worker credential (only its SHA-256 crosses the bus) with no more than that manager's own approved
-authority, whole or refused. Every session is compat-encoded. The scoped reader
-(`src/host/history_reader.hpp`) reads the Recorder and is blacklisted from it. The run manager
+authority, whole or refused. The run manager
 `loom-runs` (`src/runs/`) is an ordinary loadable weave — task policy, not host root — with its
 Python runtime beside it. **Every delivery is gated, answers included**: host wiring grants its
-own answer shapes; the weaver grants a loaded manager its typed answers. Python is optional:
-gate `runs` carries the C++ `runs` suite, gate `python` the process journey `session_journey`
-(declared absent without an interpreter).
+own answer shapes; the weaver grants a loaded manager its typed answers.
 
 **Five CTest entries drive the real host**, because none of the above is visible to a test of the
 deciding half. Two feed it through a file (`tests/host_process/run.cmake`: identities, counts and
@@ -200,9 +157,7 @@ every platform. **Redirected stdin is not evidence about a console.**
 nothing and says so**. A host that wants every artifact trusted asks for it by name —
 `trust_every_artifact("why")` — and the `why` rides every verdict. The four-argument
 `load(..., Grant)` bypasses the policy deliberately: naming the grant at the call site *is* the
-decision. Which build an artifact is (`AdmissionRequest::build`) is read from the file only when a
-policy asks, once per operation, never eagerly; measure that by the work
-(`file_content_id_scans()`), not the clock.
+decision.
 `docs/reference/capabilities.md#admitting-a-loaded-artifact`; suite `admission`.
 
 ## Intent, evidence, and architectural fit
