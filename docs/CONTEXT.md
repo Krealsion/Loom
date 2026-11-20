@@ -72,7 +72,7 @@ the named laws → the reference page → tests when exactness matters.
 | authored handoff (continuity across an incompatible schema) | reference/handoff.md | HANDOFF-01..03, PR-09 | tests/test_handoff.cpp | decisions/migration-is-authored-not-inferred.md |
 | event-loop composition | reference/messaging.md#two-dispatch-turns-and-the-call-site-says-which | MSG-09 | tests/test_switchboard.cpp, test_bridge.cpp | — |
 | Timer continuity — **not in this repository**; Zengine's Timer package owns and documents it | [Zengine](https://github.com/Krealsion/Zengine) | — | — | — |
-| what a green run means (suite/case/enforcement populations, declared absence, the opt-out, the required build-artifact population) | laws/population-laws.md, ../AGENTS.md | POP-01..05 | tests/suite_population.txt, tests/entry_population.txt, tests/check_population.cmake, tests/check_entry_population.cmake, tests/verify.cmake, tests/enforcement_gate.hpp, tests/weave_population.cmake | — |
+| what a green run means (suite/case/enforcement populations, declared absence, the opt-out, the required build-artifact population) | laws/population-laws.md, ../CONTRIBUTING.md | POP-01..05 | tests/suite_population.txt, tests/entry_population.txt, tests/check_population.cmake, tests/check_entry_population.cmake, tests/verify.cmake, tests/enforcement_gate.hpp, tests/weave_population.cmake | — |
 | what a comment or a page may carry (the standard, and the three checks that hold it: `source_comments`, `doc_standard`, `doc_links`) | ../CONTRIBUTING.md#comments-and-documents | — | tests/check_source_comments.cmake, tests/check_doc_standard.cmake, tests/private_ids.cmake, tests/check_doc_links.cmake | — |
 | how the `isolation` granted-network positive control proves the sandbox is a sandbox and not a muzzle — the endpoint the test binds and owns, why the positive witness is a successful connect plus a token byte rather than a particular errno, and why no host's closed-port behaviour is consulted (a failure there is a real failure) | reference/capabilities.md#the-granted-network-positive-control-and-the-endpoint-it-uses | POP-04 | tests/test_isolation.cpp, tests/weavelib/test_weave.cpp | a positive control that depended on how the host treated a closed port |
 | known limitations | reference/known-seams.md | MSG-04, ANS-02, PR-09 | — | evidence/night-lab.md |
@@ -148,6 +148,6 @@ only the conversation (PR-04) · role-authorship evidence lives in
 · admission-at-dispatch rationale lives in
 [decisions/admission-and-activation-share-one-boundary.md](decisions/admission-and-activation-share-one-boundary.md).
 
-**Build and test:** [`AGENTS.md`](../AGENTS.md) at the repository root. **Taking an issue**
+**Build and test:** [the contributor's guide](../CONTRIBUTING.md#build-and-test) at the repository root. **Taking an issue**
 labelled `ready` to a pull request: [contributing/taking-an-issue.md](contributing/taking-an-issue.md);
 **best practices**, by subsystem: [contributing/best-practices.md](contributing/best-practices.md).

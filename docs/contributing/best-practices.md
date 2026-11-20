@@ -3,7 +3,7 @@
 What good work looks like in this repository, one practice to a bullet. Each practice links its
 owner: the law, reference page, guide, root document or check that states the rule and the
 reasons for it, which this page never restates. [Taking an issue](taking-an-issue.md) is the path
-from an issue to a pull request, and [AGENTS.md](../../AGENTS.md) holds the build rules.
+from an issue to a pull request, and [the guide](../../CONTRIBUTING.md) holds the build rules.
 
 Each section belongs to one area of the repository and stands alone, naming its own owners, so
 that a section can move into its area's own document. A section opens with its owners: the laws,
@@ -19,10 +19,10 @@ the reference pages, and the main suites and other CTest entries that witness it
 - **Read the owner before the code.** [CONTEXT.md](../CONTEXT.md) routes each topic to its
   reference page, its laws and its tests.
 - **Intent decides what is right; a passing test shows what happens.**
-  [Intent, evidence, and architectural fit](../../AGENTS.md#intent-evidence-and-architectural-fit)
+  [Intent, evidence, and architectural fit](../../CONTRIBUTING.md#what-a-change-is-judged-against)
 - **Judge the whole result, and what it leaves the consumers that build on Loom.**
-  [Intent, evidence, and architectural fit](../../AGENTS.md#intent-evidence-and-architectural-fit)
-  and [consumers](../../AGENTS.md#consumers)
+  [Intent, evidence, and architectural fit](../../CONTRIBUTING.md#what-a-change-is-judged-against)
+  and [consumers](../../CONTRIBUTING.md#consumers)
 - **Read a law's DOES NOT MEAN before changing what it governs.**
   [Reading a law](../laws/README.md#reading-a-law)
 - **Stay inside the issue's fences.** [Taking an issue](taking-an-issue.md#1-choose-a-ready-issue)
@@ -35,21 +35,21 @@ the reference pages, and the main suites and other CTest entries that witness it
   construction, not yet pinned. [Laws](../laws/README.md)
 - **Zero is never a pass**: a run that selects no case exits 70, and the lane refuses an empty
   selection.
-  [The population contract](../../AGENTS.md#the-population-contract--what-a-green-run-means-pop-0105)
+  [The population contract](../../CONTRIBUTING.md#the-population-contract--what-a-green-run-means-pop-0105)
 - **A case's name says what it proves**, with no label and no private id.
-  [Source comments](../../CONTRIBUTING.md#source-comments) and [the checks](../../CONTRIBUTING.md#the-checks)
+  [Comments and documents](../../CONTRIBUTING.md#comments-and-documents) and [the checks](../../CONTRIBUTING.md#the-checks)
 
 ### Verification
 
 - **Quote `tests/verify.cmake`, never a bare `ctest`.**
-  [The population contract](../../AGENTS.md#the-population-contract--what-a-green-run-means-pop-0105)
-- **A Windows green names its compiler**, never a bare "Windows". [Build and test](../../AGENTS.md#build-and-test)
+  [The population contract](../../CONTRIBUTING.md#the-population-contract--what-a-green-run-means-pop-0105)
+- **A Windows green names its compiler**, never a bare "Windows". [Build and test](../../CONTRIBUTING.md#build-and-test)
 - **Declared absence is not a pass**, and a Windows total is never compared with a Linux one.
   [POP-03](../laws/population-laws.md#pop-03--unsupported-testability-is-declared-never-disguised)
 - **A run under the enforcement opt-out proves nothing about containment.**
   [POP-04](../laws/population-laws.md#pop-04--an-opt-out-run-is-not-enforcement-evidence)
 - **A build speedup waits until the whole lane has run under it.**
-  [Build and test](../../AGENTS.md#build-and-test)
+  [More build rules](../../CONTRIBUTING.md#more-build-rules)
 - **A hosted run is read job by job.** [Taking an issue](taking-an-issue.md#10-reading-the-hosted-run)
 
 ### Writing
@@ -59,8 +59,9 @@ the reference pages, and the main suites and other CTest entries that witness it
 - **A value the code owns is named by its owner, or held in a marker**:
   `cmake -DZEN_VALUES_WRITE=ON -P tests/check_code_values.cmake` rewrites the markers.
   [Values the code owns](../../CONTRIBUTING.md#values-the-code-owns)
-- **A comment stays only where a reader would otherwise make a mistake**, and an installed header
-  is documentation. [Source comments](../../CONTRIBUTING.md#source-comments)
+- **A comment says why, what the code must not become, or what cannot be seen from its line**, in
+  complete sentences, and an installed header is documentation.
+  [Comments and documents](../../CONTRIBUTING.md#comments-and-documents)
 - **A term is explained where a reader first meets it**, or linked to the
   [terminology index](../terminology.md). [Comments and documents](../../CONTRIBUTING.md#comments-and-documents)
 
@@ -154,9 +155,9 @@ Laws KERN-01 to KERN-05 in [kernel](../laws/kernel-laws.md), and POP-05; referen
 and the entries `weave_contract` and `weave_population`, with `weave_reload` on Windows.
 
 - **Every loadable weave target, the test fixtures included, goes through
-  `loom_weave_build_contract()`.** [Build and test](../../AGENTS.md#build-and-test) and
+  `loom_weave_build_contract()`.** [More build rules](../../CONTRIBUTING.md#more-build-rules) and
   [KERN-05](../laws/kernel-laws.md#kern-05--a-weaves-statics-live-and-die-with-it-and-its-c-runtime-is-its-own)
-- **The linker is not changed without the whole lane.** [Build and test](../../AGENTS.md#build-and-test)
+- **The linker is not changed without the whole lane.** [More build rules](../../CONTRIBUTING.md#more-build-rules)
 - **ABI tables are built with designated initializers, in declaration order.**
   [Constructing the tables](../reference/dynamic-abi.md#constructing-the-tables)
 - **A version bump keeps its stale fixture and owes a genuine artifact from before the change.**
@@ -172,11 +173,11 @@ reference [capabilities](../reference/capabilities.md); the suite `grant`, `capa
 which CTest runs through `tests/run-under-scope.sh`.
 
 - **`Kernel::load` mints no grant**, and a Kernel nobody configured admits nothing.
-  [Who decides what a loaded artifact may do](../../AGENTS.md#the-supplied-host-and-who-decides-what-a-loaded-artifact-may-do)
+  [Who decides what a loaded artifact may do](../../CONTRIBUTING.md#the-supplied-host-and-who-decides-what-a-loaded-artifact-may-do)
 - **A grant is not mutable**: only delegated message authority changes live.
   [GATE-05](../laws/admission-laws.md#gate-05--baseline-authority-is-admission-time-delegated-authority-is-live-effective-authority-decides)
 - **An OS-enforcement tally is exact, and its owner is the suite's closing population call.**
-  [The population contract](../../AGENTS.md#the-population-contract--what-a-green-run-means-pop-0105)
+  [The population contract](../../CONTRIBUTING.md#the-population-contract--what-a-green-run-means-pop-0105)
 - **A run under the opt-out is never containment evidence.**
   [POP-04](../laws/population-laws.md#pop-04--an-opt-out-run-is-not-enforcement-evidence)
 - **The sanitizer lane's leak checking stops at the host**: a child's leaks are absent, not clean.
@@ -193,7 +194,7 @@ are built; the entries `host_console`, `host_line_input`, `host_line_streams`,
 `session_client` and `observe_journey`.
 
 - **An answer is what Loom attributed, never the newest entry in the reply window.**
-  [Who decides what a loaded artifact may do](../../AGENTS.md#the-supplied-host-and-who-decides-what-a-loaded-artifact-may-do)
+  [Who decides what a loaded artifact may do](../../CONTRIBUTING.md#the-supplied-host-and-who-decides-what-a-loaded-artifact-may-do)
 - **A reachable bridge socket is not admitted, and the transport is plain.**
   [The bridge carries no transport security](../reference/known-seams.md#the-bridge-carries-no-transport-security-and-a-credential-is-a-shared-secret)
 - **Python is optional tooling**: without it the session journeys are declared absent, not passed.
@@ -236,14 +237,14 @@ Zengine's `main` against the change.
 - **Among Loom's own lanes, only the package witness reaches Loom through `find_package` alone**,
   so only it catches a requirement the package fails to carry:
   `cmake -DZEN_PREFIX=<prefix> -DZEN_WORK=<dir> -P tests/package/run.cmake`.
-  [Build and test](../../AGENTS.md#build-and-test)
+  [More build rules](../../CONTRIBUTING.md#more-build-rules)
 - **Hosting is gated on `if(TARGET loom::kernel)`**, and the exported surface stays smaller than
   the build tree. [Consuming Loom](../../README.md#consuming-loom)
 - **`loom::core` carries the MSVC preprocessor flag**, so a consumer that links it passes nothing.
   [Platform differences](../guides/tools.md#platform-differences-that-will-actually-bite-you)
-- **Use nothing only a compiler newer than the floor accepts.** [Build and test](../../AGENTS.md#build-and-test)
+- **Use nothing only a compiler newer than the floor accepts.** [Build and test](../../CONTRIBUTING.md#build-and-test)
 - **A kernel-less package fails Zengine's tests at configure, by design.**
-  [Consumers](../../AGENTS.md#consumers)
+  [Consumers](../../CONTRIBUTING.md#consumers)
 
 ## Populations and tests
 
@@ -253,13 +254,13 @@ Laws POP-01 to POP-05 in [population](../laws/population-laws.md); the manifests
 
 - **A new or renamed suite is a line in `tests/suite_population.txt`**, and any other CTest entry
   a line in `tests/entry_population.txt`.
-  [The population contract](../../AGENTS.md#the-population-contract--what-a-green-run-means-pop-0105)
+  [The population contract](../../CONTRIBUTING.md#the-population-contract--what-a-green-run-means-pop-0105)
 - **A case floor is never lowered to make a deletion pass.**
   [POP-02](../laws/population-laws.md#pop-02--a-coverage-floor-belongs-to-the-population-it-counts)
 - **Suite registration is derived from each test source's `TEST_SUITE`**, with no hand-kept
-  list. [The population contract](../../AGENTS.md#the-population-contract--what-a-green-run-means-pop-0105)
+  list. [The population contract](../../CONTRIBUTING.md#the-population-contract--what-a-green-run-means-pop-0105)
 - **Assertion totals are reported, never an acceptance oracle.**
-  [The population contract](../../AGENTS.md#the-population-contract--what-a-green-run-means-pop-0105)
+  [The population contract](../../CONTRIBUTING.md#the-population-contract--what-a-green-run-means-pop-0105)
 
 ## Documentation and its checks
 
@@ -268,7 +269,7 @@ Laws POP-01 to POP-05 in [population](../laws/population-laws.md); the manifests
 (`ZEN_TEXT_CHECKS`), run together by `cmake -P tests/documentation_lane.cmake`.
 
 - **A change that touches no compiled line is verified by the documentation lane.**
-  [Build and test](../../AGENTS.md#build-and-test)
+  [Build and test](../../CONTRIBUTING.md#build-and-test)
 - **Normative truth is `docs/reference/` and `docs/laws/`**; history is frozen, and evidence is
   not the contract. [CONTEXT.md](../CONTEXT.md)
 - **A law is cited by the id `docs/laws/` declares**, and any other reason is said in words.

@@ -5,7 +5,7 @@
 // weaver's console, and the authority store that carries their decisions across restarts
 // (zen/host/authority.hpp). Every part is an ordinary, replaceable participant: ConsoleEngine,
 // WeaveManager, ControlWeave and HostWarden. The three rules it is built around (attributed
-// answers, adoption inside the load, a bounded turn) are in AGENTS.md, beside the code here.
+// answers, adoption inside the load, a bounded turn) are in CONTRIBUTING.md, beside the code here.
 // `stop <name>` ends one application, `quit` ends the host, and a failed boot neither.
 
 #include "boot_plan.hpp"
