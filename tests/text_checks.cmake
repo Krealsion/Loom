@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (c) 2026 Joshua DeMoss
 #
-# The text checks and the documentation lane's reach (AGENTS.md, the documentation lane). Each
+# The text checks and the documentation lane's reach (CONTRIBUTING.md, build and test). Each
 # check is `tests/check_<name>.cmake`, run as `cmake -DZEN_REPO=<root> -P` by CTest and the lane
 # alike; tests/CMakeLists.txt registers them from this list, so the two cannot drift.
 set(ZEN_TEXT_CHECKS doc_links doc_names source_comments doc_standard code_values census)

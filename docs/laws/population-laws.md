@@ -27,7 +27,7 @@ Harness: [`tests/CMakeLists.txt`](../../tests/CMakeLists.txt) ·
 [`tests/enforcement_gate.hpp`](../../tests/enforcement_gate.hpp) ·
 [`tests/weave_population.cmake`](../../tests/weave_population.cmake) ·
 [`tests/check_weave_population.cmake`](../../tests/check_weave_population.cmake).
-Running them: [`AGENTS.md`](../../AGENTS.md).
+Running them: [the contributor's guide](../../CONTRIBUTING.md#what-a-green-means).
 
 **These laws are Zen's, and Zen is two repositories.** POP-01, POP-02 and POP-03 bind
 Loom's harness *and* Zengine's; POP-05 is about Loom's own test tree. Without them a stock

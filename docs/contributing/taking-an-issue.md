@@ -83,13 +83,13 @@ approves them.
 
 ## 3. Read what owns the subsystem
 
-[AGENTS.md](../../AGENTS.md) holds the rules a change keeps and the traps to avoid, and
+[The guide](../../CONTRIBUTING.md) holds the rules a change keeps and the traps to avoid, and
 [CONTEXT.md](../CONTEXT.md) routes each topic to its reference page, its laws and its tests.
 Read those, and the pages the issue links, before designing the change;
 [CONTRIBUTING.md](../../CONTRIBUTING.md#getting-a-loom-you-can-work-with) asks that you have run
 Loom first. Normative truth is `docs/reference/` and `docs/laws/`. Where the issue and a law
 disagree, trace both and say in the pull request which is wrong, rather than bending one to fit
-the other ([intent, evidence, and architectural fit](../../AGENTS.md#intent-evidence-and-architectural-fit)).
+the other ([intent, evidence, and architectural fit](../../CONTRIBUTING.md#what-a-change-is-judged-against)).
 
 ## 4. The environment
 
@@ -97,7 +97,7 @@ the other ([intent, evidence, and architectural fit](../../AGENTS.md#intent-evid
 with, and where to get them; Linux is the reference platform, and Windows has
 [a route of its own](../guides/tools.md#the-windows-route). Beyond those:
 
-- **A CMake new enough for the whole lane**, which [build and test](../../AGENTS.md#build-and-test)
+- **A CMake new enough for the whole lane**, which [build and test](../../CONTRIBUTING.md#build-and-test)
   names; the library alone configures with an older one.
 - **`nm`**, which the weave-contract check and the package witness refuse to run without
   ([optional, and what each one buys you](../guides/tools.md#optional-and-what-each-one-buys-you)).
@@ -116,7 +116,7 @@ Loom fetches nothing at configure. A change to documentation alone needs only CM
 
 ## 5. Build
 
-The commands, and the rules a build keeps, are in [AGENTS.md](../../AGENTS.md#build-and-test).
+The commands, and the rules a build keeps, are in [the guide](../../CONTRIBUTING.md#build-and-test).
 Configure a tree once; after each edit, `cmake --build build` rebuilds what changed. Suites are
 read from their sources at configure, so a new or renamed `TEST_SUITE` reaches CTest when the
 tree is configured again ([`tests/CMakeLists.txt`](../../tests/CMakeLists.txt)).
@@ -146,7 +146,7 @@ The case comes first, and it fails on the unchanged code for the reason the issu
 A case asserts what *done when* requires, not what the code prints today: a test can pin an
 incorrect expectation ([laws](../laws/README.md)). And it goes red on the defect, never for a
 reason that would let a simpler case pass
-([source comments](../../CONTRIBUTING.md#source-comments)). For an issue about a page, the red is
+([comments and documents](../../CONTRIBUTING.md#comments-and-documents)). For an issue about a page, the red is
 the page as it reads before the change, quoted, or a text check that fails on it.
 
 ## 7. The change
@@ -173,7 +173,7 @@ verification:
 cmake -P tests/documentation_lane.cmake
 ```
 
-Otherwise the official lane is its verification, and [AGENTS.md](../../AGENTS.md#build-and-test)
+Otherwise the official lane is its verification, and [the guide](../../CONTRIBUTING.md#build-and-test)
 holds its commands. The sanitizer lane, the same build with `-DZEN_SANITIZE=ON`, is among the
 checks the merge waits for, so a change it could fail runs it too. A change to what the installed
 package carries, an installed header, an exported target or the package's CMake files, runs the
@@ -195,8 +195,8 @@ git diff origin/main...HEAD
 Read the whole diff, every file, as review will read it, each one inside the issue's folders. What
 that read finds is fixed and verified again before the push. A green you report quotes its lane,
 never a bare `ctest`
-([the population contract](../../AGENTS.md#the-population-contract--what-a-green-run-means-pop-0105)),
-and a Windows green names its compiler ([build and test](../../AGENTS.md#build-and-test)).
+([the population contract](../../CONTRIBUTING.md#the-population-contract--what-a-green-run-means-pop-0105)),
+and a Windows green names its compiler ([build and test](../../CONTRIBUTING.md#build-and-test)).
 
 ## 9. The pull request
 
@@ -244,7 +244,7 @@ A check's link ends in its job's id.
 - **Zengine's current `main` is built against a compiled change**: the job
   `Loom -> canonical Zengine stranger` installs this Loom and runs Zengine's own lane against it,
   and takes longest. Its red fails the run, and the pull request says what the change leaves its
-  consumers ([intent, evidence, and architectural fit](../../AGENTS.md#intent-evidence-and-architectural-fit)).
+  consumers ([intent, evidence, and architectural fit](../../CONTRIBUTING.md#what-a-change-is-judged-against)).
 - **The three Windows jobs are advisory**, as their names say: their red does not fail the run,
   and it is still reported.
 - **The merge waits only for the checks `gh pr checks <n> --required` lists.**

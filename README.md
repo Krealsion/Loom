@@ -95,8 +95,8 @@ exact semantics are in the [reference](docs/reference/); the named invariants in
 [laws](docs/laws/README.md); why things are as they are in the
 [decisions](docs/decisions/README.md) and [history](docs/history/README.md); what applications
 found in the [evidence](docs/evidence/README.md). Every term is defined once, in the
-[terminology index](docs/terminology.md). A machine collaborator starts at
-[docs/CONTEXT.md](docs/CONTEXT.md) and builds by [AGENTS.md](AGENTS.md).
+[terminology index](docs/terminology.md). A contributor, a person or an agent,
+starts at [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Build and test
 

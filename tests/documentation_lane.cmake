@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (c) 2026 Joshua DeMoss
 #
-# The documentation lane (AGENTS.md): every text check, as CTest runs it, over a change that touches
-# no compiled line. It asks tests/check_change_kind.cmake first and passes only when the change is
-# documentation-only and every check passed; -DZEN_LANE_KIND=OFF runs the checks alone (CI's job).
+# The documentation lane (CONTRIBUTING.md, build and test): every text check, as CTest runs it,
+# over a change that touches no compiled line. It asks tests/check_change_kind.cmake first and
+# passes only when the change is documentation-only and every check passed; -DZEN_LANE_KIND=OFF
+# runs the checks alone (CI's job).
 #   cmake [-DZEN_BASE=<rev>] [-DZEN_LANE_KIND=OFF] -P tests/documentation_lane.cmake
 
 cmake_minimum_required(VERSION 3.16)

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (c) 2026 Joshua DeMoss
 #
-# Is a change documentation-only (AGENTS.md, the documentation lane)? Reads what changed from the
+# Is a change documentation-only (CONTRIBUTING.md, build and test)? Reads what changed from the
 # base to the head, or to the working tree and its untracked files, and prints each file's kind;
 # ZEN_KIND_OUT gets `compiled=true|false`. Exit 0 once it has answered, either way.
 #   cmake [-DZEN_BASE=<rev>] [-DZEN_HEAD=<rev>] [-DZEN_KIND_OUT=<file>] -P tests/check_change_kind.cmake
