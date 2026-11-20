@@ -88,7 +88,7 @@ clearer and smaller does.
 - **The shared half.** What the two repositories' guides share is owned by
   [Loom's guide](../../CONTRIBUTING.md), and Zengine's links it by address.
 - **The recommended setup** is [a page among Loom's contributor pages](recommended-setup.md). It
-  names kinds of machine (cores, memory, disk), never one person's, and says how each harness
+  names kinds of machine (cores, memory, disk), never one person's, and says how a harness
   reaches the start file.
 - **Frozen history** stays in the tree, in an area of its own whose `README.md` says why it exists:
   it is in no total, and on no required path.

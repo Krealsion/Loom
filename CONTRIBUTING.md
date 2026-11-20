@@ -4,7 +4,8 @@ The guide for everyone who changes Loom, a person or an agent: one reader with o
 [what any task needs](#what-any-task-needs) before any task; [the reference](#reference) after it
 is read when a question needs it. Every page and comment is written to
 [the documentation's design](docs/contributing/documentation-design.md), and
-[the recommended setup](docs/contributing/recommended-setup.md) says how we suggest you work.
+[the recommended setup](docs/contributing/recommended-setup.md) helps you choose a machine, a
+clone and a harness.
 
 [Zengine](https://github.com/Krealsion/Zengine) shares part of this guide and links it from its
 own: [what a change is judged against](#what-a-change-is-judged-against),
@@ -155,7 +156,19 @@ here, subsystem by subsystem. Open an issue before preparing a large change to t
   what each proves; a change with none says so.
 - **A maintainer merges.** Leave the pull request open once it is ready.
 - **Your own account authors and commits it**, with no co-author line and no AI credit
-  ([attribution](#attribution)).
+  ([attribution](#attribution)), and you answer for the work, whatever ran it: an agent's choices,
+  its subagents and its budget are your own.
+- **Delete only what can be made again**: a clone whose work a remote holds, a tree its build makes
+  again. Push or save unpushed work first, and keep what a run produced (its logs, its exits, its
+  pictures) apart from the clone and its trees, so a rebuild does not take it with it. What a change
+  made goes once its pull request merges.
+- **An agent's session that is summarized or compressed** reads the start file, this guide and the
+  owner of its part again before going on, and measures again every number it will report: a summary
+  keeps conclusions and drops the evidence behind them. Its memory holds routes, never facts: how
+  the maintainers work where no page says it, and where each fact's owner is, since a fact copied
+  into memory goes stale while its owner moves. Work that spans sessions keeps a short note of where
+  it stands: the branch and its last tip, what is uncommitted, the open question and the next
+  action, what is still running, and the evidence so far with the commit each piece ran at.
 
 ---
 

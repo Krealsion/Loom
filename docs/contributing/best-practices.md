@@ -26,6 +26,8 @@ the reference pages, and the main suites and other CTest entries that witness it
 - **Read a law's DOES NOT MEAN before changing what it governs.**
   [Reading a law](../laws/README.md#reading-a-law)
 - **Stay inside the issue's fences.** [Taking an issue](taking-an-issue.md#1-choose-a-ready-issue)
+- **Start from the current `main`**, and name the commit you started from.
+  [Taking an issue](taking-an-issue.md#2-start-from-current-main)
 
 ### The witness
 
@@ -51,6 +53,8 @@ the reference pages, and the main suites and other CTest entries that witness it
 - **A build speedup waits until the whole lane has run under it.**
   [More build rules](../../CONTRIBUTING.md#more-build-rules)
 - **A hosted run is read job by job.** [Taking an issue](taking-an-issue.md#10-reading-the-hosted-run)
+- **What a run produced is kept apart from the clone and its trees**, and only what can be made
+  again is deleted. [Making a change](../../CONTRIBUTING.md#making-a-change)
 
 ### Writing
 
@@ -82,6 +86,10 @@ the reference pages, and the main suites and other CTest entries that witness it
   [Taking an issue](taking-an-issue.md#8-the-checks-whose-green-counts)
 - **One push, and its run read to its end before the next.**
   [Taking an issue](taking-an-issue.md#10-reading-the-hosted-run)
+- **You answer for the work, whatever ran it.** [Making a change](../../CONTRIBUTING.md#making-a-change)
+- **After a summary or a compression, an agent reads again and measures again**; its memory holds
+  routes, never facts, and work that spans sessions keeps a note of where it stands.
+  [Making a change](../../CONTRIBUTING.md#making-a-change)
 
 ## Values, schemas and the gate
 
