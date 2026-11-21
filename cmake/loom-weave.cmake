@@ -6,6 +6,8 @@
 # and on Windows for the image to carry its own C++ runtime. Forgetting it is no build error: the
 # image stays resident after an unload, or runs on whichever runtime the machine holds. It is not
 # isolation or trust, not every dlclose hazard, and not a runtime check (docs/reference/kernel.md).
+# Nor does it hide the image's other visible symbols, which are not what the image promises: that
+# is its shapes' content ids, its manifest and `zen_weave_abi` (docs/guides/dynamic-weaves.md).
 
 # On the MSVC ABI the C++ runtime is fixed in every object as it is compiled, and every object of
 # one image must agree, so a weave carries its own only if Loom's libraries, which it links, are

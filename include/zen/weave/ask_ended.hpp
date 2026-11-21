@@ -94,6 +94,7 @@ struct AskEnded {
     using ZenSelf = AskEnded;
     static constexpr const char* zen_name = "zen.AskEnded";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(attempt), ZEN_FIELD(target), ZEN_FIELD(role),
                                ZEN_FIELD(shape), ZEN_FIELD(version), ZEN_FIELD(stage));

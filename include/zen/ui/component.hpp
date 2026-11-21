@@ -61,6 +61,7 @@ struct UiNode {
     using ZenSelf = UiNode;
     static constexpr const char* zen_name = "zen.ui.Node";
     static constexpr std::uint32_t zen_version = 2;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(
             ZEN_FIELD(kind), ZEN_FIELD(region_id), ZEN_FIELD(title), ZEN_FIELD(content),
@@ -96,6 +97,7 @@ struct UiComponent {
     using ZenSelf = UiComponent;
     static constexpr const char* zen_name = "zen.ui.Component";
     static constexpr std::uint32_t zen_version = 2;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(name), ZEN_FIELD(contract_name),
                                ZEN_FIELD(contract_version), ZEN_FIELD(nodes));
@@ -112,6 +114,7 @@ struct UiPresenter {
     using ZenSelf = UiPresenter;
     static constexpr const char* zen_name = "zen.ui.Presenter";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(view), ZEN_FIELD(source_role)); }
 };
 

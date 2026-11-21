@@ -701,10 +701,16 @@ std::vector<FieldAccess> access_of() {
 
 /// Declare a struct as a Zen shape. The version is required and part of the identity: a shape
 /// is never changed in place, and a new version is a new content id.
+///
+/// `zen_fields()` is a function template with a defaulted parameter, called as
+/// `T::zen_fields()`, so a unit instantiates a shape's field list only where something uses it
+/// and pays little for a shape it only sees. A registration spelled out by hand in a header
+/// declares `zen_fields` the same way; a plain `static auto zen_fields()` is still a shape.
 #define ZEN_SHAPE(ShapeName, ShapeVersion, ...)                                                    \
     using ZenSelf = ShapeName;                                                                      \
     static constexpr const char* zen_name = #ShapeName;                                             \
     static constexpr ::std::uint32_t zen_version = (ShapeVersion);                                  \
+    template <int ZenLazy = 0>                                                                      \
     static auto zen_fields() { return ::std::make_tuple(__VA_ARGS__); }                             \
     static_assert(true, "") /* swallow the trailing semicolon */
 

@@ -59,6 +59,7 @@ struct RequestAuthority {
     using ZenSelf = RequestAuthority;
     static constexpr const char* zen_name = "zen.RequestAuthority";
     static constexpr std::uint32_t zen_version = 2;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(shape), ZEN_FIELD(version), ZEN_FIELD(to_role),
                                ZEN_FIELD(purpose), ZEN_FIELD(door));
@@ -76,6 +77,7 @@ struct RequestAuthorityV1 {
     using ZenSelf = RequestAuthorityV1;
     static constexpr const char* zen_name = "zen.RequestAuthority";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(shape), ZEN_FIELD(version), ZEN_FIELD(to_role),
                                ZEN_FIELD(purpose));
@@ -127,6 +129,7 @@ struct AuthorityPrompt {
     using ZenSelf = AuthorityPrompt;
     static constexpr const char* zen_name = "zen.AuthorityPrompt";
     static constexpr std::uint32_t zen_version = 3;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(prompt), ZEN_FIELD(door), ZEN_FIELD(requester),
                                ZEN_FIELD(shape), ZEN_FIELD(version), ZEN_FIELD(to_role),
@@ -159,6 +162,7 @@ struct ApproveAuthority {
     using ZenSelf = ApproveAuthority;
     static constexpr const char* zen_name = "zen.ApproveAuthority";
     static constexpr std::uint32_t zen_version = 2;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(prompt)); }
 };
 
@@ -171,6 +175,7 @@ struct RefuseAuthority {
     using ZenSelf = RefuseAuthority;
     static constexpr const char* zen_name = "zen.RefuseAuthority";
     static constexpr std::uint32_t zen_version = 2;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(prompt)); }
 };
 
@@ -181,6 +186,7 @@ struct ApproveAuthorityV1 {
     using ZenSelf = ApproveAuthorityV1;
     static constexpr const char* zen_name = "zen.ApproveAuthority";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(); }
 };
 
@@ -189,6 +195,7 @@ struct RefuseAuthorityV1 {
     using ZenSelf = RefuseAuthorityV1;
     static constexpr const char* zen_name = "zen.RefuseAuthority";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(); }
 };
 
@@ -199,6 +206,7 @@ struct RevokeAuthority {
     using ZenSelf = RevokeAuthority;
     static constexpr const char* zen_name = "zen.RevokeAuthority";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(); }
 };
 
@@ -211,6 +219,7 @@ struct DescribeAuthority {
     using ZenSelf = DescribeAuthority;
     static constexpr const char* zen_name = "zen.DescribeAuthority";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(); }
 };
 
@@ -241,6 +250,7 @@ struct AuthorityGranted {
     using ZenSelf = AuthorityGranted;
     static constexpr const char* zen_name = "zen.AuthorityGranted";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(basis)); }
 };
 
@@ -264,6 +274,7 @@ struct AuthorityDescription {
     using ZenSelf = AuthorityDescription;
     static constexpr const char* zen_name = "zen.AuthorityDescription";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(subject), ZEN_FIELD(base), ZEN_FIELD(delegated));
     }

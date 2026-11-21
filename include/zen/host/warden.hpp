@@ -35,6 +35,7 @@ struct HostAuthoritySync {
     using ZenSelf = HostAuthoritySync;
     static constexpr const char* zen_name = "zen.host.AuthoritySync";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(artifact)); }
 };
 
@@ -46,6 +47,7 @@ struct HostDescribeAuthority {
     using ZenSelf = HostDescribeAuthority;
     static constexpr const char* zen_name = "zen.host.DescribeAuthority";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(artifact)); }
 };
 

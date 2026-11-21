@@ -123,6 +123,17 @@ about **compiling Loom's public headers at all**, is MSVC-only, and binds every
 consumer of `ZEN_SHAPE` whether or not they ever build a weave — which is why it
 rides `loom::core` and arrives on its own.
 
+**What an image promises** is three things, and a host relies on nothing else:
+the content id of every shape it declares, the manifest its descriptor writes,
+and `zen_weave_abi` with the descriptor it returns. A host reaches the image
+through `zen_weave_abi` alone. On ELF the image exports other symbols too:
+built at default visibility, it makes visible each inline function and template
+instance from Loom's headers that it compiles out of line, such as a shape's
+`zen_fields`, under names the compiler chooses. Those are not part of what it
+promises. A new Loom may
+rename, add or remove them while every shape, manifest and descriptor stays
+the same, so neither a host nor another image links to them.
+
 ## Load it
 
 Through the kernel's **control door**, not around it. `Kernel::load` alone

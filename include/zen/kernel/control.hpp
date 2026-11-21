@@ -71,6 +71,7 @@ struct LoadLibraryV3 {
     using ZenSelf = LoadLibraryV3;
     static constexpr const char* zen_name = "LoadLibrary";
     static constexpr std::uint32_t zen_version = 3;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(name), ZEN_FIELD(path), ZEN_FIELD(roles));
     }
@@ -85,6 +86,7 @@ struct LoadLibraryV2 {
     using ZenSelf = LoadLibraryV2;
     static constexpr const char* zen_name = "LoadLibrary";
     static constexpr std::uint32_t zen_version = 2;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(name), ZEN_FIELD(path), ZEN_FIELD(role));
     }
