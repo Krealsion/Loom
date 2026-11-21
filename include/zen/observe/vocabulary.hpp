@@ -68,6 +68,7 @@ struct ShapeRef {
     using ZenSelf = ShapeRef;
     static constexpr const char* zen_name = "loom.observe.ShapeRef";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(name), ZEN_FIELD(version)); }
 };
 
@@ -89,6 +90,7 @@ struct Subscribe {
     using ZenSelf = Subscribe;
     static constexpr const char* zen_name = "loom.observe.Subscribe";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(producer), ZEN_FIELD(shapes), ZEN_FIELD(latest),
                                ZEN_FIELD(encoding), ZEN_FIELD(window), ZEN_FIELD(label));
@@ -113,6 +115,7 @@ struct Subscribed {
     using ZenSelf = Subscribed;
     static constexpr const char* zen_name = "loom.observe.Subscribed";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(subscription), ZEN_FIELD(relay), ZEN_FIELD(producer),
                                ZEN_FIELD(holder), ZEN_FIELD(incarnation), ZEN_FIELD(window),
@@ -150,6 +153,7 @@ struct Observed {
     using ZenSelf = Observed;
     static constexpr const char* zen_name = "loom.observe.Observed";
     static constexpr std::uint32_t zen_version = 2;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(subscription), ZEN_FIELD(relay), ZEN_FIELD(seq),
                                ZEN_FIELD(shape), ZEN_FIELD(version), ZEN_FIELD(payload),
@@ -174,6 +178,7 @@ struct Gap {
     using ZenSelf = Gap;
     static constexpr const char* zen_name = "loom.observe.Gap";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(subscription), ZEN_FIELD(relay), ZEN_FIELD(seq),
                                ZEN_FIELD(lost), ZEN_FIELD(reason), ZEN_FIELD(link),
@@ -199,6 +204,7 @@ struct Ended {
     using ZenSelf = Ended;
     static constexpr const char* zen_name = "loom.observe.Ended";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(subscription), ZEN_FIELD(relay), ZEN_FIELD(seq),
                                ZEN_FIELD(last), ZEN_FIELD(lost), ZEN_FIELD(kind),
@@ -215,6 +221,7 @@ struct Release {
     using ZenSelf = Release;
     static constexpr const char* zen_name = "loom.observe.Release";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(subscription), ZEN_FIELD(relay)); }
 };
 
@@ -228,6 +235,7 @@ struct Acknowledge {
     using ZenSelf = Acknowledge;
     static constexpr const char* zen_name = "loom.observe.Acknowledge";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(subscription), ZEN_FIELD(relay), ZEN_FIELD(through));
     }
@@ -238,6 +246,7 @@ struct StatusRequested {
     using ZenSelf = StatusRequested;
     static constexpr const char* zen_name = "loom.observe.StatusRequested";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(); }
 };
 
@@ -258,6 +267,7 @@ struct StatusRow {
     using ZenSelf = StatusRow;
     static constexpr const char* zen_name = "loom.observe.StatusRow";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(subscription), ZEN_FIELD(subscriber), ZEN_FIELD(producer),
                                ZEN_FIELD(shapes), ZEN_FIELD(label), ZEN_FIELD(window),
@@ -272,6 +282,7 @@ struct Status {
     using ZenSelf = Status;
     static constexpr const char* zen_name = "loom.observe.Status";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(relay), ZEN_FIELD(rows)); }
 };
 

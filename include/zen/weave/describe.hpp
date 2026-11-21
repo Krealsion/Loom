@@ -42,6 +42,7 @@ struct DescribeAccepted {
     using ZenSelf = DescribeAccepted;
     static constexpr const char* zen_name = kDescribeAcceptedShapeName;
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(); }
 };
 

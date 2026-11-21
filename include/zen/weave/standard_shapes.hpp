@@ -37,6 +37,7 @@ struct Ack {
     using ZenSelf = Ack;
     static constexpr const char* zen_name = "zen.Ack";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(); }
 };
 
@@ -47,6 +48,7 @@ struct Refused {
     using ZenSelf = Refused;
     static constexpr const char* zen_name = "zen.Refused";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(reason)); }
 };
 
@@ -57,6 +59,7 @@ struct Result {
     using ZenSelf = Result;
     static constexpr const char* zen_name = "zen.Result";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(value)); }
 };
 

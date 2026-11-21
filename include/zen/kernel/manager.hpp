@@ -91,6 +91,7 @@ struct LoadWeave {
     using ZenSelf = LoadWeave;
     static constexpr const char* zen_name = "zen.LoadWeave";
     static constexpr std::uint32_t zen_version = 3;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(name), ZEN_FIELD(path), ZEN_FIELD(roles),
                                ZEN_FIELD(creation));
@@ -105,6 +106,7 @@ struct LoadWeaveV2 {
     using ZenSelf = LoadWeaveV2;
     static constexpr const char* zen_name = "zen.LoadWeave";
     static constexpr std::uint32_t zen_version = 2;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(name), ZEN_FIELD(path), ZEN_FIELD(roles));
     }
@@ -119,6 +121,7 @@ struct LoadWeaveV1 {
     using ZenSelf = LoadWeaveV1;
     static constexpr const char* zen_name = "zen.LoadWeave";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(name), ZEN_FIELD(path), ZEN_FIELD(role));
     }
@@ -136,6 +139,7 @@ struct SwapWeave {
     using ZenSelf = SwapWeave;
     static constexpr const char* zen_name = "zen.SwapWeave";
     static constexpr std::uint32_t zen_version = 2;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(role), ZEN_FIELD(name), ZEN_FIELD(path),
                                ZEN_FIELD(graceful));
@@ -150,6 +154,7 @@ struct ReloadWeave {
     using ZenSelf = ReloadWeave;
     static constexpr const char* zen_name = "zen.ReloadWeave";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(name), ZEN_FIELD(path)); }
 };
 
@@ -158,6 +163,7 @@ struct ListLoaded {
     using ZenSelf = ListLoaded;
     static constexpr const char* zen_name = "zen.ListLoaded";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(); }
 };
 
@@ -180,6 +186,7 @@ struct SwapInFlight {
     using ZenSelf = SwapInFlight;
     static constexpr const char* zen_name = "zen.SwapInFlight";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(seq), ZEN_FIELD(asker), ZEN_FIELD(corr),
                                ZEN_FIELD(incumbent), ZEN_FIELD(stage), ZEN_FIELD(role),
@@ -196,6 +203,7 @@ struct StoredLetter {
     using ZenSelf = StoredLetter;
     static constexpr const char* zen_name = "zen.StoredLetter";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(heir), ZEN_FIELD(role), ZEN_FIELD(items));
     }
@@ -217,6 +225,7 @@ struct ManagerState {
     using ZenSelf = ManagerState;
     static constexpr const char* zen_name = "zen.ManagerState";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(relay), ZEN_FIELD(swaps), ZEN_FIELD(letters));
     }

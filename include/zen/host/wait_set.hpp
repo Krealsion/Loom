@@ -47,6 +47,7 @@ struct WaitSet {
     using ZenSelf = WaitSet;
     static constexpr const char* zen_name = "loom.host.WaitSet";
     static constexpr std::uint32_t zen_version = 2;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(handles), ZEN_FIELD(writable), ZEN_FIELD(messages),
                                ZEN_FIELD(until_ms));
@@ -72,6 +73,7 @@ struct Waited {
     using ZenSelf = Waited;
     static constexpr const char* zen_name = "loom.host.Waited";
     static constexpr std::uint32_t zen_version = 2;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(revision), ZEN_FIELD(held), ZEN_FIELD(ready),
                                ZEN_FIELD(why), ZEN_FIELD(due), ZEN_FIELD(now_ms));

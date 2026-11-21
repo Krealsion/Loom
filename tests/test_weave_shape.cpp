@@ -4,6 +4,7 @@
 #include <doctest.h>
 
 #include <zen/weave/shape.hpp>
+#include <zen/weave/standard_shapes.hpp>
 #include <zen/serialize.hpp>
 #include <zen/zen.hpp>
 
@@ -353,6 +354,30 @@ TEST_CASE("the gate judges a present optional field as it judges a required one"
     REQUIRE_FALSE(b.ok());
     CHECK(b.first_error().kind == ErrorKind::MissingField);
     CHECK(b.first_error().path == "id");
+}
+
+// A shape's field list is instantiated only where a unit uses it, which needs `zen_fields` to be
+// a template its callers still spell `T::zen_fields()`; a plain function stays a shape.
+struct PlainFields {
+    std::int64_t n;
+    using ZenSelf = PlainFields;
+    static constexpr const char* zen_name = "PlainFields";
+    static constexpr std::uint32_t zen_version = 1;
+    static auto zen_fields() { return std::make_tuple(ZEN_FIELD(n)); }
+};
+
+template <class T>
+concept FieldsTemplate = requires { T::template zen_fields<0>(); };
+
+TEST_CASE("a shape's field list is a template, instantiated where it is used") {
+    static_assert(FieldsTemplate<Inner>, "ZEN_SHAPE declares zen_fields as a template");
+    static_assert(FieldsTemplate<loom::Refused>, "a header's hand-written shape does the same");
+    static_assert(!FieldsTemplate<PlainFields>);
+    static_assert(au::Shape<Inner> && au::Shape<loom::Refused> && au::Shape<PlainFields>);
+
+    CHECK(au::schema_of<Inner>()->fields().size() == 1);
+    CHECK(au::schema_of<loom::Refused>()->fields().size() == 1);
+    CHECK(au::schema_of<PlainFields>()->fields().size() == 1);
 }
 
 } // TEST_SUITE

@@ -52,6 +52,7 @@ struct PrepareShutdown {
     using ZenSelf = PrepareShutdown;
     static constexpr const char* zen_name = "zen.PrepareShutdown";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(); }
 };
 
@@ -63,6 +64,7 @@ struct Bequest {
     using ZenSelf = Bequest;
     static constexpr const char* zen_name = "zen.Bequest";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(role), ZEN_FIELD(items)); }
 };
 
@@ -72,6 +74,7 @@ struct ClaimBequest {
     using ZenSelf = ClaimBequest;
     static constexpr const char* zen_name = "zen.ClaimBequest";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(role)); }
 };
 
@@ -101,6 +104,7 @@ struct Activated {
     using ZenSelf = Activated;
     static constexpr const char* zen_name = "zen.Activated";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(sequence)); }
 };
 

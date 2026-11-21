@@ -166,6 +166,7 @@ struct RelayRetire {
     using ZenSelf = RelayRetire;
     static constexpr const char* zen_name = "loom.observe.RelayRetire";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(); }
 };
 
@@ -177,6 +178,7 @@ struct RelayState {
     using ZenSelf = RelayState;
     static constexpr const char* zen_name = "loom.observe.RelayState";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(subscribed), ZEN_FIELD(refused), ZEN_FIELD(ended));
     }

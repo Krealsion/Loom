@@ -63,6 +63,7 @@ struct Describe {
     using ZenSelf = Describe;
     static constexpr const char* zen_name = "loom.session.Describe";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(); }
 };
 
@@ -78,6 +79,7 @@ struct Connection {
     using ZenSelf = Connection;
     static constexpr const char* zen_name = "loom.session.Connection";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(connection), ZEN_FIELD(kind), ZEN_FIELD(name),
                                ZEN_FIELD(claimed), ZEN_FIELD(state), ZEN_FIELD(session),
@@ -98,6 +100,7 @@ struct LinkRow {
     using ZenSelf = LinkRow;
     static constexpr const char* zen_name = "loom.session.LinkRow";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(name), ZEN_FIELD(endpoint), ZEN_FIELD(state),
                                ZEN_FIELD(established), ZEN_FIELD(far_session), ZEN_FIELD(epoch),
@@ -121,6 +124,7 @@ struct Description {
     using ZenSelf = Description;
     static constexpr const char* zen_name = "loom.session.Description";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(lifetime), ZEN_FIELD(host), ZEN_FIELD(abi),
                                ZEN_FIELD(started_ms), ZEN_FIELD(pid), ZEN_FIELD(directory),
@@ -138,6 +142,7 @@ struct Shutdown {
     using ZenSelf = Shutdown;
     static constexpr const char* zen_name = "loom.session.Shutdown";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(reason)); }
 };
 
@@ -151,6 +156,7 @@ struct ExpectRun {
     using ZenSelf = ExpectRun;
     static constexpr const char* zen_name = "loom.session.ExpectRun";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(run), ZEN_FIELD(digest), ZEN_FIELD(may_say));
     }
@@ -163,6 +169,7 @@ struct RunExpected {
     using ZenSelf = RunExpected;
     static constexpr const char* zen_name = "loom.session.RunExpected";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(run), ZEN_FIELD(established), ZEN_FIELD(granted));
     }
@@ -175,6 +182,7 @@ struct ForgetRun {
     using ZenSelf = ForgetRun;
     static constexpr const char* zen_name = "loom.session.ForgetRun";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(run)); }
 };
 
@@ -189,6 +197,7 @@ struct RunConnection {
     using ZenSelf = RunConnection;
     static constexpr const char* zen_name = "loom.session.RunConnection";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(run), ZEN_FIELD(session), ZEN_FIELD(state),
                                ZEN_FIELD(detail));
@@ -214,6 +223,7 @@ struct DeliveriesTo {
     using ZenSelf = DeliveriesTo;
     static constexpr const char* zen_name = "loom.history.DeliveriesTo";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(participant), ZEN_FIELD(shape), ZEN_FIELD(limit));
     }
@@ -225,6 +235,7 @@ struct Delivery {
     using ZenSelf = Delivery;
     static constexpr const char* zen_name = "loom.history.Delivery";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(seq)); }
 };
 
@@ -243,6 +254,7 @@ struct CrossingRead {
     using ZenSelf = CrossingRead;
     static constexpr const char* zen_name = "loom.history.CrossingRead";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(link), ZEN_FIELD(epoch), ZEN_FIELD(far_session),
                                ZEN_FIELD(established), ZEN_FIELD(kind), ZEN_FIELD(attempt),
@@ -258,6 +270,7 @@ struct CrossingUnread {
     using ZenSelf = CrossingUnread;
     static constexpr const char* zen_name = "loom.history.CrossingUnread";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(payload)); }
 };
 
@@ -288,6 +301,7 @@ struct Record {
     using ZenSelf = Record;
     static constexpr const char* zen_name = "loom.history.Record";
     static constexpr std::uint32_t zen_version = 2;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(
             ZEN_FIELD(record), ZEN_FIELD(seq), ZEN_FIELD(sender), ZEN_FIELD(target),
@@ -311,6 +325,7 @@ struct Records {
     using ZenSelf = Records;
     static constexpr const char* zen_name = "loom.history.Records";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(newest_seq), ZEN_FIELD(oldest_retained_seq),
                                ZEN_FIELD(forgotten_horizon), ZEN_FIELD(forgotten),

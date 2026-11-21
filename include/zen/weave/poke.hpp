@@ -49,6 +49,7 @@ struct PokeDescribe {
     using ZenSelf = PokeDescribe;
     static constexpr const char* zen_name = "zen.PokeDescribe";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(); }
 };
 
@@ -58,6 +59,7 @@ struct PokeRead {
     using ZenSelf = PokeRead;
     static constexpr const char* zen_name = "zen.PokeRead";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(field)); }
 };
 
@@ -69,6 +71,7 @@ struct PokeWrite {
     using ZenSelf = PokeWrite;
     static constexpr const char* zen_name = "zen.PokeWrite";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(field), ZEN_FIELD(value)); }
 };
 
@@ -78,6 +81,7 @@ struct PokeResetState {
     using ZenSelf = PokeResetState;
     static constexpr const char* zen_name = "zen.PokeResetState";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(); }
 };
 
@@ -91,6 +95,7 @@ struct PokeFieldInfo {
     using ZenSelf = PokeFieldInfo;
     static constexpr const char* zen_name = "zen.PokeField";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(name), ZEN_FIELD(type), ZEN_FIELD(writable),
                                ZEN_FIELD(hidden));
@@ -105,6 +110,7 @@ struct PokeStructure {
     using ZenSelf = PokeStructure;
     static constexpr const char* zen_name = "zen.PokeStructure";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(state_schema), ZEN_FIELD(state_version),
                                ZEN_FIELD(fields));

@@ -94,6 +94,7 @@ struct Ask {
     using ZenSelf = Ask;
     static constexpr const char* zen_name = "loom.link.Ask";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(role), ZEN_FIELD(target), ZEN_FIELD(payload),
                                ZEN_FIELD(settle));
@@ -112,6 +113,7 @@ struct Outcome {
     using ZenSelf = Outcome;
     static constexpr const char* zen_name = "loom.link.Outcome";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(state), ZEN_FIELD(reason), ZEN_FIELD(shape),
                                ZEN_FIELD(version), ZEN_FIELD(attempt));
@@ -128,6 +130,7 @@ struct StatusRequested {
     using ZenSelf = StatusRequested;
     static constexpr const char* zen_name = "loom.link.StatusRequested";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(); }
 };
 
@@ -146,6 +149,7 @@ struct Status {
     using ZenSelf = Status;
     static constexpr const char* zen_name = "loom.link.Status";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(name), ZEN_FIELD(endpoint), ZEN_FIELD(state),
                                ZEN_FIELD(session), ZEN_FIELD(established_name),
@@ -166,6 +170,7 @@ struct FarWord {
     using ZenSelf = FarWord;
     static constexpr const char* zen_name = "loom.link.FarWord";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(attempt), ZEN_FIELD(far_sender), ZEN_FIELD(far_role),
                                ZEN_FIELD(shape), ZEN_FIELD(version), ZEN_FIELD(payload));
@@ -179,6 +184,7 @@ struct SendRefused {
     using ZenSelf = SendRefused;
     static constexpr const char* zen_name = "loom.link.SendRefused";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(attempt), ZEN_FIELD(reason)); }
 };
 
@@ -188,6 +194,7 @@ struct Settled {
     using ZenSelf = Settled;
     static constexpr const char* zen_name = "loom.link.Settled";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(attempt)); }
 };
 
@@ -197,6 +204,7 @@ struct SessionEnded {
     using ZenSelf = SessionEnded;
     static constexpr const char* zen_name = "loom.link.SessionEnded";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(reason)); }
 };
 
@@ -227,6 +235,7 @@ struct Crossed {
     using ZenSelf = Crossed;
     static constexpr const char* zen_name = "loom.link.Crossed";
     static constexpr std::uint32_t zen_version = 2;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(link), ZEN_FIELD(epoch), ZEN_FIELD(session),
                                ZEN_FIELD(established), ZEN_FIELD(what));

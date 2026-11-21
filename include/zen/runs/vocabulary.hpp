@@ -70,6 +70,7 @@ inline constexpr const char* kRunsRole = "loom.runs";
 struct ListTools {
     std::string query;
     LOOM_RUNS_SHAPE(ListTools, "loom.runs.ListTools");
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(query)); }
 };
 
@@ -82,6 +83,7 @@ struct Tool {
     std::string approval;  ///< "any revision" / "revision <digest>" / "not approved: <why>"
     std::string revision;  ///< the package's current content digest
     LOOM_RUNS_SHAPE(Tool, "loom.runs.Tool");
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(id), ZEN_FIELD(package), ZEN_FIELD(name),
                                ZEN_FIELD(summary), ZEN_FIELD(approved), ZEN_FIELD(approval),
@@ -94,6 +96,7 @@ struct Tools {
     std::vector<std::string> problems; ///< packages it could not read, and why
     std::vector<Tool> rows;
     LOOM_RUNS_SHAPE(Tools, "loom.runs.Tools");
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(catalog), ZEN_FIELD(problems), ZEN_FIELD(rows));
     }
@@ -105,6 +108,7 @@ struct Tools {
 struct DescribeTool {
     std::string tool; ///< "<package>/<tool>"
     LOOM_RUNS_SHAPE(DescribeTool, "loom.runs.DescribeTool");
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(tool)); }
 };
 
@@ -115,6 +119,7 @@ struct ToolInput {
     std::string default_json;  ///< the default as a JSON literal, empty when there is none
     std::string help;
     LOOM_RUNS_SHAPE(ToolInput, "loom.runs.ToolInput");
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(name), ZEN_FIELD(type), ZEN_FIELD(required),
                                ZEN_FIELD(default_json), ZEN_FIELD(help));
@@ -125,6 +130,7 @@ struct ToolOutput {
     std::string name; ///< the artifact's file name inside the run's output directory
     std::string help;
     LOOM_RUNS_SHAPE(ToolOutput, "loom.runs.ToolOutput");
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(name), ZEN_FIELD(help)); }
 };
 
@@ -148,6 +154,7 @@ struct ToolDescription {
     std::string example;                 ///< one invocation a person can copy
     std::string recovery;                ///< what its refusals mean and what to do about them
     LOOM_RUNS_SHAPE(ToolDescription, "loom.runs.ToolDescription");
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(id), ZEN_FIELD(package), ZEN_FIELD(name),
                                ZEN_FIELD(summary), ZEN_FIELD(description), ZEN_FIELD(version),
@@ -172,6 +179,7 @@ struct Start {
     std::string name;
     std::string inputs; ///< a JSON object; "{}" or empty for none
     LOOM_RUNS_SHAPE(Start, "loom.runs.Start");
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(tool), ZEN_FIELD(name), ZEN_FIELD(inputs));
     }
@@ -180,6 +188,7 @@ struct Start {
 /// Every run this manager holds in this lifetime. Answered `RunList`.
 struct List {
     LOOM_RUNS_SHAPE(List, "loom.runs.List");
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(); }
 };
 
@@ -189,6 +198,7 @@ struct Get {
     std::string lifetime;
     std::string name;
     LOOM_RUNS_SHAPE(Get, "loom.runs.Get");
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(lifetime), ZEN_FIELD(name)); }
 };
 
@@ -211,6 +221,7 @@ struct Cancel {
     std::string reason;
     bool force = false;
     LOOM_RUNS_SHAPE(Cancel, "loom.runs.Cancel");
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(lifetime), ZEN_FIELD(name), ZEN_FIELD(reason),
                                ZEN_FIELD(force));
@@ -224,6 +235,7 @@ struct Release {
     std::string name;
     bool remove = false;
     LOOM_RUNS_SHAPE(Release, "loom.runs.Release");
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(lifetime), ZEN_FIELD(name), ZEN_FIELD(remove));
     }
@@ -233,6 +245,7 @@ struct Release {
 /// evidence of what happened, never live state. Answered `RunList` with `live` false on each row.
 struct Past {
     LOOM_RUNS_SHAPE(Past, "loom.runs.Past");
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(); }
 };
 
@@ -243,6 +256,7 @@ struct Artifact {
     std::string sha256;
     std::string state; ///< verified / missing / size-mismatch / digest-mismatch / outside
     LOOM_RUNS_SHAPE(Artifact, "loom.runs.Artifact");
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(name), ZEN_FIELD(path), ZEN_FIELD(bytes),
                                ZEN_FIELD(sha256), ZEN_FIELD(state));
@@ -261,6 +275,7 @@ struct ArtifactRead {
     std::int64_t from = 0;
     std::int64_t bytes = 0; ///< how many to read, at least 1
     LOOM_RUNS_SHAPE(ArtifactRead, "loom.runs.ArtifactRead");
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(lifetime), ZEN_FIELD(run), ZEN_FIELD(name),
                                ZEN_FIELD(from), ZEN_FIELD(bytes));
@@ -279,6 +294,7 @@ struct ArtifactPage {
     std::string sha256;     ///< the whole artifact's digest, as verified and as read again now
     loom::Bytes data;
     LOOM_RUNS_SHAPE(ArtifactPage, "loom.runs.ArtifactPage");
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(lifetime), ZEN_FIELD(run), ZEN_FIELD(name),
                                ZEN_FIELD(from), ZEN_FIELD(total), ZEN_FIELD(sha256),
@@ -299,6 +315,7 @@ struct Asked {
     std::string outcome;  ///< answer / refused / dispatch-refused / unlinked / lost / pending
     std::string detail;
     LOOM_RUNS_SHAPE_AT(Asked, "loom.runs.Asked", 2);
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(correlation), ZEN_FIELD(role), ZEN_FIELD(via),
                                ZEN_FIELD(shape), ZEN_FIELD(version), ZEN_FIELD(settle),
@@ -339,6 +356,7 @@ struct Run {
     std::int64_t ended_ms = 0;
     std::string log;             ///< the worker's stdout/stderr file
     LOOM_RUNS_SHAPE_AT(Run, "loom.runs.Run", 2);
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(
             ZEN_FIELD(lifetime), ZEN_FIELD(name), ZEN_FIELD(tool), ZEN_FIELD(revision),
@@ -359,6 +377,7 @@ struct RunList {
     std::int64_t capacity = 0; ///< how many runs this manager holds at most
     std::vector<Run> rows;
     LOOM_RUNS_SHAPE_AT(RunList, "loom.runs.RunList", 2);
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(lifetime), ZEN_FIELD(active), ZEN_FIELD(capacity),
                                ZEN_FIELD(rows));
@@ -376,6 +395,7 @@ struct WorkerStarted {
     std::string python;
     std::string revision;
     LOOM_RUNS_SHAPE(WorkerStarted, "loom.runs.WorkerStarted");
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(run), ZEN_FIELD(python), ZEN_FIELD(revision));
     }
@@ -387,6 +407,7 @@ struct Progress {
     std::string note;
     std::vector<std::string> pending;
     LOOM_RUNS_SHAPE(Progress, "loom.runs.Progress");
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(step), ZEN_FIELD(note), ZEN_FIELD(pending));
     }
@@ -396,6 +417,7 @@ struct Progress {
 struct AskReport {
     Asked ask;
     LOOM_RUNS_SHAPE_AT(AskReport, "loom.runs.AskReport", 2);
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(ask)); }
 };
 
@@ -407,6 +429,7 @@ struct Produced {
     std::int64_t bytes = 0;
     std::string sha256;
     LOOM_RUNS_SHAPE(Produced, "loom.runs.Produced");
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(name), ZEN_FIELD(path), ZEN_FIELD(bytes),
                                ZEN_FIELD(sha256));
@@ -419,6 +442,7 @@ struct Finished {
     std::string summary;
     std::string failure;
     LOOM_RUNS_SHAPE(Finished, "loom.runs.Finished");
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(outcome), ZEN_FIELD(summary), ZEN_FIELD(failure));
     }
@@ -431,6 +455,7 @@ struct Finished {
 /// Answered `Directive`.
 struct Control {
     LOOM_RUNS_SHAPE(Control, "loom.runs.Control");
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(); }
 };
 
@@ -438,6 +463,7 @@ struct Directive {
     std::string directive; ///< "cancel" / "finish"
     std::string reason;
     LOOM_RUNS_SHAPE(Directive, "loom.runs.Directive");
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(directive), ZEN_FIELD(reason)); }
 };
 

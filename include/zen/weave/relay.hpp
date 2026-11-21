@@ -35,6 +35,7 @@ struct RelayPending {
     using ZenSelf = RelayPending;
     static constexpr const char* zen_name = "zen.RelayPending";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() {
         return std::make_tuple(ZEN_FIELD(seq), ZEN_FIELD(target), ZEN_FIELD(asker),
                                ZEN_FIELD(corr));
@@ -49,6 +50,7 @@ struct RelayState {
     using ZenSelf = RelayState;
     static constexpr const char* zen_name = "zen.RelayState";
     static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(next_seq), ZEN_FIELD(pending)); }
 };
 
