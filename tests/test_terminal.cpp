@@ -1213,6 +1213,42 @@ TEST_CASE("the transcript is bounded, counts what it dropped, and never loses a 
     CHECK(c.acting().pending().front().shape == "Query");
 }
 
+TEST_CASE("the received window is bounded by the memory it keeps: the oldest is evicted by id, "
+          "as at capacity, and a payload counts as what it holds") {
+    Transcript t;
+    const auto retain = [&](Value v) {
+        return t.retain(ReceivedMessage(WeaveId{7}, "", false, 0, std::move(v)));
+    };
+    const std::uint64_t one = weigh(heap_of_cells(kMaxDecodedCells)).held_bytes();
+    const std::uint64_t fit = kReceivedBytes / one;
+    REQUIRE(fit >= 1);
+    REQUIRE(fit < kReceivedCapacity); // the memory bound is the one reached first
+    for (std::uint64_t i = 0; i < fit; ++i) {
+        (void)retain(heap_of_cells(kMaxDecodedCells));
+    }
+    CHECK(t.received_size() == fit);
+    CHECK(t.received_evicted() == 0);
+    const std::uint64_t past = retain(heap_of_cells(kMaxDecodedCells));
+    CHECK(t.received_size() == fit);
+    CHECK(t.received_evicted() == 1);
+    CHECK_FALSE(t.received(1).has_value()); // an evicted id refuses; it never re-binds
+    CHECK(t.received(past).has_value());
+
+    // A one-cell value carrying 8 MiB weighs what it carries, not one cell.
+    const std::uint64_t before = t.received_evicted();
+    const std::uint64_t blob = retain(blob_of_bytes(8u << 20));
+    CHECK(t.received_evicted() > before);
+    REQUIRE(t.received(blob).has_value());
+    CHECK(t.received(blob)->value.get("data")->as_bytes().size() == (8u << 20));
+
+    // Small values cost what they hold, so a window of them is bounded by its count alone.
+    for (std::size_t i = 0; i < kReceivedCapacity; ++i) {
+        (void)retain(ping(static_cast<std::int64_t>(i)));
+    }
+    CHECK(t.received_size() == kReceivedCapacity);
+    CHECK(TerminalHistoryProbe::received_slots(t) == kReceivedCapacity);
+}
+
 TEST_CASE("a received-message id is an identity: once evicted it refuses, never re-binds") {
     Cast c;
     for (std::size_t i = 0; i < kReceivedCapacity + 5; ++i) {

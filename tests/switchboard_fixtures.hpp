@@ -102,6 +102,37 @@ inline Value tick(std::int64_t n) {
     return v;
 }
 
+// A list of values that have no field: one cell for its own slot and one an element, and no
+// body bytes an element, so its decoded structure is the largest a value of its size commands.
+inline std::shared_ptr<const Schema> hollow_schema() {
+    static const auto s = SchemaBuilder("Hollow", 1).build();
+    return s;
+}
+inline std::shared_ptr<const Schema> heap_schema() {
+    static const auto s =
+        SchemaBuilder("Heap", 1).list("items", type_message(hollow_schema())).build();
+    return s;
+}
+/// A Heap holding exactly `cells` cells (at least one), as `decoded_cells` counts them.
+inline Value heap_of_cells(std::uint64_t cells) {
+    Value v(heap_schema());
+    v.set("items", Cell::list(Cell::Array(static_cast<std::size_t>(cells - 1),
+                                          Cell::message(Value(hollow_schema())))));
+    return v;
+}
+
+// A value of one Bytes field: one cell, and whatever bytes it carries -- what a cell count
+// never charged for.
+inline std::shared_ptr<const Schema> blob_schema() {
+    static const auto s = SchemaBuilder("Blob", 1).field("data", Kind::Bytes).build();
+    return s;
+}
+inline Value blob_of_bytes(std::uint64_t bytes) {
+    Value v(blob_schema());
+    v.set("data", Cell::bytes(Bytes(static_cast<std::size_t>(bytes), 0xAB)));
+    return v;
+}
+
 // ---- a flexible probe Weave ----------------------------------------------
 
 // Accepts a configured schema set; records what it handles; runs an optional

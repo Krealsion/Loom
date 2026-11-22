@@ -281,7 +281,9 @@ std::string Refusal::message() const {
     case RefusalReason::PendingPerSender:
         // Names THIS SENDER'S waiting messages. The new send is not queued, and
         // no other sender's waiting messages are touched.
-        return "this sender already has its bound of messages waiting; nothing was queued";
+        return error.detail.empty() ? "this sender's waiting messages are at a bound; nothing "
+                                      "was queued"
+                                    : error.detail;
     case RefusalReason::AskEndedNotAccepted:
         return "the asker does not accept zen.AskEnded, so its ask's end would have nowhere to "
                "go; nothing was queued";
@@ -695,8 +697,9 @@ void Switchboard::queue_notice(Value value, Provenance::Kind kind, WeaveId to, s
 
 Ticket Switchboard::enqueue_directed(WeaveId target, Message msg, bool gated,
                                      Provenance provenance, TxnId preparation, bool asking) {
-    if (sender_at_pending_bound(msg.sender)) {
-        return refuse_pending_bound(target, msg.sender, msg);
+    const ValueWeight weight = weigh(msg.payload);
+    if (const auto refused = pending_.refuses(msg.sender, weight)) {
+        return refuse_pending_bound(target, msg.sender, msg, *refused);
     }
     const std::uint64_t seq = allocate_sequence();
     journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}}; // Pending, owns seq
@@ -716,14 +719,16 @@ Ticket Switchboard::enqueue_directed(WeaveId target, Message msg, bool gated,
     env.dispatch_parent = current_dispatch_seq_;
     env.fence = current_dispatch_fence_; // ...and which fence that delivery belongs to
     env.sender_accounted = true;
+    env.weight = weight;
     queue_back(std::move(env));
     return Ticket{seq};
 }
 
 Ticket Switchboard::enqueue_role(std::string role, Message msg, bool gated,
                                  Provenance provenance, bool asking) {
-    if (sender_at_pending_bound(msg.sender)) {
-        return refuse_pending_bound(WeaveId{}, msg.sender, msg);
+    const ValueWeight weight = weigh(msg.payload);
+    if (const auto refused = pending_.refuses(msg.sender, weight)) {
+        return refuse_pending_bound(WeaveId{}, msg.sender, msg, *refused);
     }
     const std::uint64_t seq = allocate_sequence();
     journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{}}; // Pending, owns seq
@@ -739,17 +744,17 @@ Ticket Switchboard::enqueue_role(std::string role, Message msg, bool gated,
     env.dispatch_parent = current_dispatch_seq_; // the delivery this was authored from
     env.fence = current_dispatch_fence_;
     env.sender_accounted = true;
+    env.weight = weight;
     queue_back(std::move(env));
     return Ticket{seq};
 }
 
 Ticket Switchboard::refuse_now(WeaveId target, WeaveId sender, const Message& msg,
-                               RefusalReason reason) {
+                               const Refusal& r) {
     // A refusal that never became a delivery still gets a seq, a journal slot and
     // a tap event, so "this weave tried to answer without authority" is visible at
     // exactly the altitude "this weave tried to send without a grant" already is.
     const std::uint64_t seq = allocate_sequence();
-    const Refusal r{reason, {}};
     journal_[seq % kJournalCapacity] = JournalSlot{seq, DeliveryOutcome{Disposition::Refused, r}};
     BusEvent ev;
     ev.kind = EventKind::Refused;
@@ -1852,7 +1857,7 @@ Ticket Switchboard::answer_as(WeaveId as_sender, Message msg) {
         // Visible on the tap AND honestly reported to the caller: an INVALID
         // ticket, because nothing was queued. A refusal ticket would tell a
         // responder its answer had been sent.
-        (void)refuse_now(authority_.requester, as_sender, msg, RefusalReason::CapabilityDenied);
+        (void)refuse_now(authority_.requester, as_sender, msg, {RefusalReason::CapabilityDenied});
         return Ticket{};
     }
     authority_.spent = true;
@@ -1923,7 +1928,7 @@ DeferredAnswer Switchboard::defer_answer_as(WeaveId as_sender) {
         // this respondent's or the Loom's, says it the same way.
         Message empty{Value(authority_.shape != nullptr ? authority_.shape
                                                         : lifecycle_policy_schema())};
-        (void)refuse_now(authority_.requester, as_sender, empty, RefusalReason::Exhausted);
+        (void)refuse_now(authority_.requester, as_sender, empty, {RefusalReason::Exhausted});
         return DeferredAnswer{};
     }
     authority_.spent = true; // the immediate right is now the deferred one
@@ -1936,7 +1941,7 @@ Ticket Switchboard::spend_deferred_as(WeaveId as_sender, const DeferredAnswer& a
     // here even if its token happens to name a live record of ours. (Two symmetric
     // worlds really can mint the same token number — that is exactly the trap.)
     if (!issued_here_deferred(answer)) {
-        (void)refuse_now(WeaveId{}, as_sender, msg, RefusalReason::ForeignAuthority);
+        (void)refuse_now(WeaveId{}, as_sender, msg, {RefusalReason::ForeignAuthority});
         return Ticket{};
     }
     // Every term is a different attack, each the unit's (`KeptAnswers::spend`), and the right is
@@ -1946,8 +1951,9 @@ Ticket Switchboard::spend_deferred_as(WeaveId as_sender, const DeferredAnswer& a
         answer.opaque_token(), as_sender, [this](WeaveId w) { return incarnation_of(w); }, was);
     if (spent != KeptAnswers::Spend::Spent) {
         (void)refuse_now(was.requester, as_sender, msg,
-                         spent == KeptAnswers::Spend::NotYours ? RefusalReason::ForeignAuthority
-                                                               : RefusalReason::NoSuchTarget);
+                         Refusal{spent == KeptAnswers::Spend::NotYours
+                                     ? RefusalReason::ForeignAuthority
+                                     : RefusalReason::NoSuchTarget});
         return Ticket{};
     }
 
@@ -1979,13 +1985,13 @@ Ticket Switchboard::announce_as(WeaveId as_sender, const LifecycleAuthority& aut
     // because holding an authority gives a consumer no way to ask.
     // LIFE-04; docs/laws/lifecycle-laws.md
     if (!issued_here(authority)) {
-        (void)refuse_now(target, as_sender, msg, RefusalReason::ForeignAuthority);
+        (void)refuse_now(target, as_sender, msg, {RefusalReason::ForeignAuthority});
         return Ticket{};
     }
     // The attestation is bound to THIS target and THIS sequence, both taken from
     // the call rather than from the payload.
     if (!target.valid()) {
-        (void)refuse_now(target, as_sender, msg, RefusalReason::NoSuchTarget);
+        (void)refuse_now(target, as_sender, msg, {RefusalReason::NoSuchTarget});
         return Ticket{};
     }
     msg.sender = as_sender;
@@ -2101,11 +2107,11 @@ Switchboard::Fanout Switchboard::fanout(Message msg, bool gated, Provenance prov
             ++accepting;
         }
     }
-    const auto waiting = pending_by_sender_.find(msg.sender.value);
-    const std::size_t held = waiting == pending_by_sender_.end() ? 0 : waiting->second;
-    const std::size_t room = held >= kMaxPendingPerSender ? 0 : kMaxPendingPerSender - held;
-    if (accepting > room) {
-        (void)refuse_pending_bound(WeaveId{}, msg.sender, msg);
+    // Each accepter's envelope holds the value and owes it a walk and a delivery, so a
+    // publication is charged what it holds once for every accepter it reaches.
+    const ValueWeight weight = accepting == 0 ? ValueWeight{} : weigh(msg.payload);
+    if (const auto refused = pending_.refuses(msg.sender, weight, accepting)) {
+        (void)refuse_pending_bound(WeaveId{}, msg.sender, msg, *refused);
         publication_pending_bound_ = true;
         return Fanout{0, true};
     }
@@ -2136,6 +2142,7 @@ Switchboard::Fanout Switchboard::fanout(Message msg, bool gated, Provenance prov
         env.dispatch_parent = current_dispatch_seq_;
         env.fence = current_dispatch_fence_; // ...and every one counts in that delivery's fence
         env.sender_accounted = true;
+        env.weight = weight;
         queue_back(std::move(env));
         ++out.recipients;
     }
@@ -2168,7 +2175,7 @@ std::size_t Switchboard::publish_as(WeaveId as_sender, Message msg) {
     // trying to publish is exactly what the weaver wants to know about.
     if (sealed(as_sender)) {
         publication_pending_bound_ = false;
-        (void)refuse_now(WeaveId{}, as_sender, msg, RefusalReason::SealedSpeech);
+        (void)refuse_now(WeaveId{}, as_sender, msg, {RefusalReason::SealedSpeech});
         return 0;
     }
     msg.sender = as_sender;
@@ -2208,7 +2215,7 @@ Ticket Switchboard::refuse_role(WeaveId target, WeaveId as_sender, const Message
     // ticket here would tell a role its statement had been sent; silence
     // would downgrade unauthorized role speech into a mystery. Neither is
     // this: the attempt is named, the statement went nowhere.
-    (void)refuse_now(target, as_sender, msg, RefusalReason::RoleAuthorshipDenied);
+    (void)refuse_now(target, as_sender, msg, {RefusalReason::RoleAuthorshipDenied});
     return Ticket{0, RefusalReason::RoleAuthorshipDenied};
 }
 
@@ -2248,7 +2255,7 @@ Ticket Switchboard::ask_as(WeaveId as_sender, std::string_view as_role, WeaveId 
     // ask's end has nowhere to go. Refused before anything else, and never sent as a plain send.
     const WeaveRecord* asker = find(as_sender);
     if (asker == nullptr || !accept_match(*asker, AskEnded::zen_name, AskEnded::zen_version)) {
-        (void)refuse_now(target, as_sender, msg, RefusalReason::AskEndedNotAccepted);
+        (void)refuse_now(target, as_sender, msg, {RefusalReason::AskEndedNotAccepted});
         return Ticket{0, RefusalReason::AskEndedNotAccepted};
     }
     if (!as_role.empty() && !holds_role_now(as_sender, as_role)) {
@@ -2809,7 +2816,7 @@ void Switchboard::queue_back(Envelope env) {
         ++f->queued;
     }
     if (env.sender_accounted) {
-        ++pending_by_sender_[env.msg.sender.value];
+        pending_.charge(env.msg.sender, env.weight);
     }
     queue_.push_back(std::move(env));
 }
@@ -2818,21 +2825,14 @@ Switchboard::Envelope Switchboard::take_front() {
     Envelope env = std::move(queue_.front());
     queue_.pop_front();
     if (env.sender_accounted) {
-        const auto it = pending_by_sender_.find(env.msg.sender.value);
-        if (it != pending_by_sender_.end() && --it->second == 0) {
-            pending_by_sender_.erase(it);
-        }
+        pending_.give_back(env.msg.sender, env.weight);
     }
     return env;
 }
 
-bool Switchboard::sender_at_pending_bound(WeaveId sender) const noexcept {
-    const auto it = pending_by_sender_.find(sender.value);
-    return it != pending_by_sender_.end() && it->second >= kMaxPendingPerSender;
-}
-
-Ticket Switchboard::refuse_pending_bound(WeaveId target, WeaveId sender, const Message& msg) {
-    (void)refuse_now(target, sender, msg, RefusalReason::PendingPerSender);
+Ticket Switchboard::refuse_pending_bound(WeaveId target, WeaveId sender, const Message& msg,
+                                         const Refusal& refusal) {
+    (void)refuse_now(target, sender, msg, refusal);
     return Ticket{0, RefusalReason::PendingPerSender};
 }
 
@@ -3637,8 +3637,8 @@ TxnResult Switchboard::ask_candidate_to_prepare(TxnId id, Message ask) {
     // caller's is written over, as `enqueue_answer` writes over an answerer's.
     ask.sender = t->coordinator.who;
     ask.reply_to = WeaveId{};
-    if (sender_at_pending_bound(ask.sender)) {
-        (void)refuse_pending_bound(t->candidate.who, ask.sender, ask);
+    if (const auto no = pending_.refuses(ask.sender, weigh(ask.payload))) {
+        (void)refuse_pending_bound(t->candidate.who, ask.sender, ask, *no);
         return {false, id, TxnReason::PendingPerSender};
     }
     const std::uint64_t correlation = next_preparation_correlation_++;

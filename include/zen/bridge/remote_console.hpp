@@ -108,7 +108,7 @@ private:
                                             ///< bus now, never by how many frames have arrived
     /// m1, m2, ... (filled by Delivered frames) — a bounded HISTORY window, the client-side mirror
     /// of ConsoleWeave::received_. Same capacity, same stable-label rule.
-    mutable BoundedHistory<loom::Value, kConsoleBufferCapacity> buffer_;
+    mutable BoundedHistory<loom::Value, kConsoleBufferCapacity, kConsoleBufferBytes> buffer_;
     /// The bus tap (filled by Tap frames, plus this client's own BridgeRefused lines) — a bounded
     /// HISTORY window, the client-side mirror of ConsoleEngine::tap_.
     mutable BoundedHistory<TapEvent, kConsoleTapCapacity> tap_;

@@ -65,6 +65,15 @@ const char* name_of(PayloadEncoding e) noexcept {
 
 namespace {
 
+/// What a peer is told when the value it sent did not fit its session's waiting room at the bus:
+/// the proxy's own speech is one sender, bounded in messages waiting and in what they hold
+/// together. The bound's own words, with the numbers, are on the host's tap, where a weaver reads
+/// them; a session whose room is already spent is refused before its bytes are decoded and hears
+/// those words itself. docs/reference/bounds.md
+constexpr const char* kWaitingBoundWords =
+    "this session's waiting messages are at a bound -- how many may wait, and what they hold "
+    "together; nothing was sent, and it may be sent again once some of them are dispatched";
+
 /// A value, in the serialization the session was admitted to speak.
 std::string encode_for(PayloadEncoding e, const loom::Value& v) {
     return e == PayloadEncoding::Compat ? loom::compat::serialize(v) : loom::serialize(v);
@@ -539,6 +548,16 @@ void BridgeServer::on_frame(Conn& c, const BridgeIncoming& f) {
                              std::to_string(u.claimed_version()));
             break; // a schema the system does not know -> cannot be gated
         }
+        // A session whose waiting room is spent is refused before its bytes are decoded: nothing
+        // it sends could wait, so the host builds nothing. On the tap as the bus refuses it, and
+        // the peer is told in the same words.
+        if (const auto refused = bus_.pending_speech().refuses_now(c.id)) {
+            bus_.note_seam_refusal(c.id, kind == kEmitSend ? loom::WeaveId{target} : loom::WeaveId{},
+                                   u.claimed_name(), u.claimed_version(), *refused,
+                                   kind == kSendToRole ? role : std::string_view{});
+            send_refused(c, correlation, refused->message());
+            break;
+        }
         loom::Admission a = loom::admit(u, door, bus_.registry());
         if (!a.ok()) {
             send_refused(c, correlation, "gate refused: " + a.first_error().message());
@@ -559,6 +578,10 @@ void BridgeServer::on_frame(Conn& c, const BridgeIncoming& f) {
                 kind == kSendToRole
                     ? bus_.send_as_to_role_fenced(c.id, role, std::move(msg), &fence)
                     : bus_.send_as_fenced(c.id, loom::WeaveId{target}, std::move(msg), &fence);
+            if (!t.valid() && t.refusal == loom::RefusalReason::PendingPerSender) {
+                send_refused(c, correlation, kWaitingBoundWords);
+                break;
+            }
             if (!t.valid() || !fence.valid()) {
                 send_refused(c, correlation,
                              "this host is following as many settlements as it can; nothing was "
@@ -568,12 +591,21 @@ void BridgeServer::on_frame(Conn& c, const BridgeIncoming& f) {
             c.settling.push_back(Conn::Settling{correlation, fence});
             break;
         }
+        // The waiting bound refuses at the enqueue, so the peer hears it as it hears any refusal
+        // before the bus: nothing acted. Every other outcome is the delivery's, told by its tap.
+        bool waiting_bound = false;
         if (kind == kEmitPublish) {
             (void)bus_.publish_as(c.id, std::move(msg));
+            waiting_bound = bus_.publication_met_pending_bound();
         } else if (kind == kSendToRole) {
-            (void)bus_.send_as_to_role(c.id, role, std::move(msg));
+            waiting_bound = bus_.send_as_to_role(c.id, role, std::move(msg)).refusal ==
+                            loom::RefusalReason::PendingPerSender;
         } else {
-            (void)bus_.send_as(c.id, loom::WeaveId{target}, std::move(msg));
+            waiting_bound = bus_.send_as(c.id, loom::WeaveId{target}, std::move(msg)).refusal ==
+                            loom::RefusalReason::PendingPerSender;
+        }
+        if (waiting_bound) {
+            send_refused(c, correlation, kWaitingBoundWords);
         }
         break;
     }

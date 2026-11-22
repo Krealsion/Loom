@@ -9,6 +9,7 @@
 #include <zen/bridge/remote_console.hpp>
 
 #include <zen/kernel/schema_codec.hpp> // decode_schema, schema_desc_schema
+#include <zen/gate.hpp>                // decoded_cells: what a kept reply weighs
 #include <zen/serialize.hpp>           // serialize, parse, admit
 
 #include <chrono>
@@ -187,7 +188,8 @@ void RemoteConsole::process(const BridgeIncoming& f) const {
             }
             loom::Admission pa = loom::admit(pu, sc);
             if (pa.ok()) {
-                buffer_.push(std::move(pa).value());
+                const std::uint64_t held = loom::weigh(pa.value()).held_bytes();
+                buffer_.push(std::move(pa).value(), held);
                 dirty_.buffer = true;
             }
         }
@@ -239,7 +241,8 @@ void RemoteConsole::process(const BridgeIncoming& f) const {
         if (schema) {
             loom::Admission a = loom::admit(u, schema);
             if (a.ok()) {
-                buffer_.push(std::move(a).value());
+                const std::uint64_t held = loom::weigh(a.value()).held_bytes();
+                buffer_.push(std::move(a).value(), held);
                 dirty_.buffer = true;
             }
         } else if (ch_) {

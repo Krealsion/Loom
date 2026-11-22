@@ -13,6 +13,7 @@
 
 #include <zen/bounded_history.hpp>
 #include <zen/schema.hpp>
+#include <zen/serialize.hpp> // kMaxDecodedCells: the window's cell budget is whole values of it
 #include <zen/switchboard/switchboard.hpp>
 #include <zen/terminal/composer.hpp>
 #include <zen/value.hpp>
@@ -53,12 +54,18 @@ inline constexpr std::size_t kConsoleTapCapacity = 1024;
 inline constexpr std::size_t kConsoleAskCapacity = 32;
 
 /// Received reply Values retained in the m1/m2/... buffer. Sixteen times smaller than the tap
-/// because the UNIT is far heavier: a TapEvent is a few short strings, while a wire-arrived Value
-/// is bounded only by the decode materialization budget (kMaxDecodedCells — megabytes, worst
-/// case). Same width as `RemoteConsole::kMaxPendingDelivered`, which bounds the *pending* half of
-/// the same client-side reply path: at most that many replies waiting for a schema, at most that
-/// many retained once admitted.
+/// because the UNIT is far heavier: a TapEvent is a few short strings, while a wire-arrived
+/// Value carries structure, bounded by kMaxDecodedCells and, for the window, by
+/// kConsoleBufferCells below. Same width as `RemoteConsole::kMaxPendingDelivered`, the
+/// *pending* half of the same client-side reply path.
+/// docs/reference/bounds.md#console-weaver-history
 inline constexpr std::size_t kConsoleBufferCapacity = 64;
+
+/// The host memory the reply buffer keeps, over every reply retained in it
+/// (`loom::ValueWeight::held_bytes`): a window of values is bounded whole, in the unit it costs,
+/// and not at one value's worst times its count. Past it the oldest are evicted and counted, and
+/// their labels refuse, as at capacity. docs/reference/bounds.md#console-weaver-history
+inline constexpr std::uint64_t kConsoleBufferBytes = 32u << 20;
 
 /// A registered shape's identity.
 struct ShapeRef {
@@ -380,7 +387,8 @@ private:
     void record_tap(const loom::BusEvent& e);
     /// The reply window the console's own Weave holds. Defined in the .cpp, where ConsoleWeave is
     /// complete — the type is opaque here, which is exactly why buffer_at cannot reach it inline.
-    const BoundedHistory<ConsoleArrival, kConsoleBufferCapacity>& reply_history() const;
+    const BoundedHistory<ConsoleArrival, kConsoleBufferCapacity, kConsoleBufferBytes>&
+    reply_history() const;
 
     /// Settle an arrival against the book, from inside the console weave's own delivery.
     void record_arrival(const loom::Message& in);

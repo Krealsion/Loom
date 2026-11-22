@@ -6,9 +6,10 @@ Reference: [messaging](../reference/messaging.md).
 
 LAW — Dispatch is single-threaded FIFO. A dispatch turn is non-reentrant; a
 handler's sends enqueue *later* deliveries, never nested ones. What one sender
-may have waiting is at most `kMaxPendingPerSender`. A send past that is refused
-`PendingPerSender`, queues nothing, and leaves every other sender's waiting
-messages untouched.
+may have waiting is at most `kMaxPendingPerSender` messages, holding at most
+`kMaxPendingCellsPerSender` cells and carrying at most `kMaxPendingBytesPerSender`
+payload bytes together. A send past any of them is refused `PendingPerSender`,
+queues nothing, and leaves every other sender's waiting messages untouched.
 
 MEANS
 - ordering is deterministic;
@@ -18,6 +19,16 @@ MEANS
 - a weave that sends more messages than it is delivered cannot grow the queue
   without limit: its own next send is refused, by that name, on the tap and in
   the journal ([MSG-05](#msg-05--refusals-are-structured-and-observable));
+- and neither can one that sends larger messages instead of more of them: a
+  message waits decoded, and what one sender's waiting messages hold is bounded
+  together in both units a holder keeps a value in -- its cells, and the payload
+  bytes no cell count charges for -- so what that sender can make the host keep,
+  and owe it, is bounded whole. A publication is charged for each accepter it
+  reaches, and one that does not fit is refused whole as a count that does not
+  fit is ([bounds](../reference/bounds.md#what-one-senders-waiting-messages-hold));
+- a door that admits a sender's bytes before queuing them may ask that bound
+  first and refuse before it decodes anything: the refusal is the same refusal,
+  by that name, on the tap and to its sender;
 - messages already waiting stay waiting, in the order they were queued.
 
 DOES NOT MEAN
@@ -28,7 +39,11 @@ DOES NOT MEAN
   sender under the bound still enqueues behind what is already waiting, and a
   producer that keeps replacing exactly what was delivered still never lets the
   drain return;
-- that one sender at the bound refuses anyone else's send;
+- that one sender at any of its bounds refuses anyone else's send;
+- that the cells and the bytes are one budget. They are counted apart and
+  refused apart, because a waiting message costs the host both the memory it
+  holds and the walk it owes, and only the cells say what the walk costs
+  ([the decode bound](../reference/bounds.md#the-decode-materialization-bound));
 - that a dispatch-refusal notice, a joint notice, or a scheduled admission is
   that sender's speech. Those are the bus's own acts and are not counted;
 - that an answer, immediate or deferred, is this speech. Each spends a right one
@@ -38,10 +53,16 @@ DOES NOT MEAN
   ([MSG-14](#msg-14--a-call-is-a-function-of-its-argument-alone)).
 
 PROVEN BY — `Switchboard::drain_until_idle` / `pump_pending` (the shared
-`in_dispatch_` guard); `kMaxPendingPerSender`; suites `switchboard`
-(reentrancy cases, and a weave that sends two messages for every delivery:
-the bound refuses its next send by name while another weave's send is still
-delivered), `kernel` (admission atomicity riding the queue turn).
+`in_dispatch_` guard); `kMaxPendingPerSender`, `kMaxPendingCellsPerSender`, `kMaxPendingBytesPerSender`,
+`Switchboard::pending_speech`; suites `switchboard`
+(reentrancy cases; a weave that sends two messages for every delivery: the bound
+refuses its next send by name while another weave's send is still delivered; and
+a sender whose waiting messages hold the whole cell bound, and another whose
+one-cell messages carry the whole byte bound, each refused by name with far fewer
+than `kMaxPendingPerSender` waiting, their room returned as those are dispatched),
+`kernel` (admission atomicity riding the queue turn; a loaded and a
+boxed weave refused at the host's door before their bytes are decoded), `bridge`
+(a session's, told in words).
 
 ## MSG-02 — The bus stamps the sender
 

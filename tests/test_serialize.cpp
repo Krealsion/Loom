@@ -567,6 +567,32 @@ TEST_CASE("a nested message charges its whole slot vector, present fields or not
     CHECK(over.first_error().detail.find("materialization budget") != std::string::npos);
 }
 
+TEST_CASE("decoded_cells counts a value as its decode counted it, and stops one past the bound") {
+    // The count the bus charges a waiting message: equal to what the decoder spent on a value
+    // at the inclusive bound, by both of its units (a list's elements, and a record's slots).
+    Admission nothing = admit(parse(nothing_list_bytes(loom::kMaxDecodedCells - 1)),
+                              nothing_list_schema());
+    REQUIRE(nothing.ok());
+    CHECK(decoded_cells(nothing.value()) == loom::kMaxDecodedCells);
+    const std::uint64_t pairs = (loom::kMaxDecodedCells - 1) / 3;
+    Admission paired = admit(parse(pair_list_bytes(pairs)), pair_list_schema());
+    REQUIRE(paired.ok());
+    CHECK(decoded_cells(paired.value()) == 1 + 3 * pairs);
+    // A value built in process past the bound answers one more than it, and is refused at the
+    // gate for the same count.
+    Value big(nothing_list_schema());
+    big.set("items", Cell::list(Cell::Array(static_cast<std::size_t>(loom::kMaxDecodedCells),
+                                            Cell::message(Value(nothing_schema())))));
+    CHECK(decoded_cells(big) == loom::kMaxDecodedCells + 1);
+    Admission refused = admit(big, *nothing_list_schema());
+    REQUIRE_FALSE(refused.ok());
+    CHECK(refused.first_error().kind == ErrorKind::TooLarge);
+    // A part shared by many fields costs a visit at each place it stands, as the gate walks it.
+    Value shared(pair_list_schema());
+    shared.set("items", Cell::list(Cell::Array(1000, Cell::message(Value(pair_schema())))));
+    CHECK(decoded_cells(shared) == 1 + 3 * 1000);
+}
+
 TEST_CASE("the budget counts STRUCTURE, not bytes — a big payload is one cell") {
     // Wire-size limits (kMaxFieldBytes, and the remaining-input check) bound how
     // many BYTES a field may carry. The materialization budget bounds how much

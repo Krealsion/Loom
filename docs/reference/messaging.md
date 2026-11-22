@@ -256,9 +256,11 @@ Semantics, exactly:
 - **Refusal is loud and precise.** A sender that does not hold the role gets
   the invalid Ticket / `RolePublication{authored=false}`, `refusal` is
   `RoleAuthorshipDenied`, nothing is queued, and the tap shows that reason —
-  never a downgrade to personal speech. A holder at `kMaxPendingPerSender`
-  gets an invalid ticket whose `refusal` is `PendingPerSender`, and the tap
-  says that, not authorship. `RolePublication{authored=true, recipients=0}`
+  never a downgrade to personal speech. A holder at any waiting bound —
+  `kMaxPendingPerSender`, or what its waiting messages hold
+  ([bounds](bounds.md#what-one-senders-waiting-messages-hold)) — gets an invalid
+  ticket whose `refusal` is `PendingPerSender`, and the tap says that, not
+  authorship. `RolePublication{authored=true, recipients=0}`
   is the different, honest fact of a role that spoke to an empty room.
 - **Orthogonal to destination** (MSG-04): a role-authored send to another
   role preserves both facts — authored as `worker.a`, delivered to

@@ -1051,6 +1051,14 @@ void IsolationHost::handle_child_frame(Link& link, const Incoming& frame) {
         if (!door) {
             return; // a schema the system does not know -> drop (cannot be gated)
         }
+        // A child whose waiting room is spent is refused before its bytes are decoded, on the
+        // tap as the bus refuses it: nothing it emits could wait, so the host builds nothing.
+        if (const auto refused = bus_.pending_speech().refuses_now(link.id)) {
+            bus_.note_seam_refusal(link.id,
+                                   kind == kEmitPublish ? loom::WeaveId{} : loom::WeaveId{target},
+                                   u.claimed_name(), u.claimed_version(), *refused);
+            return;
+        }
         loom::Admission a = loom::admit(u, door, bus_.registry());
         if (!a.ok()) {
             return; // gate-refused (malformed/hostile child output) -> drop
@@ -1084,6 +1092,11 @@ void IsolationHost::handle_child_frame(Link& link, const Incoming& frame) {
             bus_.resolve_schema(u.claimed_name(), u.claimed_version());
         if (!door) {
             return; // a schema the system does not know -> drop (cannot be gated)
+        }
+        if (const auto refused = bus_.pending_speech().refuses_now(link.id)) { // before decoding
+            bus_.note_seam_refusal(link.id, loom::WeaveId{}, u.claimed_name(), u.claimed_version(),
+                                   *refused, role);
+            return;
         }
         loom::Admission a = loom::admit(u, door, bus_.registry());
         if (!a.ok()) {

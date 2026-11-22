@@ -327,9 +327,10 @@ as its runtime:
   writes outlives the call
   ([calls](messaging.md#calls-a-function-of-its-argument-alone)).
 - **Not denial of service through the host.** Host-side decode of the module's
-  bytes spends the decode bound
-  ([below](#work-the-host-does-on-behalf-of-a-contained-participant)), and queues,
-  retained answers and service state keep their own bounds, as for any participant.
+  bytes spends the decode bound, and what its waiting messages hold is bounded as
+  a whole, counted before they are decoded
+  ([below](#work-the-host-does-on-behalf-of-a-contained-participant)); retained
+  answers and service state keep their own bounds, as for any participant.
 
 ## Where a grant comes from (the powerbox)
 
@@ -623,13 +624,29 @@ Every decode of untrusted bytes spends one shared, host-owned allowance of
 decoder every seam funnels through (child emissions, manifests, snapshots,
 Bridge frames, dynamic-library bytes, persistence loads).
 
+And the second half of that path, because one value's bound is not a bound on
+many: **what one sender's waiting messages hold is bounded as a whole**, so a
+contained sender cannot command the host's memory, or the work it owes that
+sender, by sending many values instead of one. A message waits decoded, and
+beside the count `kMaxPendingPerSender` bounds, `kMaxPendingCellsPerSender`
+bounds the cells one sender's waiting messages hold together and
+`kMaxPendingBytesPerSender` the payload bytes they carry — the two units a holder
+keeps a value in, since a compact value may command the whole decode allowance
+and a one-cell value may carry a megabyte
+([bounds](bounds.md#what-one-senders-waiting-messages-hold)). The doors the host
+opens on a contained sender's behalf ask those bounds before they decode
+anything, so a sender with no room is refused in words and the host builds
+nothing for it. The keepers of admitted values are bounded the same way, each by
+the memory it may keep: the console's replies, a terminal's received and authored
+values.
+
 That claim is exactly this wide. It does **not** say all denial of service is
 impossible, that all host work is bounded, or that host memory cannot be
 exhausted through any API. Specifically still true:
 
 - a large but in-budget value is still allowed to be expensive;
-- queue growth, channel buffers, and service-specific state have their own,
-  separate bounds — this one is the decoder's;
+- channel buffers and service-specific state have their own, separate bounds —
+  this one is the decoder's;
 - application services must still validate their own semantic ranges;
 - native in-process code is trusted and is bounded by nothing here.
 

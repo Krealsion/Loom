@@ -10,6 +10,7 @@
 #include <zen/switchboard/asks.hpp>
 #include <zen/switchboard/grant.hpp>
 #include <zen/switchboard/message.hpp>
+#include <zen/switchboard/pending_speech.hpp>
 #include <zen/switchboard/sense.hpp>
 #include <zen/switchboard/weave_contract.hpp>
 #include <zen/value.hpp>
@@ -31,19 +32,8 @@
 
 namespace loom {
 
-// `RefusalReason` lives on `zen/switchboard/bus.hpp`, beside `Ticket`, which carries one when a
-// send queues nothing.
-
-const char* name_of(RefusalReason r) noexcept;
-
-/// A structured refusal. When `reason == GateRefused`, `error` is the loom
-/// gate error (kind, field path, expected/actual).
-struct Refusal {
-    RefusalReason reason = RefusalReason::None;
-    Error error{};
-
-    std::string message() const;
-};
+// `RefusalReason` and `Refusal` live on `zen/switchboard/bus.hpp`, beside `Ticket`, which
+// carries a reason when a send queues nothing, and `PendingSpeech`, which words its own.
 
 enum class Disposition : std::uint8_t { Pending, Delivered, Refused };
 
@@ -711,9 +701,25 @@ public:
     /// a joint notice and a scheduled admission are not a sender's speech and are not counted.
     /// MSG-01; docs/laws/messaging-laws.md
     /// docs/reference/bounds.md
-    static constexpr std::size_t kMaxPendingPerSender = 1024;
+    static constexpr std::size_t kMaxPendingPerSender = PendingSpeech::kMaxMessages;
     static_assert(kMaxPendingPerSender == kJournalCapacity,
                   "one sender's waiting speech is one journal window");
+
+    /// The cells one sender's own waiting messages may hold together: what the host keeps for
+    /// that sender, and the walks and deliveries it owes it, bounded as a whole. The unit that
+    /// holds all three bounds, and words each refusal, is `PendingSpeech`
+    /// (`zen/switchboard/pending_speech.hpp`). MSG-01; docs/laws/messaging-laws.md
+    static constexpr std::uint64_t kMaxPendingCellsPerSender = PendingSpeech::kMaxCells;
+
+    /// The payload bytes one sender's own waiting messages may carry together: the `Text` and
+    /// `Bytes` contents the cell count never charged for, since a 1 MiB field is one cell.
+    static constexpr std::uint64_t kMaxPendingBytesPerSender = PendingSpeech::kMaxBytes;
+
+    /// What each sender's own waiting speech holds, and the three bounds it is held to. A host
+    /// door that admits a contained sender's bytes asks it before it decodes them
+    /// (`refuses_now`), so a sender whose room is spent in any of the three is refused in words
+    /// and the host builds nothing for it. docs/reference/bounds.md
+    const PendingSpeech& pending_speech() const noexcept { return pending_; }
 
     /// How many answers one Loom keeps at once (ANS-02): room for several weaves each holding
     /// work it owes. Past it a deferral is refused visibly and the immediate answer opportunity
@@ -1030,9 +1036,13 @@ private:
         /// The fence this envelope belongs to (0 for none): the fence of the delivery it was
         /// queued from, or the one a fenced host send opened. Stamped by the bus.
         std::uint64_t fence = 0;
-        /// Counted against `msg.sender`'s `kMaxPendingPerSender`. Set only for a sender's own
-        /// speech; a bus notice or a scheduled admission leaves it false.
+        /// Counted against `msg.sender`'s `kMaxPendingPerSender`, and `weight` against its
+        /// `kMaxPendingCellsPerSender` and `kMaxPendingBytesPerSender`. Set only for a sender's
+        /// own speech; a bus notice or a scheduled admission leaves it false.
         bool sender_accounted = false;
+        /// What the payload makes the host keep (`loom::weigh`), weighed once at enqueue and
+        /// given back at dispatch; only when `sender_accounted`.
+        ValueWeight weight{};
         /// The ask this envelope is, set only by the ask door; on an answer, the ask it answers,
         /// carried from the right it was spent from. ANS-08
         AskFacts ask{};
@@ -1051,10 +1061,10 @@ private:
     void queue_back(Envelope env);
     /// Pop the front envelope and drop its sender count. It is no longer waiting.
     Envelope take_front();
-    /// True when `sender` already has `kMaxPendingPerSender` of its own messages waiting.
-    bool sender_at_pending_bound(WeaveId sender) const noexcept;
-    /// `PendingPerSender` on the tap and in the journal; nothing queued; an invalid ticket.
-    Ticket refuse_pending_bound(WeaveId target, WeaveId sender, const Message& msg);
+    /// `refusal` (a `PendingPerSender`) on the tap and in the journal; nothing queued; an
+    /// invalid ticket.
+    Ticket refuse_pending_bound(WeaveId target, WeaveId sender, const Message& msg,
+                                const Refusal& refusal);
     /// The envelope a dispatch just finished with no longer counts toward its fence.
     void fence_dispatched(std::uint64_t id) noexcept;
     /// Open a record for a host's fenced send, or 0 at the bound.
@@ -1323,8 +1333,8 @@ private:
     std::uint64_t life_of(WeaveId id) const;
 
     /// Record and publish a refusal that never became a delivery, at the same altitude as a
-    /// delivery refusal.
-    Ticket refuse_now(WeaveId target, WeaveId sender, const Message& msg, RefusalReason reason);
+    /// delivery refusal. A refusal with words of its own carries them (`PendingSpeech`).
+    Ticket refuse_now(WeaveId target, WeaveId sender, const Message& msg, const Refusal& refusal);
 
     void deliver_one(Envelope env);
 
@@ -1506,9 +1516,7 @@ private:
     std::uint64_t next_weave_id_ = 1;
 
     std::deque<Envelope> queue_;
-    /// Waiting envelopes of each sender's own speech, by `WeaveId::value`. Bus acts are absent.
-    /// Answers are absent: one delivery creates one answer right.
-    std::map<std::uint64_t, std::size_t> pending_by_sender_;
+    PendingSpeech pending_;
     bool publication_pending_bound_ = false;
 
     /// One retained outcome, tagged with the seq that owns it: a slot answers only while its
