@@ -254,14 +254,26 @@ own trusted facts, and
 <!-- value kTranscriptCapacity in "kTranscriptCapacity  {} entries" -->
 <!-- value kAuthoredCapacity in "kAuthoredCapacity     {} messages" -->
 <!-- value kReceivedCapacity in "kReceivedCapacity     {} messages" -->
+<!-- value kAuthoredBytes in "kAuthoredBytes    {MiB} MiB" -->
+<!-- value kReceivedBytes in "kReceivedBytes    {MiB} MiB" -->
 ```text
 kTranscriptCapacity  256 entries      metadata; a session's worth of scrollback
 kAuthoredCapacity     64 messages     submitted values, separate from replies
-kReceivedCapacity     64 messages     the retained Values, bounded only by the
+kAuthoredBytes    32 MiB              ...and the memory those keep together
+kReceivedCapacity     64 messages     the retained Values, each bounded by the
                                       decode budget, so a smaller window
+kReceivedBytes    32 MiB              ...and the memory they keep together, so
+                                      the window is bounded whole and not at
+                                      one value's worst times its count
 ```
 
-Both count what they dropped (`evicted()`), because a bounded surface that
+Each value window is held to both: the oldest values are evicted, and counted,
+until the newest fits, exactly as at capacity, and an evicted id refuses the same
+way. The memory a kept value holds is its cells' slots and its payloads' bytes
+(`loom::ValueWeight::held_bytes`), so a one-cell value carrying a megabyte counts
+as a megabyte ([bounds](bounds.md#terminal-session-one-participants-own-record)).
+
+All of them count what they dropped (`evicted()`), because a bounded surface that
 claimed to be complete would trade a memory lie for an observability lie. A
 received-message id is a **stable identity**: once evicted it refuses rather than
 re-binding to a newer message, and `$rN.field` references say which absence it

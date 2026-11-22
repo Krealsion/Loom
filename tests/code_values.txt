@@ -47,7 +47,9 @@ kMaxDeferredAnswers             include/zen/switchboard/switchboard.hpp   kMaxDe
 kMaxDeferredPerWeave            include/zen/switchboard/switchboard.hpp   kMaxDeferredPerWeave
 kMaxRelayPending                include/zen/weave/relay.hpp               kMaxRelayPending
 kJournalCapacity                include/zen/switchboard/switchboard.hpp   kJournalCapacity
-kMaxPendingPerSender            include/zen/switchboard/switchboard.hpp   kMaxPendingPerSender
+kMaxPendingPerSender            include/zen/switchboard/pending_speech.hpp kMaxMessages
+kMaxPendingCellsPerSender       include/zen/switchboard/pending_speech.hpp kMaxCells
+kMaxPendingBytesPerSender       include/zen/switchboard/pending_speech.hpp kMaxBytes
 kMaxPreparedReplacements        include/zen/switchboard/switchboard.hpp   kMaxPreparedReplacements
 kMaxRolesPerWeave               include/zen/switchboard/switchboard.hpp   kMaxRolesPerWeave
 kMaxPreparationBudget           include/zen/switchboard/switchboard.hpp   kMaxPreparationBudget
@@ -66,11 +68,14 @@ kDefaultMaxPayloadBytes         include/zen/history/recorder.hpp          kDefau
 kConsoleTapCapacity             include/zen/console/console.hpp           kConsoleTapCapacity
 kConsoleAskCapacity             include/zen/console/console.hpp           kConsoleAskCapacity
 kConsoleBufferCapacity          include/zen/console/console.hpp           kConsoleBufferCapacity
+kConsoleBufferBytes             include/zen/console/console.hpp           kConsoleBufferBytes
 
 # ---- the terminal session and its transcript
 kTranscriptCapacity             include/zen/terminal/transcript.hpp       kTranscriptCapacity
 kAuthoredCapacity               include/zen/terminal/transcript.hpp       kAuthoredCapacity
+kAuthoredBytes                  include/zen/terminal/transcript.hpp       kAuthoredBytes
 kReceivedCapacity               include/zen/terminal/transcript.hpp       kReceivedCapacity
+kReceivedBytes                  include/zen/terminal/transcript.hpp       kReceivedBytes
 kMaxOutstandingAsks             include/zen/terminal/session.hpp          kMaxOutstandingAsks
 kMaxHistoryRows                 include/zen/session/vocabulary.hpp        kMaxHistoryRows
 

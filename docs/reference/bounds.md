@@ -27,6 +27,8 @@ and held by review alone.
 | `kMaxJointOfferBytes` | <!-- value kMaxJointOfferBytes KiB -->64<!-- /value --> KiB | one offered value's serialized size; `TooLarge` at `offer` — a joint publication carries facts, not documents |
 | `kMaxFences` | <!-- value kMaxFences -->64<!-- /value --> | fences held (open or settled, not yet released) per bus; a fenced send past it queues **nothing** and returns an invalid ticket — never an unfenced send in its place ([fences](messaging.md#fences-when-what-one-send-set-in-motion-has-been-dispatched)). Ids are monotonic and never reused |
 | `kMaxPendingPerSender` | <!-- value kMaxPendingPerSender -->1024<!-- /value --> | one sender's own messages waiting on the bus. A further send is refused `PendingPerSender` on the tap and queues nothing; every other sender's waiting messages stay, in order. An answer is not counted ([MSG-01](../laws/messaging-laws.md#msg-01--single-threaded-fifo-non-reentrant)) |
+| `kMaxPendingCellsPerSender` | <!-- value kMaxPendingCellsPerSender grouped -->262,144<!-- /value --> | the cells those same waiting messages hold together, each counted as a decode counts it (`loom::weigh`). A send whose value would pass it is refused `PendingPerSender`, as the count above refuses one, and queues nothing. Four whole values of `kMaxDecodedCells`, so one value of any admissible size always fits a sender with nothing waiting ([below](#what-one-senders-waiting-messages-hold)) |
+| `kMaxPendingBytesPerSender` | <!-- value kMaxPendingBytesPerSender MiB -->64<!-- /value --> MiB | the payload bytes those waiting messages carry together — the `Text` and `Bytes` contents no cell count charges for, since a 1 MiB field is one cell. Refused as the cells are. The bytes a framed channel already lets one peer have in flight (`kMaxFrameLen`, `kMaxBacklog`), so a message of any size a transport can deliver fits a sender with nothing waiting |
 | activation sequence | `INT64_MAX` | the door refuses further activations, naming the boundary; it does not brick |
 | deferred-answer tokens | 2^64, monotonic | deliberately unguarded: process-local, never persisted, +1 per deferral |
 
@@ -52,6 +54,62 @@ each one spends a right a delivery created, so answers cannot outgrow what was
 delivered. A dispatch-refusal notice, a joint notice and a scheduled admission
 are the bus's own acts. They are not counted, and this bound does not refuse
 them. An unset sender is one sender, the host's, with a cap of its own.
+
+### What one sender's waiting messages hold
+
+**A count of messages is not a bound on what they hold.** The three bounds above
+are one bound in three units, and only together do they say what one sender can
+make the host keep, and owe it. A message waits as a decoded value, so the
+queue holds what `kMaxDecodedCells` admitted — and a compact value may command
+the whole of that allowance from a few dozen bytes
+([the decode bound](#the-decode-materialization-bound)). The message count alone
+would therefore bound that sender's structure at the count times one value's
+worst, which is not a budget anybody set: it is the product of two bounds that
+were each chosen for its own reason.
+
+So each waiting message is also charged what its value holds, weighed in the two
+units a holder keeps it in (`loom::weigh`,
+[`<zen/gate.hpp>`](../../include/zen/gate.hpp)): its cells, counted exactly as its
+decode counted them, and the payload bytes its `Text` and `Bytes` fields carry,
+which no cell count charges for — a 1 MiB `Bytes` field is one cell and a
+megabyte, so a bound on structure alone is no bound on memory. One sender's
+waiting messages hold at most `kMaxPendingCellsPerSender` cells and carry at most
+`kMaxPendingBytesPerSender` payload bytes together.
+
+A send that would pass what that sender has left, in either unit, is refused
+`PendingPerSender`, in words naming the bound, what waits and what was asked;
+nothing is queued, and it may be sent again once some of what waits has been
+dispatched. A publication is charged once for each accepter it reaches, since
+each accepter's envelope holds the value and owes it a delivery, and one that
+does not fit is refused whole as the count refuses one. Every other sender is
+untouched, which is the whole point of a per-sender bound: a weave that keeps
+too many exhausts itself and nobody else
+([`kMaxDeferredPerWeave`](#switchboard) above).
+
+**Four whole values of the decoder's bound, and a transport's worth of payload**,
+so the largest value any boundary admits always fits a sender with nothing
+waiting, and reaches four accepters at once; a sender of ordinary values meets
+the message count first and never these. Both are spent as the queue is: a
+message's cells and bytes are returned when it is taken for dispatch, so what a
+sender may send next is what it is not already owed.
+
+**Why the bus counts two units where a window counts one.** A waiting message
+costs the host memory *and* work it owes that sender — a walk at the gate and a
+delivery — and the walk is paid in cells, so the bus bounds cells apart rather
+than folding them into bytes. A window of kept values owes nothing and only
+holds, so it is bounded in one number, the memory it keeps
+([the console's](#console-weaver-history)).
+
+**A door that takes bytes asks first** (`Switchboard::pending_speech`, then
+`PendingSpeech::room` and `refuses_now`): the host parses and admits a contained
+sender's bytes before they are queued, so a sender whose room is spent is refused
+before any of it is decoded — the refusal costs the host nothing it would have
+built, and says so in its words. The library seam, an isolated child's `Emit` and
+a bridge session's `Send` each ask, say the refusal on the tap as the bus says it,
+and tell their sender the waiting bound
+([capabilities](capabilities.md#work-the-host-does-on-behalf-of-a-contained-participant)).
+A send whose own value does not fit can only be judged once that value exists, so
+the bus is what refuses that one.
 
 ## Recorder (host working memory)
 
@@ -113,6 +171,7 @@ type, so the local and remote weaver see the same horizon.
 |---|---|---|---|---|
 | `kConsoleTapCapacity` | <!-- value kConsoleTapCapacity -->1024<!-- /value --> | bus events | the tap window (`ConsoleEngine::tap_`, `RemoteConsole::tap_`) | ring: oldest evicted, counted in `Console::evicted().tap` |
 | `kConsoleBufferCapacity` | <!-- value kConsoleBufferCapacity -->64<!-- /value --> | received arrivals | the m1/m2/... reply buffer (`ConsoleWeave::received_`, `RemoteConsole::buffer_`) | ring: oldest evicted, counted in `Console::evicted().buffer`; its **label** then refuses |
+| `kConsoleBufferBytes` | <!-- value kConsoleBufferBytes MiB -->32<!-- /value --> MiB | bytes of host memory | what those retained arrivals keep TOGETHER (`loom::ValueWeight::held_bytes`: their cells' slots and their payloads' bytes), so the window is bounded whole, in the unit it costs, and not at one value's worst times its count | the oldest are evicted, and counted, until the new arrival fits: exactly as at capacity, and its label refuses the same way |
 | `kConsoleAskCapacity` | <!-- value kConsoleAskCapacity -->32<!-- /value --> | conversations held for a caller | the in-process engine's tracked conversations: still open, plus answered and not yet taken | **refuses** a new tracked conversation, never evicts — see below |
 
 **A third bound, and it is deliberately not a window.** `kConsoleAskCapacity`
@@ -150,9 +209,28 @@ any participant may send.
 tap entry is roughly one journal entry, so a weaver who can still *see* an
 event on the tap can still *ask* the journal what became of it. The buffer is
 sixteen times smaller because the unit is far heavier -- a `TapEvent` is a few
-short strings, while a wire-arrived `Value` is bounded only by
-`kMaxDecodedCells` -- and it matches `kMaxPendingDelivered`, the *pending* half
-of the same client-side reply path.
+short strings, while a wire-arrived `Value` carries structure -- and it matches
+`kMaxPendingDelivered`, the *pending* half of the same client-side reply path.
+
+**The memory a window keeps is a budget, not an RSS guarantee** (as
+[LIFE-07](../laws/lifecycle-laws.md) is not). `held_bytes` charges a cell the slot a `Value`
+allocates per declared field and a payload its own bytes, while the heap also holds each nested
+value's own object, and a value whose parts are shared holds one copy of what this counts at every
+place it stands. Measured against a counting allocator: a value of `kMaxDecodedCells` cells whose
+parts are shared holds 0.83x of what it is charged, and one decoded from bytes about 2x. What the
+number is exactly is proportional to the structure and the payloads, which is what bounding needs.
+
+**And a count of heavy things is why the buffer has a second bound.** One
+retained value's structure is bounded by `kMaxDecodedCells` and its payloads by
+`kMaxFieldBytes`, so sixty-four of them at that worst is sixty-four times a bound
+nobody set for this window. `kConsoleBufferBytes` is what they keep together —
+measured in the one thing a window of values costs, the memory its cells' slots
+and its payloads' bytes hold, since a one-cell reply may carry a megabyte. It
+evicts, and counts, exactly as the capacity does: nothing is owed on history,
+which is what makes discarding the oldest legitimate here and illegitimate for a
+backlog, and an evicted label still refuses and says it was evicted. The same
+second bound, for the same reason, holds the terminal's value windows
+([below](#terminal-session-one-participants-own-record)).
 
 **Ownership / reset.** Host-owned and automatic: not a constructor parameter,
 not configurable, not widenable by a message. There is no clear operation --
@@ -249,7 +327,9 @@ conversation. Keeping a submitted value cannot displace a received value.
 |---|---|---|---|---|
 | `kTranscriptCapacity` | <!-- value kTranscriptCapacity -->256<!-- /value --> | transcript entries | `Transcript::entries_` -- a participant's own record | ring: oldest evicted, counted in `Transcript::evicted()` |
 | `kReceivedCapacity` | <!-- value kReceivedCapacity -->64<!-- /value --> | received `Value`s | `Transcript::received_` -- the `rN` store the `$rN.field` syntax reads | ring: oldest evicted, counted in `Transcript::received_evicted()`; its **id** then refuses |
+| `kReceivedBytes` | <!-- value kReceivedBytes MiB -->32<!-- /value --> MiB | bytes of host memory | what those received values keep TOGETHER (`loom::ValueWeight::held_bytes`) | the oldest are evicted, and counted, until the new value fits: as at capacity, and its id refuses the same way |
 | `kAuthoredCapacity` | <!-- value kAuthoredCapacity -->64<!-- /value --> | submitted `Value`s | `Transcript::authored_` | ring: oldest evicted; `retained_value(observation)` then returns no value |
+| `kAuthoredBytes` | <!-- value kAuthoredBytes MiB -->32<!-- /value --> MiB | bytes of host memory | what those submitted values keep together; its own budget, so keeping what was sent still cannot displace what arrived | as above |
 | `kMaxOutstandingAsks` | <!-- value kMaxOutstandingAsks -->8<!-- /value --> | conversations | how many asks one participant will track at once -- the number the terminal hands its `loom::AskBook` | the next ask is refused LOCALLY; nothing is authored and the outstanding ones are untouched |
 
 **`loom::AskBook` has no default capacity, and that is a bound too.** The number
@@ -264,9 +344,13 @@ are.
 
 **An entry is metadata; a received value is not.** An entry is a few short
 strings and an id, so a session's worth of scrollback is cheap; a received
-`Value` is bounded only by `kMaxDecodedCells`, which is why the store that keeps
-them is four times smaller -- the same argument that made the console's reply
-buffer sixteen times smaller than its tap.
+`Value` carries structure and payloads, which is why the store that keeps them is
+four times smaller -- the same argument that made the console's reply buffer
+sixteen times smaller than its tap. And because one value's structure is bounded
+only by `kMaxDecodedCells` and its payloads by `kMaxFieldBytes`, a count of
+sixty-four is not a bound on what sixty-four of them keep: each value window is
+held to its own memory budget as well, so what it keeps is bounded whole
+([the console's](#console-weaver-history) says why).
 
 **Eviction cannot cost a conversation.** Outstanding asks live in the session,
 never in the transcript, so evicting the visible `SUBMITTED` line for an ask does

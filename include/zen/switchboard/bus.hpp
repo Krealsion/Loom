@@ -4,6 +4,7 @@
 #ifndef ZEN_SWITCHBOARD_BUS_HPP
 #define ZEN_SWITCHBOARD_BUS_HPP
 
+#include <zen/admission.hpp> // Error: the gate's, which a refusal carries
 #include <zen/schema.hpp>
 #include <zen/switchboard/calls.hpp>
 #include <zen/switchboard/grant.hpp>
@@ -12,6 +13,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -88,6 +90,18 @@ enum class RefusalReason : std::uint8_t {
     /// plain send instead.
     /// ANS-08; docs/laws/answer-authority-laws.md
     AskEndedNotAccepted,
+};
+
+const char* name_of(RefusalReason r) noexcept;
+
+/// A structured refusal. When `reason == GateRefused`, `error` is the loom
+/// gate error (kind, field path, expected/actual); a refusal with words of its own carries them
+/// as that error's detail, which `message()` says in place of the reason's general sentence.
+struct Refusal {
+    RefusalReason reason = RefusalReason::None;
+    Error error{};
+
+    std::string message() const;
 };
 
 /// A queued attempt, from an ordinary directed or role-addressed send (role-authored ones

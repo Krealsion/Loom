@@ -29,6 +29,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -1591,6 +1592,101 @@ TEST_CASE("a compact frame cannot command an unbounded host decode") {
     raw.queue(BridgeOp::Send, make_send_frame(0, h.gid.value, 0, 43, loom::serialize(greet)));
     raw.flush();
     CHECK(wait_until([&] { return h.greeter->last_sender() != 0; }, 2000));
+}
+
+TEST_CASE("a session's waiting messages are bounded by the cells they hold, and the peer is told "
+          "each refusal in words") {
+    // The server's I/O alone (`service()`), so nothing the session sends is dispatched and its
+    // sends wait as a flood's would. Each value is the cell bound's worst: a list of values that
+    // have no field, a few dozen bytes on the wire.
+    loom::Switchboard bus;
+    auto b = std::make_unique<BulkSink>();
+    BulkSink* bulk = b.get();
+    const loom::WeaveId bulk_id = bus.register_weave(std::move(b), loom::Grant{}.allow_any());
+    std::string err;
+    const socket_t listener = bridge_listen_tcp(0, &err);
+    REQUIRE_MESSAGE(listener != kInvalidSocket, err);
+    const std::uint16_t port = bridge_socket_port(listener);
+    loom::BridgeServer server(bus, listener);
+    const socket_t cs = bridge_connect_tcp("127.0.0.1", port, &err);
+    REQUIRE_MESSAGE(cs != kInvalidSocket, err);
+    BridgeChannel raw(cs);
+    std::string hello;
+    put_u32(hello, kBridgeProtocolVersion);
+    raw.queue(BridgeOp::Hello, hello);
+    raw.flush();
+    std::map<std::uint64_t, std::string> refused;
+    bool welcomed = false;
+    auto turn = [&] {
+        server.service();
+        std::vector<BridgeIncoming> fr;
+        raw.poll(fr);
+        for (const BridgeIncoming& f : fr) {
+            if (f.op == BridgeOp::Welcome) {
+                welcomed = true;
+            }
+            if (f.op == BridgeOp::SendRefused) {
+                Cursor c(f.payload);
+                std::uint64_t corr = 0;
+                std::string_view r;
+                if (c.u64(corr) && c.bytes(r)) {
+                    refused[corr] = std::string(r);
+                }
+            }
+        }
+    };
+    REQUIRE(wait_until([&] { turn(); return welcomed; }, 2000));
+
+    auto bulk_of = [](std::uint64_t cells) { // `cells` as decoded_cells counts them, at least one
+        loom::Value v(bulk_schema());
+        v.set("items", loom::Cell::list(loom::Cell::Array(
+                           static_cast<std::size_t>(cells - 1),
+                           loom::Cell::message(loom::Value(bulk_nothing_schema())))));
+        return loom::serialize(v);
+    };
+    const std::uint64_t whole = loom::kMaxDecodedCells;
+    const std::uint64_t values = loom::Switchboard::kMaxPendingCellsPerSender / whole;
+    auto send = [&](std::uint64_t corr, std::uint64_t cells) {
+        raw.queue(BridgeOp::Send, make_send_frame(0, bulk_id.value, 0, corr, bulk_of(cells)));
+        raw.flush();
+    };
+    // All but one whole value, then one cell short of the last: one cell of room is left.
+    std::uint64_t corr = 1;
+    for (; corr < values; ++corr) {
+        send(corr, whole);
+    }
+    send(corr++, whole - 1);
+    REQUIRE(wait_until([&] { turn(); return bus.pending() == values; }, 4000));
+    CHECK(refused.empty());
+
+    // Past the bound at the bus: the value is admitted and does not fit, and the peer is told.
+    const std::uint64_t past = corr++;
+    send(past, whole);
+    // At the bound exactly: a one-cell value takes the last cell.
+    const std::uint64_t last = corr++;
+    send(last, 1);
+    // The room spent: refused at the door, before its bytes are decoded.
+    const std::uint64_t spent = corr++;
+    send(spent, whole);
+    REQUIRE(wait_until([&] { turn(); return refused.count(spent) == 1; }, 4000));
+    CHECK(bus.pending() == values + 1);
+    REQUIRE(refused.count(past) == 1);
+    // The value that did not fit: the peer hears the bound in its own words, and the numbers are
+    // on the host's tap, where this case's own refusal of a spent room reads them.
+    CHECK(refused[past].find("what they hold together") != std::string::npos);
+    CHECK(refused[past].find("nothing was sent") != std::string::npos);
+    CHECK(refused.count(last) == 0);
+    CHECK(refused[spent].find("kMaxPendingCellsPerSender") != std::string::npos);
+    CHECK(refused[spent].find("before its bytes were decoded") != std::string::npos);
+    CHECK(bulk->delivered() == 0);
+
+    // Dispatched, the session's room comes back and a whole value is taken again.
+    bus.drain_until_idle();
+    CHECK(bulk->delivered() == values + 1);
+    const std::uint64_t again = corr++;
+    send(again, whole);
+    REQUIRE(wait_until([&] { turn(); return bus.pending() == 1; }, 4000));
+    CHECK(refused.count(again) == 0);
 }
 
 TEST_CASE("hardening (framing): garbage at the transport layer — the framer, not admit(), handles it") {

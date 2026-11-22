@@ -3,6 +3,7 @@
 
 #include <zen/console/console.hpp>
 
+#include <zen/gate.hpp> // decoded_cells: what a kept reply weighs
 #include <zen/kind.hpp>
 
 #include <algorithm>
@@ -128,7 +129,8 @@ public:
         // honestly. With its routing facts: Loom's `sender` stamp and the sender's
         // `correlation`, which tell an answer from an unrelated message of the same shape.
         received_.push(ConsoleArrival{in.payload, in.sender, in.correlation,
-                                      in.provenance.answers_ask()});
+                                      in.provenance.answers_ask()},
+                       loom::weigh(in.payload).held_bytes());
         // SETTLED HERE, INSIDE THE DELIVERY, not later off the window. The window is bounded
         // history and may evict; a settlement is not history and must not be evictable.
         if (on_arrival_) {
@@ -150,12 +152,13 @@ public:
         return v;
     }
     void revive(const loom::Value&) override {}
-    const BoundedHistory<ConsoleArrival, kConsoleBufferCapacity>& received() const noexcept {
+    const BoundedHistory<ConsoleArrival, kConsoleBufferCapacity, kConsoleBufferBytes>& received()
+        const noexcept {
         return received_;
     }
 
 private:
-    BoundedHistory<ConsoleArrival, kConsoleBufferCapacity> received_;
+    BoundedHistory<ConsoleArrival, kConsoleBufferCapacity, kConsoleBufferBytes> received_;
     std::vector<std::shared_ptr<const loom::Schema>> vocabulary_;
     std::function<void(const loom::Message&)> on_arrival_;
 };
@@ -410,7 +413,8 @@ SendOutcome ConsoleEngine::outcome(loom::Ticket t) const {
     return s;
 }
 
-const BoundedHistory<ConsoleArrival, kConsoleBufferCapacity>& ConsoleEngine::reply_history() const {
+const BoundedHistory<ConsoleArrival, kConsoleBufferCapacity, kConsoleBufferBytes>&
+ConsoleEngine::reply_history() const {
     return weave_->received();
 }
 
@@ -428,7 +432,7 @@ std::optional<BufferEntry> ConsoleEngine::buffer_at(std::size_t label_number) co
     // received, not a position in the retained window, so a weaver's `$m7.count` never
     // becomes a different reply once eviction begins. Outside the retained range this refuses,
     // as it does for a label that never arrived.
-    const BoundedHistory<ConsoleArrival, kConsoleBufferCapacity>& buf = reply_history();
+    const auto& buf = reply_history();
     const std::uint64_t base = buf.evicted(); // labels m(base+1) .. m(base+size) are retained
     if (label_number <= base || label_number > base + buf.size()) {
         return std::nullopt;

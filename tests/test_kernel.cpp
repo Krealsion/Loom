@@ -6840,6 +6840,94 @@ TEST_CASE("a loaded weave at its waiting bound is told that bound, not that it l
     CHECK(authorship == 0);
 }
 
+// A loaded weave whose waiting messages hold all its cells is refused at the host's door before
+// its bytes are decoded, and hears the waiting bound as its status.
+static void cell_room_spent_at_the_seam(const char* image) {
+    RoleStage s(image);
+    Registered sink = sbfx::register_probe(s.bus, {sbfx::ping_schema(), sbfx::heap_schema()});
+    // The command is queued first and the worker's room filled behind it, so the worker speaks
+    // while its values still wait.
+    role_speech::RoleCommand c;
+    c.mode = "bound-direct";
+    c.target = static_cast<std::int64_t>(s.commander.value);
+    REQUIRE(s.bus.send_as(s.commander, s.worker, Message(to_value(c))).valid());
+    const std::uint64_t whole = kMaxDecodedCells;
+    for (std::uint64_t i = 0; i < Switchboard::kMaxPendingCellsPerSender / whole; ++i) {
+        REQUIRE(s.bus.send_as(s.worker, sink.id, Message(sbfx::heap_of_cells(whole))).valid());
+    }
+    REQUIRE(s.bus.pending_speech().room(s.worker).spent());
+    REQUIRE(s.bus.pending() < Switchboard::kMaxPendingPerSender);
+    std::vector<std::string> words;
+    s.bus.add_observer([&](const BusEvent& ev) {
+        if (ev.kind == EventKind::Refused && ev.sender == s.worker &&
+            ev.refusal.reason == RefusalReason::PendingPerSender) {
+            words.push_back(ev.refusal.message());
+        }
+    });
+    s.bus.drain_until_idle();
+    const auto direct = reports_named(*s.commander_log, "bound-direct");
+    REQUIRE(direct.size() == 1);
+    CHECK_FALSE(direct[0].authored);
+    CHECK(direct[0].seen_role == "PendingPerSender");
+    REQUIRE(words.size() == 1);
+    CHECK(words[0].find("kMaxPendingCellsPerSender") != std::string::npos);
+    CHECK(words[0].find("before its bytes were decoded") != std::string::npos);
+    CHECK(sink.weave->count ==
+          static_cast<std::int64_t>(Switchboard::kMaxPendingCellsPerSender / whole));
+}
+
+TEST_CASE("a loaded weave whose waiting messages hold all its cells is refused before its bytes "
+          "are decoded, and is told the waiting bound") {
+    cell_room_spent_at_the_seam(ZEN_SO_ROLE_WORKER);
+}
+ZEN_BOXED_TWIN("a boxed weave whose waiting messages hold all its cells is refused before its "
+               "bytes are decoded, and is told the waiting bound",
+               cell_room_spent_at_the_seam, ZEN_BOX_ROLE_WORKER)
+
+// A loaded weave whose waiting messages carry all its payload bytes, with cells and messages to
+// spare, is refused at the host's door before its bytes are decoded, as a spent cell room is.
+static void byte_room_spent_at_the_seam(const char* image) {
+    RoleStage s(image);
+    Registered sink = sbfx::register_probe(s.bus, {sbfx::ping_schema(), sbfx::blob_schema()});
+    role_speech::RoleCommand c;
+    c.mode = "bound-direct";
+    c.target = static_cast<std::int64_t>(s.commander.value);
+    REQUIRE(s.bus.send_as(s.commander, s.worker, Message(to_value(c))).valid());
+    const std::uint64_t each = 8u << 20;
+    const std::uint64_t fit = Switchboard::kMaxPendingBytesPerSender / each;
+    for (std::uint64_t i = 0; i < fit; ++i) {
+        REQUIRE(s.bus.send_as(s.worker, sink.id, Message(sbfx::blob_of_bytes(each))).valid());
+    }
+    const PendingSpeech::Room room = s.bus.pending_speech().room(s.worker);
+    REQUIRE(room.bytes == 0);
+    REQUIRE(room.cells > 0);
+    REQUIRE(room.messages > 0);
+    std::vector<std::string> words;
+    s.bus.add_observer([&](const BusEvent& ev) {
+        if (ev.kind == EventKind::Refused && ev.sender == s.worker &&
+            ev.refusal.reason == RefusalReason::PendingPerSender) {
+            words.push_back(ev.refusal.message());
+        }
+    });
+    s.bus.drain_until_idle();
+    const auto direct = reports_named(*s.commander_log, "bound-direct");
+    REQUIRE(direct.size() == 1);
+    CHECK_FALSE(direct[0].authored);
+    CHECK(direct[0].seen_role == "PendingPerSender");
+    REQUIRE(words.size() == 1);
+    CHECK(words[0].find("kMaxPendingBytesPerSender") != std::string::npos);
+    CHECK(words[0].find("before its bytes were decoded") != std::string::npos);
+    CHECK(sink.weave->count == static_cast<std::int64_t>(fit));
+}
+
+TEST_CASE("a loaded weave whose waiting messages carry all its payload bytes is refused before "
+          "its bytes are decoded, and is told the waiting bound") {
+    byte_room_spent_at_the_seam(ZEN_SO_ROLE_WORKER);
+}
+ZEN_BOXED_TWIN("a boxed weave whose waiting messages carry all its payload bytes is refused "
+               "before its bytes are decoded, and is told the waiting bound",
+               byte_room_spent_at_the_seam, ZEN_BOX_ROLE_WORKER)
+
 TEST_CASE("a loaded publication that does not fit the waiting room is refused whole") {
     RoleStage s(ZEN_SO_ROLE_WORKER);
     Registered sink = sbfx::register_probe(s.bus, {sbfx::ping_schema()});

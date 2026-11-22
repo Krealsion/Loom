@@ -933,6 +933,57 @@ TEST_CASE("the reply buffer retains a bounded window, and mN stays a stable iden
     CHECK(ConsoleHistoryProbe::buffer_slots(engine) == kConsoleBufferCapacity);
 }
 
+TEST_CASE("the reply buffer is bounded by the memory it keeps: the oldest is evicted by label, "
+          "as at capacity, and a payload counts as what it holds") {
+    Switchboard bus;
+    ConsoleEngine engine(bus);
+    // Two kinds of heavy reply: the cell bound's worst (a list of values that have no field,
+    // whose structure is megabytes) and a one-cell value carrying a megabyte of payload. A
+    // window bounded by a count alone would keep sixty-four of either.
+    Registered responder = register_probe(bus, {ping_schema(), heap_schema(), blob_schema()});
+    responder.weave->on_handle = [](const Message& in, Bus& b, ProbeWeave&) {
+        const std::int64_t seq = in.payload.get("seq")->as_int();
+        if (seq < 0) {
+            b.send(in.reply_to, Message(blob_of_bytes(8u << 20)));
+            return;
+        }
+        b.send(in.reply_to, Message(heap_of_cells(kMaxDecodedCells)));
+    };
+    const auto deliver = [&](std::int64_t seq) {
+        std::string err;
+        const Ticket t = engine.submit(responder.id, "Ping", 1, {{"seq", seq}},
+                                       ConsoleTracking::Untracked, &err).ticket;
+        REQUIRE_MESSAGE(t.valid(), err);
+        engine.pump();
+    };
+    const std::uint64_t one = weigh(heap_of_cells(kMaxDecodedCells)).held_bytes();
+    const std::uint64_t fit = kConsoleBufferBytes / one;
+    REQUIRE(fit >= 1);
+    REQUIRE(fit < kConsoleBufferCapacity); // the memory bound is the one reached first
+    for (std::uint64_t i = 0; i < fit; ++i) {
+        deliver(static_cast<std::int64_t>(i));
+    }
+    CHECK(engine.buffer_size() == fit);
+    CHECK(engine.evicted().buffer == 0);
+
+    // One more evicts the oldest, whose label then refuses -- it does not re-bind.
+    deliver(static_cast<std::int64_t>(fit));
+    CHECK(engine.buffer_size() == fit);
+    CHECK(engine.evicted().buffer == 1);
+    CHECK_FALSE(engine.buffer_at(1).has_value());
+    REQUIRE(engine.buffer_at(2).has_value());
+    CHECK(engine.buffer_at(2)->label == "m2");
+
+    // A one-cell reply carrying 8 MiB weighs what it carries, so it evicts too: a cell count
+    // alone would have let sixty-four of these stand.
+    const std::uint64_t before = engine.evicted().buffer;
+    deliver(-1);
+    CHECK(engine.evicted().buffer > before);
+    REQUIRE(engine.buffer_at(fit + 2).has_value());
+    CHECK(engine.buffer_at(fit + 2)->name == "Blob");
+    CHECK(ConsoleHistoryProbe::buffer_slots(engine) == kConsoleBufferCapacity);
+}
+
 TEST_CASE("a reference to an evicted reply refuses and SAYS SO; a retained one is unchanged") {
     Switchboard bus;
     ConsoleEngine engine(bus);

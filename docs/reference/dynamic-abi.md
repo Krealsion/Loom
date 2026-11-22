@@ -53,7 +53,10 @@ callback into it: it is the last version refused for being another number.
 
 **v12 names the per-sender waiting bound.** No slot changes. A send that bound refuses
 returns `ZEN_ERR_PENDING_PER_SENDER` on `send`, `send_to_role`, `publish`, `role_send`,
-`role_send_to_role` and `role_publish`. A publication that does not fit the sender's
+`role_send_to_role` and `role_publish`. The bound is in three units — the messages waiting,
+the cells they hold together and the payload bytes they carry — and the same status says any of
+them; where a sender's room is already spent the host refuses on those doors before it decodes
+the weave's bytes ([bounds](bounds.md#what-one-senders-waiting-messages-hold)). A publication that does not fit the sender's
 remaining room is refused whole, so `publish` and `role_publish` return that status and
 queue nothing. It is not `ZEN_ERR_ROLE_AUTHORSHIP_DENIED` and not `ZEN_ERR_REFUSED`. An
 answer is not this bound: `answer` and `answer_deferred` still return `ZEN_ERR_REFUSED`
@@ -479,8 +482,9 @@ doors**: `role_send`, `role_send_to_role`, `role_publish`. The library
 REQUESTS "speak as R"; the host knows the exact weave bound to the context,
 verifies membership at that moment, and stamps. A refused authorship crosses
 back as the precise `ZEN_ERR_ROLE_AUTHORSHIP_DENIED` (never downgraded to a
-personal send). A holder at its waiting bound is `ZEN_ERR_PENDING_PER_SENDER`
-instead, on those doors and on an ordinary send. `role_publish` carries its
+personal send). A holder at any of its waiting bounds — the messages
+waiting, the cells they hold or the payload bytes they carry — is
+`ZEN_ERR_PENDING_PER_SENDER` instead, on those doors and on an ordinary send. `role_publish` carries its
 recipient count out-of-band so "authorized, zero listeners" and "denied" stay
 distinct. Since v17 the **call door**, `call`, has a function's answer back
 inside the handler, or the refusal's own status

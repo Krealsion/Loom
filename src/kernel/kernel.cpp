@@ -14,6 +14,7 @@
 #include <cstring>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -205,6 +206,20 @@ ZenStatus seam_reject(HostCtx* h, const loom::Unverified& u, loom::WeaveId targe
                              to_role);
     return refusal.reason == loom::RefusalReason::SeamUnresolved ? ZEN_ERR_UNKNOWN_SCHEMA
                                                                  : ZEN_ERR_REFUSED;
+}
+
+/// A sender whose waiting room is spent (`Switchboard::pending_speech`) is refused before its
+/// bytes are decoded: nothing it sends could wait, so the host builds nothing for it. Said on the
+/// tap as the bus says it, and the library is told the waiting bound. docs/reference/bounds.md
+bool room_spent(HostCtx* h, const loom::Unverified& u, loom::WeaveId target,
+                std::string_view to_role = {}) {
+    const std::optional<loom::Refusal> refused = h->sb->pending_speech().refuses_now(h->self);
+    if (!refused) {
+        return false;
+    }
+    h->sb->note_seam_refusal(h->self, target, u.claimed_name(), u.claimed_version(), *refused,
+                             to_role);
+    return true;
 }
 
 /// A publication that resolves to nothing is unheard, not refused (MSG-08). A weave's
@@ -526,6 +541,9 @@ static ZenStatus zen_host_send(void* ctx, std::uint64_t target, std::uint64_t re
             // The one target the seam CAN honestly name: the library said where.
             return seam_reject(h, u, loom::WeaveId{target}, seam_unresolved());
         }
+        if (room_spent(h, u, loom::WeaveId{target})) {
+            return ZEN_ERR_PENDING_PER_SENDER;
+        }
         loom::Admission a = loom::admit(u, door, h->sb->registry()); // the DLL-seam gate, host-side
         if (!a.ok()) {
             return seam_reject(h, u, loom::WeaveId{target}, seam_gate_refused(a));
@@ -553,6 +571,9 @@ static ZenStatus zen_host_publish(void* ctx, std::uint64_t reply_to, std::uint64
             // listening. See kUnheardPublication.
             return kUnheardPublication;
         }
+        if (room_spent(h, u, loom::WeaveId{})) {
+            return ZEN_ERR_PENDING_PER_SENDER;
+        }
         loom::Admission a = loom::admit(u, door, h->sb->registry());
         if (!a.ok()) {
             return seam_reject(h, u, loom::WeaveId{}, seam_gate_refused(a));
@@ -579,6 +600,9 @@ static ZenStatus zen_host_send_to_role(void* ctx, const char* role, std::uint64_
             // delivery — which never happens here. No target is named; the SLOT is,
             // because the library named it, and it is the whole address a reader has.
             return seam_reject(h, u, loom::WeaveId{}, seam_unresolved(), role);
+        }
+        if (room_spent(h, u, loom::WeaveId{}, role)) {
+            return ZEN_ERR_PENDING_PER_SENDER;
         }
         loom::Admission a = loom::admit(u, door, h->sb->registry());
         if (!a.ok()) {
@@ -680,6 +704,9 @@ static ZenStatus zen_host_role_send(void* ctx, const char* as_role, std::uint64_
         if (!door) {
             return seam_reject(h, u, loom::WeaveId{target}, seam_unresolved());
         }
+        if (room_spent(h, u, loom::WeaveId{target})) {
+            return ZEN_ERR_PENDING_PER_SENDER;
+        }
         loom::Admission a = loom::admit(u, door, h->sb->registry()); // the DLL-seam gate, host-side as always
         if (!a.ok()) {
             return seam_reject(h, u, loom::WeaveId{target}, seam_gate_refused(a));
@@ -706,6 +733,9 @@ static ZenStatus zen_host_role_send_to_role(void* ctx, const char* as_role, cons
             h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
         if (!door) {
             return seam_reject(h, u, loom::WeaveId{}, seam_unresolved(), to_role);
+        }
+        if (room_spent(h, u, loom::WeaveId{}, to_role)) {
+            return ZEN_ERR_PENDING_PER_SENDER;
         }
         loom::Admission a = loom::admit(u, door, h->sb->registry());
         if (!a.ok()) {
@@ -736,6 +766,9 @@ static ZenStatus zen_host_ask(void* ctx, const char* as_role, std::uint64_t targ
             h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
         if (!door) {
             return seam_reject(h, u, to, seam_unresolved(), role);
+        }
+        if (room_spent(h, u, to, role)) {
+            return ZEN_ERR_PENDING_PER_SENDER;
         }
         loom::Admission a = loom::admit(u, door, h->sb->registry());
         if (!a.ok()) {
@@ -773,6 +806,9 @@ static ZenStatus zen_host_role_publish(void* ctx, const char* as_role, std::uint
             h->sb->resolve_schema(u.claimed_name(), u.claimed_version());
         if (!door) {
             return kUnheardPublication; // a role publication is a publication
+        }
+        if (room_spent(h, u, loom::WeaveId{})) {
+            return ZEN_ERR_PENDING_PER_SENDER;
         }
         loom::Admission a = loom::admit(u, door, h->sb->registry());
         if (!a.ok()) {

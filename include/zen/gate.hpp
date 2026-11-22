@@ -9,6 +9,7 @@
 #include <zen/value.hpp>
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace loom {
@@ -49,6 +50,50 @@ Admission admit(Value claimant, const Schema& door, const Registry& open,
 /// without taking ownership. Runs the same single validator as admit().
 std::vector<Error> diagnose(const Value& claimant, const Schema& door);
 std::vector<Error> diagnose(const Value& claimant, const Schema& door, const Registry& open);
+
+/// What a value makes its holder keep, in the two units it is kept in: the cells a decode of it
+/// would materialise, and the payload bytes its `Text` and `Bytes` fields carry. One walk answers
+/// both, because a holder bounded in one of them alone is bounded in neither: structure without
+/// bytes misses a one-cell value carrying megabytes, and bytes without structure misses the
+/// compact value that commands the decoder's whole allowance.
+struct ValueWeight {
+    /// Counted as the decoder and the gate count cells: one per declared field of every record,
+    /// one per union, one per list element, and a nested value at each place it stands. The walk
+    /// stops once this passes `kMaxDecodedCells` (<zen/serialize.hpp>) and answers one more than
+    /// it, a count no boundary admits, so weighing costs at most that many steps whatever the
+    /// value holds -- and so `bytes` is what the walk reached, which is all of a value any
+    /// boundary would admit.
+    std::uint64_t cells = 0;
+    /// The bytes those `Text` and `Bytes` cells carry, which the decoder's allowance never
+    /// counted: a 1 MiB `Bytes` field is one cell and a megabyte.
+    std::uint64_t payload_bytes = 0;
+
+    /// The host memory holding this value keeps: its cells' slots and its payloads' bytes. A
+    /// holder bounding memory alone (a window of kept values) is bounded in this one number,
+    /// where the bus, which also owes each waiting message a walk and a delivery, is bounded in
+    /// the cells apart.
+    ///
+    /// It is a budget, not a measurement of the heap, and never an RSS guarantee (as LIFE-07 is
+    /// not): a cell is charged the slot a `Value` allocates per declared field, while the heap
+    /// also holds each nested value's own object, and a value whose parts are shared holds one
+    /// copy of what this counts at every place it stands. Measured against a counting allocator,
+    /// a value of `kMaxDecodedCells` cells whose nested parts are shared holds 0.83x of this, and
+    /// one decoded from bytes, whose parts are its own, about 2x. What it is exactly is
+    /// proportional to the structure and the payloads, which is what a budget needs.
+    std::uint64_t held_bytes() const noexcept {
+        return cells * sizeof(std::optional<Cell>) + payload_bytes;
+    }
+};
+
+/// Weigh `v` as its holder keeps it. It reads the value's own shapes and judges nothing, so for a
+/// value the gate admits this is the gate's own count. The bus charges each waiting message both
+/// halves against its sender's room (`Switchboard::kMaxPendingCellsPerSender`,
+/// `kMaxPendingBytesPerSender`). docs/reference/bounds.md
+ValueWeight weigh(const Value& v) noexcept;
+
+/// `weigh(v).cells` alone, for a holder that bounds structure: the count every boundary's
+/// allowance is spent in. docs/reference/bounds.md#the-decode-materialization-bound
+std::uint64_t decoded_cells(const Value& v) noexcept;
 
 /// Process-wide count of how many times the single structural validator has
 /// run. Exposed so tests can prove the bus path and the persistence path go

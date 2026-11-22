@@ -305,7 +305,84 @@ void validate_cell(const Cell& c, const TypeRef& t, Ctx& ctx, const std::string&
     }
 }
 
+// What `weigh` answers: the gate's own units, read from the value's shapes, the cells stopped one
+// past the bound so no value costs more steps than a decode would take.
+struct CellCount {
+    std::uint64_t n = 0;
+    std::uint64_t bytes = 0;
+    bool past = false;
+
+    bool add(std::uint64_t k) noexcept {
+        if (k > kMaxDecodedCells - n) {
+            n = kMaxDecodedCells + 1;
+            past = true;
+            return false;
+        }
+        n += k;
+        return true;
+    }
+};
+
+void count_cell(const Cell& c, CellCount& cc) noexcept;
+
+void count_value(const Value& v, CellCount& cc) noexcept {
+    const Schema& s = v.schema();
+    if (!cc.add(entry_cells(s))) {
+        return;
+    }
+    if (s.is_union()) {
+        if (const std::optional<std::size_t> chosen = v.chosen()) {
+            if (const Cell* c = v.at(*chosen)) {
+                count_cell(*c, cc);
+            }
+        }
+        return;
+    }
+    for (std::size_t i = 0; i < v.field_count() && !cc.past; ++i) {
+        if (const Cell* c = v.at(i)) {
+            count_cell(*c, cc);
+        }
+    }
+}
+
+void count_cell(const Cell& c, CellCount& cc) noexcept {
+    if (const auto* nested = std::get_if<std::shared_ptr<const Value>>(&c.storage())) {
+        if (*nested) {
+            count_value(**nested, cc);
+        }
+        return;
+    }
+    // The payload the cell holds, which no cell count ever charged for.
+    if (const auto* text = std::get_if<std::string>(&c.storage())) {
+        cc.bytes += text->size();
+        return;
+    }
+    if (const auto* bytes = std::get_if<Bytes>(&c.storage())) {
+        cc.bytes += bytes->size();
+        return;
+    }
+    if (const auto* arr = std::get_if<Cell::Array>(&c.storage())) {
+        if (!cc.add(arr->size())) {
+            return;
+        }
+        for (const Cell& e : *arr) {
+            if (cc.past) {
+                return;
+            }
+            count_cell(e, cc);
+        }
+    }
+}
+
 } // namespace
+
+ValueWeight weigh(const Value& v) noexcept {
+    CellCount cc;
+    count_value(v, cc);
+    return ValueWeight{cc.n, cc.bytes};
+}
+
+std::uint64_t decoded_cells(const Value& v) noexcept { return weigh(v).cells; }
 
 namespace detail {
 

@@ -732,6 +732,218 @@ TEST_CASE("a publication that does not fit the sender's waiting room is refused 
     CHECK(taps == 1);
 }
 
+TEST_CASE("one sender's waiting messages are bounded by the cells they hold: the whole bound waits, "
+          "a send past it is refused by name, and another sender is still delivered") {
+    // A list of values that have no field holds a cell an element and costs no body bytes, so
+    // its decoded structure is the largest a value of its size commands. Four whole values of
+    // the decoder's bound are the sender's room; far fewer than kMaxPendingPerSender messages.
+    Switchboard bus;
+    Registered sender = reg(bus, {heap_schema()});
+    Registered sink = reg(bus, {heap_schema(), ping_schema()});
+    Registered other = reg(bus, {pong_schema()});
+    const std::uint64_t whole = kMaxDecodedCells;
+    const std::uint64_t values = Switchboard::kMaxPendingCellsPerSender / whole;
+    REQUIRE(values * whole == Switchboard::kMaxPendingCellsPerSender);
+    REQUIRE(decoded_cells(heap_of_cells(whole)) == whole);
+    REQUIRE(decoded_cells(ping(1)) == 1);
+    std::vector<std::string> refusals;
+    bus.add_observer([&](const BusEvent& e) {
+        if (e.kind == EventKind::Refused && e.sender == sender.id) {
+            refusals.push_back(e.refusal.message());
+        }
+    });
+
+    // At the bound: every whole value but the last, the last one cell short, then a one-cell
+    // Ping. Exactly the bound waits, and nothing was refused.
+    for (std::uint64_t i = 0; i + 1 < values; ++i) {
+        REQUIRE(bus.send_as(sender.id, sink.id, Message(heap_of_cells(whole))).valid());
+    }
+    REQUIRE(bus.send_as(sender.id, sink.id, Message(heap_of_cells(whole - 1))).valid());
+    CHECK(bus.pending_speech().room(sender.id).cells == 1);
+    CHECK_FALSE(bus.pending_speech().room(sender.id).spent());
+    REQUIRE(bus.send_as(sender.id, sink.id, Message(ping(1))).valid());
+    CHECK(bus.pending_speech().room(sender.id).cells == 0);
+    CHECK(bus.pending_speech().room(sender.id).spent());
+    CHECK(refusals.empty());
+    const std::size_t waiting = bus.pending();
+    CHECK(waiting == values + 1);
+    CHECK(waiting < Switchboard::kMaxPendingPerSender);
+
+    // Past it: a one-cell send is refused PendingPerSender, nothing queued, the tap in words.
+    const Ticket over = bus.send_as(sender.id, sink.id, Message(ping(2)));
+    CHECK_FALSE(over.valid());
+    CHECK(over.refusal == RefusalReason::PendingPerSender);
+    CHECK(bus.pending() == waiting);
+    REQUIRE(refusals.size() == 1);
+    CHECK(refusals[0].find("kMaxPendingCellsPerSender") != std::string::npos);
+    CHECK(refusals[0].find("nothing was queued") != std::string::npos);
+    CHECK(bus.pending_speech().refuses_now(sender.id).has_value());
+
+    // Every other sender is untouched.
+    CHECK(bus.pending_speech().room(other.id).cells == Switchboard::kMaxPendingCellsPerSender);
+    REQUIRE(bus.send_as(other.id, other.id, Message(pong(7))).valid());
+
+    // Dispatched, the room comes back PER MESSAGE, not all at once when the queue empties: the
+    // sink reads its sender's room from inside each delivery, after the bus has taken that
+    // envelope off the queue.
+    std::vector<std::uint64_t> rooms;
+    sink.weave->on_handle = [&](const Message&, Bus&, ProbeWeave&) {
+        rooms.push_back(bus.pending_speech().room(sender.id).cells);
+    };
+    bus.drain_until_idle();
+    CHECK(sink.weave->count == static_cast<std::int64_t>(values + 1));
+    CHECK(other.weave->count == 1);
+    REQUIRE(rooms.size() == values + 1);
+    CHECK(rooms.front() == whole); // the first delivery gave back its own cells, and no more
+    CHECK(rooms[1] == 2 * whole);
+    CHECK(std::is_sorted(rooms.begin(), rooms.end()));
+    CHECK(rooms.back() == Switchboard::kMaxPendingCellsPerSender);
+    CHECK(bus.pending_speech().room(sender.id).cells == Switchboard::kMaxPendingCellsPerSender);
+    CHECK_FALSE(bus.pending_speech().refuses_now(sender.id).has_value());
+    CHECK(bus.send_as(sender.id, sink.id, Message(heap_of_cells(whole))).valid());
+}
+
+TEST_CASE("a value that would pass the sender's cell room is refused, and a smaller one that "
+          "fits still waits") {
+    Switchboard bus;
+    Registered sender = reg(bus, {heap_schema()});
+    Registered sink = reg(bus, {heap_schema(), ping_schema()});
+    const std::uint64_t whole = kMaxDecodedCells;
+    const std::uint64_t values = Switchboard::kMaxPendingCellsPerSender / whole;
+    for (std::uint64_t i = 0; i + 1 < values; ++i) {
+        REQUIRE(bus.send_as(sender.id, sink.id, Message(heap_of_cells(whole))).valid());
+    }
+    REQUIRE(bus.send_as(sender.id, sink.id, Message(heap_of_cells(whole / 2))).valid());
+    std::string words;
+    bus.add_observer([&](const BusEvent& e) {
+        if (e.kind == EventKind::Refused && e.sender == sender.id) {
+            words = e.refusal.message();
+        }
+    });
+    const std::size_t before = bus.pending();
+    const Ticket big = bus.send_as(sender.id, sink.id, Message(heap_of_cells(whole)));
+    CHECK_FALSE(big.valid());
+    CHECK(big.refusal == RefusalReason::PendingPerSender);
+    CHECK(words.find("this one's " + std::to_string(whole)) != std::string::npos);
+    CHECK(bus.pending() == before);
+    // Room remains, so a door asking first is not told to refuse: only this value did not fit.
+    CHECK_FALSE(bus.pending_speech().room(sender.id).spent());
+    CHECK_FALSE(bus.pending_speech().refuses_now(sender.id).has_value());
+    CHECK(bus.send_as(sender.id, sink.id, Message(heap_of_cells(whole / 2))).valid());
+    CHECK(bus.pending_speech().room(sender.id).cells == 0);
+}
+
+TEST_CASE("one sender's waiting messages are bounded by the payload bytes they carry, which no "
+          "cell count charged for") {
+    // A value of one Bytes field is ONE cell and a megabyte: the cell bound lets a thousand of
+    // them wait, and what the host would hold is their bytes. So the bytes are bounded too.
+    Switchboard bus;
+    Registered sender = reg(bus, {blob_schema()});
+    Registered sink = reg(bus, {blob_schema()});
+    const std::uint64_t each = 8u << 20; // 8 MiB a message
+    const std::uint64_t fit = Switchboard::kMaxPendingBytesPerSender / each;
+    REQUIRE(fit * each == Switchboard::kMaxPendingBytesPerSender);
+    REQUIRE(decoded_cells(blob_of_bytes(each)) == 1);
+    REQUIRE(weigh(blob_of_bytes(each)).payload_bytes == each);
+    std::string words;
+    bus.add_observer([&](const BusEvent& e) {
+        if (e.kind == EventKind::Refused && e.sender == sender.id &&
+            e.refusal.reason == RefusalReason::PendingPerSender) {
+            words = e.refusal.message();
+        }
+    });
+    for (std::uint64_t i = 0; i < fit; ++i) {
+        REQUIRE(bus.send_as(sender.id, sink.id, Message(blob_of_bytes(each))).valid());
+    }
+    // At the bound, and far under both the message count and the cell bound: those alone would
+    // have let this sender hold a thousand such messages.
+    CHECK(bus.pending() == fit);
+    CHECK(fit < Switchboard::kMaxPendingPerSender);
+    CHECK(bus.pending_speech().room(sender.id).cells > Switchboard::kMaxPendingCellsPerSender / 2);
+    CHECK(bus.pending_speech().room(sender.id).bytes == 0);
+    CHECK(bus.pending_speech().room(sender.id).spent());
+    CHECK(words.empty());
+
+    const Ticket over = bus.send_as(sender.id, sink.id, Message(blob_of_bytes(1)));
+    CHECK_FALSE(over.valid());
+    CHECK(over.refusal == RefusalReason::PendingPerSender);
+    CHECK(bus.pending() == fit);
+    CHECK(words.find("kMaxPendingBytesPerSender") != std::string::npos);
+    CHECK(words.find("payload bytes") != std::string::npos);
+    // A spent byte room refuses whatever is sent, a value carrying no payload included, and a
+    // door asking first is told so, as a spent cell room tells it.
+    CHECK_FALSE(bus.send_as(sender.id, sink.id, Message(blob_of_bytes(0))).valid());
+    CHECK(bus.pending() == fit);
+    CHECK(bus.pending_speech().refuses_now(sender.id).has_value());
+
+    // Dispatched, the bytes come back per message, read from inside each delivery as the cells
+    // are above, and the sender may carry a whole bound again.
+    std::vector<std::uint64_t> rooms;
+    sink.weave->on_handle = [&](const Message&, Bus&, ProbeWeave&) {
+        rooms.push_back(bus.pending_speech().room(sender.id).bytes);
+    };
+    bus.drain_until_idle();
+    CHECK(sink.weave->count == static_cast<std::int64_t>(fit));
+    REQUIRE(rooms.size() == fit);
+    CHECK(rooms.front() == each);
+    CHECK(std::is_sorted(rooms.begin(), rooms.end()));
+    CHECK(rooms.back() == Switchboard::kMaxPendingBytesPerSender);
+    CHECK(bus.pending_speech().room(sender.id).bytes ==
+          Switchboard::kMaxPendingBytesPerSender);
+    CHECK(bus.send_as(sender.id, sink.id, Message(blob_of_bytes(each))).valid());
+}
+
+TEST_CASE("a message whose payload would pass the sender's byte room is refused, and a smaller "
+          "one that fits still waits") {
+    Switchboard bus;
+    Registered sender = reg(bus, {blob_schema()});
+    Registered sink = reg(bus, {blob_schema()});
+    const std::uint64_t half = Switchboard::kMaxPendingBytesPerSender / 2;
+    REQUIRE(bus.send_as(sender.id, sink.id, Message(blob_of_bytes(half))).valid());
+    const std::size_t before = bus.pending();
+    CHECK_FALSE(bus.send_as(sender.id, sink.id, Message(blob_of_bytes(half + 1))).valid());
+    CHECK(bus.pending() == before);
+    // Room remains, so only that value did not fit: a door asking first is not told to refuse.
+    CHECK_FALSE(bus.pending_speech().refuses_now(sender.id).has_value());
+    CHECK(bus.send_as(sender.id, sink.id, Message(blob_of_bytes(half))).valid());
+    CHECK(bus.pending_speech().room(sender.id).bytes == 0);
+}
+
+TEST_CASE("a publication spends its cells once for each accepter, and one that does not fit is "
+          "refused whole") {
+    Switchboard bus;
+    Registered sender = reg(bus, {ping_schema()});
+    Registered a = reg(bus, {heap_schema()});
+    Registered b = reg(bus, {heap_schema()});
+    const std::uint64_t whole = kMaxDecodedCells;
+    const std::uint64_t values = Switchboard::kMaxPendingCellsPerSender / whole;
+    // Room for exactly one more whole value, and two accept it.
+    for (std::uint64_t i = 0; i + 1 < values; ++i) {
+        REQUIRE(bus.send_as(sender.id, a.id, Message(heap_of_cells(whole))).valid());
+    }
+    int taps = 0;
+    bus.add_observer([&](const BusEvent& e) {
+        if (e.kind == EventKind::Refused && e.sender == sender.id &&
+            e.refusal.reason == RefusalReason::PendingPerSender) {
+            ++taps;
+            CHECK(e.refusal.message().find("2 accepters'") != std::string::npos);
+        }
+    });
+    const std::size_t before = bus.pending();
+    CHECK(bus.publish_as(sender.id, Message(heap_of_cells(whole))) == 0);
+    CHECK(bus.publication_met_pending_bound());
+    CHECK(bus.pending() == before);
+    CHECK(taps == 1);
+    // Half a value each fits both accepters in the one value of room left.
+    CHECK(bus.publish_as(sender.id, Message(heap_of_cells(whole / 2))) == 2);
+    CHECK_FALSE(bus.publication_met_pending_bound());
+    CHECK(bus.pending_speech().room(sender.id).cells == 0);
+    CHECK(taps == 1); // the refused publication said it once, and this one said nothing
+    bus.drain_until_idle();
+    CHECK(a.weave->count == static_cast<std::int64_t>(values)); // its fills, and this one
+    CHECK(b.weave->count == 1);                                 // only this one
+}
+
 TEST_CASE("a preparation ask from a coordinator at its waiting bound names that bound and stays unopened") {
     ReadinessStage s;
     Registered quiet = reg(s.bus, {ping_schema()});

@@ -36,6 +36,8 @@
 // renderer has a terminal to protect. docs/reference/terminal.md#the-transcript
 
 #include <zen/bounded_history.hpp>
+#include <zen/gate.hpp>      // decoded_cells: what a kept value weighs
+#include <zen/serialize.hpp> // kMaxDecodedCells
 #include <zen/weave/ask_ended.hpp>
 #include <zen/weave/dispatch_refusal.hpp>
 #include <zen/schema.hpp>
@@ -198,13 +200,23 @@ inline constexpr std::size_t kTranscriptCapacity = 256;
 
 /// Inbound VALUES retained for inspection and for `$rN.field` references. Four
 /// times smaller than the transcript because the UNIT is far heavier: an entry is
-/// metadata, while a received Value is bounded only by the decode materialization
-/// budget. The same split, and the same reasoning, as the console's tap and reply
-/// windows.
+/// metadata, while a received Value carries structure, one value's bounded by the
+/// decode materialization budget and the window's by kReceivedCells below. The same
+/// split, and the same reasoning, as the console's tap and reply windows.
 inline constexpr std::size_t kReceivedCapacity = 64;
 
 /// Authored values have a separate bounded window; retaining a command never evicts a reply.
 inline constexpr std::size_t kAuthoredCapacity = 64;
+
+/// The host memory each value window keeps, the received and the authored apart
+/// (`loom::ValueWeight::held_bytes`): a window of values is bounded as a whole, not at one
+/// value's worst times its count, and in the one unit a window of values costs -- its cells'
+/// slots and its payloads' bytes together, since a one-cell value may carry a megabyte. Past it
+/// the oldest are evicted and counted, and their ids refuse, exactly as at capacity. The
+/// console's reply buffer is bounded the same way, for the same reason, and says it:
+/// docs/reference/bounds.md#console-weaver-history
+inline constexpr std::uint64_t kReceivedBytes = 32u << 20;
+inline constexpr std::uint64_t kAuthoredBytes = 32u << 20;
 
 /// A participant's own record: bounded windows of entries, authored values and received values.
 ///
@@ -220,7 +232,8 @@ public:
     std::uint64_t retain(ReceivedMessage message) {
         const std::uint64_t id = ++next_id_;
         message.id = id;
-        received_.push(std::move(message));
+        const std::uint64_t held = weigh(message.value).held_bytes();
+        received_.push(std::move(message), held);
         return id;
     }
 
@@ -253,12 +266,13 @@ private:
     friend class TerminalSession;
     struct AuthoredValue { std::uint64_t observation; Value value; };
     void retain_authored(std::uint64_t observation, Value value) {
-        authored_.push(AuthoredValue{observation, std::move(value)});
+        const std::uint64_t held = weigh(value).held_bytes();
+        authored_.push(AuthoredValue{observation, std::move(value)}, held);
     }
-    BoundedHistory<AuthoredValue, kAuthoredCapacity> authored_;
+    BoundedHistory<AuthoredValue, kAuthoredCapacity, kAuthoredBytes> authored_;
 
     BoundedHistory<TranscriptEntry, kTranscriptCapacity> entries_;
-    BoundedHistory<ReceivedMessage, kReceivedCapacity> received_;
+    BoundedHistory<ReceivedMessage, kReceivedCapacity, kReceivedBytes> received_;
     std::uint64_t next_id_ = 0;
 };
 
