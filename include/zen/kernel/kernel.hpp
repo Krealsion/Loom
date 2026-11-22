@@ -288,6 +288,33 @@ public:
     RoleQuery query_role(const std::string& role, const std::string& shape_name,
                          std::uint32_t shape_version) const;
 
+    /// A role's holder whoever it is, mounted natively or loaded by this Kernel, as the bus knows
+    /// it now: a snapshot, never a reservation. `holder` is invalid when the role is unheld.
+    struct HolderFacts {
+        loom::ParticipantRef holder{}; ///< the holder, its life and its incarnation
+        bool loaded = false;           ///< whether this Kernel loaded the holder
+        bool accepts = false;          ///< holder declares (shape_name, shape_version) it accepts
+        std::vector<std::string> roles{};  ///< every role the holder holds now
+        std::vector<std::shared_ptr<const loom::Schema>> emitted{}; ///< what it declares it emits
+    };
+
+    /// The facts of `role`'s holder, read from the bus's role table and published declarations.
+    /// Unlike `query_role`, a native holder is answered as the holder it is, and `loaded` says
+    /// whether it is one of this Kernel's.
+    HolderFacts holder_of(const std::string& role, const std::string& shape_name,
+                          std::uint32_t shape_version) const;
+
+    /// A participant as the bus knows it now: its life and incarnation (`who` invalid for an id
+    /// the bus never registered), whether it is live, whether this Kernel loaded it, and every
+    /// role it holds.
+    struct ParticipantFacts {
+        loom::ParticipantRef who{};
+        bool present = false;
+        bool loaded = false;
+        std::vector<std::string> roles{};
+    };
+    ParticipantFacts participant_facts(loom::WeaveId id) const;
+
     /// Does `id` declare (shape_name, shape_version) in the accept-set the bus published for it?
     /// Read from the bus, never cached, so it cannot differ from what delivery matches; an
     /// unknown id is false. What to do with the answer is the caller's.

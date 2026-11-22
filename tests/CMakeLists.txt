@@ -69,6 +69,9 @@ set(ZEN_TEST_SOURCES_KERNEL
     test_call_loaded.cpp
     test_handoff.cpp
     test_manager.cpp
+    # What a host's weave asks of others by message: a role's holder, a participant, an actor's
+    # authority.
+    test_host_questions.cpp
     test_capabilities.cpp
     # Joint publication of latest claims (SENSE-06/07), with a real loaded
     # claimant -- kernel-gated because it loads one.

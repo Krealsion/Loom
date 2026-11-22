@@ -63,6 +63,18 @@ anywhere) is reported correctly at once, including truthfully-unchanged during
 holder's `roles`. It reads the load of version 2, which names one role, as a
 set of one, as the Weave Manager reads `zen.LoadWeave` v1.
 
+**`QueryRole` answers at two versions.** Version 1 is a steward's question: its
+`RoleInfo` names only a holder this Kernel loaded, and `holder == 0` for a role
+held natively, so a swap never converses with a weave it cannot replace.
+Version 2 answers whoever holds the role now: its `RoleInfo` v3 names the
+holder, mounted natively or loaded, says whether this Kernel loaded it, its
+incarnation now, and every shape it declared it emits, in its declared order
+(its `Emit<...>`, or a loaded image's manifest); a declared emitter is not a
+granted one. `QueryParticipant` answers one participant by its id: whether it
+is live now, whether this Kernel loaded it, its life and incarnation, and its
+roles. All three read the bus and change nothing, and `query_capability(control)`
+grants them without the load capability.
+
 ## Answers from the control door and the Weave Manager
 
 The control door (`ControlWeave`, `zen/kernel/control.hpp`) answers each operation's asker, the
