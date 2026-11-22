@@ -121,6 +121,26 @@ through it `DescribeOnly`, the empty authority that revokes included. A role
 judging a subject's doors must read them and must not be able to take them
 away.
 
+### Reading an actor's authority
+
+A weave that judges an act at its own door by the actor's authority need not
+hold anything over that actor. The authority reader,
+[`loom::host::AuthorityReader`](../../include/zen/host/authority_reader.hpp),
+answers `zen.AuthorityAsked{subject, shape, version, role, door}` with
+`zen.AuthorityAnswered{subject, present, permits}`: whether the subject is a
+live participant now, and whether its effective live authority, its baseline
+and what was delegated to it since, lets it send that shape to that role, at
+that door when one is named. An empty `shape` asks presence alone.
+
+The answer is two facts at the moment of the ask and hands its asker nothing:
+no capability, nothing to spend, install or keep to read again. The next act is
+judged again by whoever it reaches. Who may ask is the asker's grant to send
+`zen.AuthorityAsked` to the reader; a weave not granted it is
+`CapabilityDenied` at its send. The reader is host wiring, made with the
+`Switchboard` it reads, and mints for each ask a describe-only authority that it
+drops before it answers; it keeps counters and nothing it read. A host mounts it
+with `authority_reader_grant()`.
+
 ### When delegated authority can first be installed
 
 A capability names a subject, and a subject does not exist until the Kernel has
@@ -656,7 +676,7 @@ cgroup and the harness **fails hard** rather than skipping green.
 
 ## Tests
 
-Suites `capabilities`, `isolation`, `policy` (the enforcement halves execute
+Suites `capabilities`, `host_questions` (the authority reader), `isolation`, `policy` (the enforcement halves execute
 under the scope, with executed-count assertions so a green can never mean
 "silently skipped").
 

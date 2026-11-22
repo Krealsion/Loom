@@ -49,6 +49,7 @@ kernel             kernel    139
 kernel             posix     2
 handoff            kernel    10
 manager            kernel    43
+host_questions     kernel    7
 capabilities       kernel    4
 isolation          posix     40
 policy             posix     23

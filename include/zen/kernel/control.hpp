@@ -5,8 +5,9 @@
 #define ZEN_KERNEL_CONTROL_HPP
 
 // The kernel's message door: a control Weave accepts LoadLibrary, ReloadLibrary, UnloadLibrary,
-// UnloadRole, ReleaseRole, ListLibraries and QueryRole and calls the Kernel's load, reload_from,
-// unload, unload_role, release_role, loaded and query_role. The right to send those shapes to it
+// UnloadRole, ReleaseRole, ListLibraries, QueryRole and QueryParticipant and calls the Kernel's
+// load, reload_from, unload, unload_role, release_role, loaded, query_role, holder_of and
+// participant_facts. The right to send those shapes to it
 // is the load capability, the most dangerous grant; a Weave without it is `CapabilityDenied` at
 // delivery.
 //
@@ -18,7 +19,11 @@
 //   UnloadRole     -> zen.Ack                | zen.Refused{why}
 //   ReleaseRole    -> zen.Ack                | zen.Refused{why}
 //   ListLibraries  -> zen.Result{"a,b@role,c@r1+r2"} | (never refuses)
-//   QueryRole      -> RoleInfo{holder, converses, roles}
+//   QueryRole      -> RoleInfo{holder, converses, roles}          (a holder this Kernel loaded)
+//   QueryRole v2   -> RoleInfo v3{holder, loaded, converses, roles, incarnation, emitted}
+//   QueryParticipant -> ParticipantInfo{participant, present, loaded, life, incarnation, roles}
+// The three questions read the bus's facts and change nothing; `query_capability` grants them
+// alone, without the load capability.
 // The door executes primitives only; composites such as a swap belong to an orchestrator (the
 // Weave Manager, kernel/manager.hpp), which another can replace.
 //
@@ -142,6 +147,69 @@ struct RoleInfo {
     ZEN_SHAPE(RoleInfo, 2, ZEN_FIELD(holder), ZEN_FIELD(converses), ZEN_FIELD(roles));
 };
 
+/// Ask about a role's holder, whoever holds it: a weave mounted natively is answered as the
+/// holder it is, where version 1 answers `holder == 0` for it. For a reader that needs the facts
+/// of the role's holder now -- who it is, at which incarnation, what it declares it emits --
+/// rather than a steward deciding whether to converse with one of this Kernel's weaves.
+struct QueryRoleV2 {
+    std::string role;
+    using ZenSelf = QueryRoleV2;
+    static constexpr const char* zen_name = "QueryRole";
+    static constexpr std::uint32_t zen_version = 2;
+    template <int ZenLazy = 0>
+    static auto zen_fields() { return std::make_tuple(ZEN_FIELD(role)); }
+};
+
+/// One shape by its name and version, as a weave declares it.
+struct DeclaredShape {
+    std::string name;
+    std::int64_t version = 0;
+    ZEN_SHAPE(DeclaredShape, 1, ZEN_FIELD(name), ZEN_FIELD(version));
+};
+
+/// The answer to version 2: the holder now (0 when the role is unheld), whether this Kernel
+/// loaded it, whether it declares `zen.PrepareShutdown`, every role it holds, its incarnation
+/// now, and every shape it declared it emits (its `Emit<...>`, or a loaded image's manifest), in
+/// its declared order. A declared emitter is not a granted one: what it may send is its grant's.
+struct RoleInfoV3 {
+    std::int64_t holder = 0;
+    bool loaded = false;
+    bool converses = false;
+    std::vector<std::string> roles;
+    std::int64_t incarnation = 0;
+    std::vector<DeclaredShape> emitted;
+    using ZenSelf = RoleInfoV3;
+    static constexpr const char* zen_name = "RoleInfo";
+    static constexpr std::uint32_t zen_version = 3;
+    template <int ZenLazy = 0>
+    static auto zen_fields() {
+        return std::make_tuple(ZEN_FIELD(holder), ZEN_FIELD(loaded), ZEN_FIELD(converses),
+                               ZEN_FIELD(roles), ZEN_FIELD(incarnation), ZEN_FIELD(emitted));
+    }
+};
+
+/// Ask about one participant by its id: whether it is live, and at which life and incarnation.
+/// A reader that kept a participant's id (the holder it last asked, an actor that pressed) asks
+/// this to learn whether the same incarnation still stands behind it.
+struct QueryParticipant {
+    std::int64_t participant = 0;
+    ZEN_SHAPE(QueryParticipant, 1, ZEN_FIELD(participant));
+};
+
+/// The answer: the id asked, whether it is a live participant now, whether this Kernel loaded
+/// it, its life and incarnation (0 for an id the bus never registered; a participant that has
+/// ended keeps its last), and every role it holds now. A snapshot, never a reservation.
+struct ParticipantInfo {
+    std::int64_t participant = 0;
+    bool present = false;
+    bool loaded = false;
+    std::int64_t life = 0;
+    std::int64_t incarnation = 0;
+    std::vector<std::string> roles;
+    ZEN_SHAPE(ParticipantInfo, 1, ZEN_FIELD(participant), ZEN_FIELD(present), ZEN_FIELD(loaded),
+              ZEN_FIELD(life), ZEN_FIELD(incarnation), ZEN_FIELD(roles));
+};
+
 /// The control Weave's state: how many operations it has performed, and the activation sequence
 /// it has reached. `last_activation` is the highest sequence this lineage has sent (0 for
 /// none); in the state, so a revived control weave continues its lineage. It is not `ops`,
@@ -190,8 +258,9 @@ class ControlWeave
     : public loom::WeaveBase<ControlWeave, ControlState,
                              loom::Accept<LoadLibrary, LoadLibraryV3, LoadLibraryV2, ReloadLibrary,
                                           UnloadLibrary, UnloadRole, ReleaseRole, ListLibraries,
-                                          QueryRole>,
+                                          QueryRole, QueryRoleV2, QueryParticipant>,
                              loom::Emit<loom::Result, loom::Ack, loom::Refused, RoleInfo,
+                                        RoleInfoV3, ParticipantInfo,
                                         loom::Activated>> {
 public:
     /// The lifecycle authority is host-supplied wiring, like the Kernel reference: the host
@@ -302,6 +371,32 @@ public:
         const Kernel::RoleQuery q =
             kernel_->query_role(m.role, PrepareShutdown::zen_name, PrepareShutdown::zen_version);
         answer(mail, RoleInfo{static_cast<std::int64_t>(q.holder.value), q.accepts, q.roles});
+    }
+
+    void on(const QueryRoleV2& m, loom::Mail& mail) {
+        ++state_.ops;
+        const Kernel::HolderFacts f =
+            kernel_->holder_of(m.role, PrepareShutdown::zen_name, PrepareShutdown::zen_version);
+        RoleInfoV3 out;
+        out.holder = static_cast<std::int64_t>(f.holder.who.value);
+        out.loaded = f.loaded;
+        out.converses = f.accepts;
+        out.roles = f.roles;
+        out.incarnation = static_cast<std::int64_t>(f.holder.incarnation);
+        for (const std::shared_ptr<const loom::Schema>& s : f.emitted) {
+            out.emitted.push_back(
+                DeclaredShape{s->name(), static_cast<std::int64_t>(s->version())});
+        }
+        answer(mail, out);
+    }
+
+    void on(const QueryParticipant& m, loom::Mail& mail) {
+        ++state_.ops;
+        const loom::WeaveId id{m.participant > 0 ? static_cast<std::uint64_t>(m.participant) : 0};
+        const Kernel::ParticipantFacts f = kernel_->participant_facts(id);
+        answer(mail, ParticipantInfo{m.participant, f.present, f.loaded,
+                                     static_cast<std::int64_t>(f.who.life),
+                                     static_cast<std::int64_t>(f.who.incarnation), f.roles});
     }
 
 private:
@@ -443,6 +538,19 @@ inline loom::Grant load_capability(loom::WeaveId control) {
     g.allow(ReleaseRole::zen_name, ReleaseRole::zen_version, control);
     g.allow(ListLibraries::zen_name, ListLibraries::zen_version, control);
     g.allow(QueryRole::zen_name, QueryRole::zen_version, control);
+    g.allow(QueryRoleV2::zen_name, QueryRoleV2::zen_version, control);
+    g.allow(QueryParticipant::zen_name, QueryParticipant::zen_version, control);
+    return g;
+}
+
+/// The grant that lets a Weave ask the control door its questions and nothing else: who holds a
+/// role, at both versions, and what one participant is now. Every answer reads the bus and
+/// changes nothing, so this grant drives no load, reload, unload or release.
+inline loom::Grant query_capability(loom::WeaveId control) {
+    loom::Grant g;
+    g.allow(QueryRole::zen_name, QueryRole::zen_version, control);
+    g.allow(QueryRoleV2::zen_name, QueryRoleV2::zen_version, control);
+    g.allow(QueryParticipant::zen_name, QueryParticipant::zen_version, control);
     return g;
 }
 

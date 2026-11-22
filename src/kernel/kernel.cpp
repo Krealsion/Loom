@@ -2065,6 +2065,36 @@ Kernel::RoleQuery Kernel::query_role(const std::string& role, const std::string&
     return out;
 }
 
+Kernel::HolderFacts Kernel::holder_of(const std::string& role, const std::string& shape_name,
+                                      std::uint32_t shape_version) const {
+    HolderFacts out;
+    if (role.empty()) {
+        return out;
+    }
+    const loom::WeaveId holder = bus_.role_holder(role);
+    if (!holder.valid()) {
+        return out;
+    }
+    out.holder = bus_.participant(holder);
+    out.loaded = record_for(holder) != nullptr;
+    out.accepts = accepts(holder, shape_name, shape_version);
+    out.roles = bus_.roles_of(holder);
+    out.emitted = bus_.emitted_schemas(holder);
+    return out;
+}
+
+Kernel::ParticipantFacts Kernel::participant_facts(loom::WeaveId id) const {
+    ParticipantFacts out;
+    if (!id.valid()) {
+        return out;
+    }
+    out.who = bus_.participant(id);
+    out.present = out.who.valid() && bus_.alive(id);
+    out.loaded = out.present && record_for(id) != nullptr;
+    out.roles = out.present ? bus_.roles_of(id) : std::vector<std::string>{};
+    return out;
+}
+
 bool Kernel::accepts(loom::WeaveId id, const std::string& shape_name,
                      std::uint32_t shape_version) const {
     // The accept-set the bus published for this weave at registration — the same
