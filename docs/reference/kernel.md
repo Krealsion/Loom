@@ -50,7 +50,10 @@ stable id: snapshot host-side, open and reconstruct the candidate, require an
 **exact accepted-contract match** (order-independent `(name, version,
 content_id)` set) and state-schema compatibility, refuse before touching the
 incumbent otherwise, then rebind and `swap_state`. Evolving a contract is
-replacement's business, never reload's.
+replacement's business, never reload's. The construction layer's substrate
+doors are part of every woven weave's accept-set, so an image built against
+headers with another set of them carries another accepted contract: it does
+not reload into, or from, one built against these, and is replaced instead.
 
 ## Role truth
 

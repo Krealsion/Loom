@@ -244,17 +244,18 @@ TEST_SUITE("describe") {
 
 // ---- the door itself --------------------------------------------------------
 
-TEST_CASE("every woven weave carries the self-description door, beside the four poke doors") {
+TEST_CASE("every woven weave carries the self-description door, beside the five poke doors") {
     Timerish t;
     const std::set<std::string> doors = identities(t.accepted_schemas());
     CHECK(doors.count("zen.DescribeAccepted v1") == 1);
     CHECK(doors.count("zen.PokeDescribe v1") == 1);
     CHECK(doors.count("zen.PokeRead v1") == 1);
+    CHECK(doors.count("zen.PokeRead v2") == 1);
     CHECK(doors.count("zen.PokeWrite v1") == 1);
     CHECK(doors.count("zen.PokeResetState v1") == 1);
     CHECK(doors.count("StartTimer v1") == 1);
     CHECK(doors.count("StopTimer v1") == 1);
-    CHECK(t.accepted_schemas().size() == 7);
+    CHECK(t.accepted_schemas().size() == 8);
 }
 
 TEST_CASE("the request is fieldless and the answer's grammar is versioned") {

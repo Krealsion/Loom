@@ -46,6 +46,8 @@ LOOM_WEAVE_MINGW_CLANG_LEAST    cmake/loom-weave.cmake                    LOOM_W
 kMaxDeferredAnswers             include/zen/switchboard/switchboard.hpp   kMaxDeferredAnswers
 kMaxDeferredPerWeave            include/zen/switchboard/switchboard.hpp   kMaxDeferredPerWeave
 kMaxRelayPending                include/zen/weave/relay.hpp               kMaxRelayPending
+kMaxPokePathSteps               include/zen/weave/poke.hpp                kMaxPokePathSteps
+kMaxPokeTreeEntries             include/zen/weave/poke.hpp                kMaxPokeTreeEntries
 kJournalCapacity                include/zen/switchboard/switchboard.hpp   kJournalCapacity
 kMaxPendingPerSender            include/zen/switchboard/pending_speech.hpp kMaxMessages
 kMaxPendingCellsPerSender       include/zen/switchboard/pending_speech.hpp kMaxCells

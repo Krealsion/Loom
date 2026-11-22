@@ -664,8 +664,12 @@ retains the last `kJournalCapacity` (<!-- value kJournalCapacity -->1024<!-- /va
 seqs. Every `WeaveBase` weave answers the Poke doors *by message*: a field reads
 unless `ZEN_HIDE` holds its value back and is written only where `ZEN_EXPOSE`
 opts it in, and the answers leave only where its grant allows them
-(`allow_poke_answers`). They read and write scalar fields (`Int`, `Float`,
-`Text`, `Bool`) and refuse the rest by kind. An
+(`allow_poke_answers`). Version 1 of `zen.PokeRead`, and `zen.PokeWrite`,
+read and write one scalar field (`Int`, `Float`, `Text`, `Bool`) and refuse the
+rest by kind. Version 2 of `zen.PokeRead` reads a place inside the state by its
+path, through lists, nested shapes and unions, answered by a `zen.PokeTree`
+that names every hidden field below that place and says nothing of its value
+([live inspection](../guides/diagnostics.md#5-live-inspection)). An
 optional scalar field (a `std::optional` member) reads as its value, or is
 refused as absent when it holds none; a write gives it a value, and no write
 makes it absent again: `zen.PokeResetState` restores the state's declared
@@ -847,4 +851,4 @@ server's `settle_origin(fence)` says which session and correlation opened a fenc
 ## Tests
 
 Suites `switchboard` (the `fence:` cases among them), `provenance`, `capabilities`, `poke`,
-`describe`; the bridge suite for the bridge protocol and the crossing's settlement.
+`poke_tree`, `describe`; the bridge suite for the bridge protocol and the crossing's settlement.

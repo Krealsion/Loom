@@ -272,10 +272,12 @@ TEST_CASE("the accept-set is the typed handlers plus the universal substrate doo
     Switchboard bus;
     WeaveId responder = au::mount<Responder>(bus);
 
-    // The weaver's doors (from Accept<...>) plus the FIVE substrate doors every
-    // woven Weave answers: the four poke doors (the inspect-the-structure floor)
-    // and the self-description door (what may be SAID to it — the other half of
-    // the same honesty, see zen/weave/describe.hpp). Always on, and this set is
+    // The weaver's doors (from Accept<...>) plus the SIX substrate doors every
+    // woven Weave answers: the five poke doors (the inspect-the-structure floor,
+    // its read at version 1 and at version 2) and the self-description door (what
+    // may be SAID to it — the other half of the same honesty, see
+    // zen/weave/describe.hpp). Version 2 of zen.PokeRead shares its name with
+    // version 1, so the names are five and the doors six. Always on, and this set is
     // deliberately exact: a door that appears or vanishes is a change to what
     // every weave in the system advertises, so it is declared here on purpose.
     auto acc = bus.accepted_schemas(responder);
@@ -286,7 +288,7 @@ TEST_CASE("the accept-set is the typed handlers plus the universal substrate doo
     CHECK(door_names == std::set<std::string>{"Ping", "zen.PokeDescribe", "zen.PokeRead",
                                               "zen.PokeWrite", "zen.PokeResetState",
                                               "zen.DescribeAccepted"});
-    REQUIRE(acc.size() == 6);
+    REQUIRE(acc.size() == 7);
     CHECK(acc[0]->name() == "Ping");
     CHECK(acc[0]->content_id() == au::schema_of<Ping>()->content_id());
 

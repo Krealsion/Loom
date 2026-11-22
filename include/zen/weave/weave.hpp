@@ -484,6 +484,7 @@ class WeaveBase<Self, State, Accept<A...>, Emit<E...>, Claims<C...>, Provides<P.
     static_assert((!is_poke_protocol_shape<A> && ...) &&
                       (!std::is_base_of_v<PokeDescribe, A> && ...) &&
                       (!std::is_base_of_v<PokeRead, A> && ...) &&
+                      (!std::is_base_of_v<PokeReadPath, A> && ...) &&
                       (!std::is_base_of_v<PokeWrite, A> && ...) &&
                       (!std::is_base_of_v<PokeResetState, A> && ...),
                   "loom: the zen.Poke* protocol shapes are answered by the construction layer; "
@@ -497,7 +498,7 @@ class WeaveBase<Self, State, Accept<A...>, Emit<E...>, Claims<C...>, Provides<P.
                   "declared accept-set; do not list it in Accept<...>");
 
 public:
-    /// The weaver's declared doors plus five substrate doors: four poke doors (every woven Weave
+    /// The weaver's declared doors plus six substrate doors: five poke doors (every woven Weave
     /// can be inspected) and the self-description door. `final`, so the substrate doors are
     /// always truthfully advertised. The Switchboard matches deliveries against this vector and
     /// the self-description door answers from it, so the two cannot differ.
@@ -737,6 +738,12 @@ private:
             const PokeRead req = from_value<PokeRead>(in.payload);
             std::visit([&](const auto& a) { answer_poke(in, bus, a); },
                        poke_read(state_, req.field));
+            return PokeOutcome::Answered;
+        }
+        if (loom::same_identity(*schema_of<PokeReadPath>(), shape)) {
+            const PokeReadPath req = from_value<PokeReadPath>(in.payload);
+            std::visit([&](const auto& a) { answer_poke(in, bus, a); },
+                       poke_read_tree(state_, req.path));
             return PokeOutcome::Answered;
         }
         if (loom::same_identity(*schema_of<PokeWrite>(), shape)) {
