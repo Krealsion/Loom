@@ -37,7 +37,7 @@ weave_shape        portable  4
 weave              portable  17
 ask_book           portable  21
 poke               portable  20
-poke_tree          portable  14
+poke_tree          portable  19
 describe           portable  24
 console            portable  27
 recorder           portable  31

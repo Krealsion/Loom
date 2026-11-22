@@ -77,3 +77,11 @@ past it, naming the bound, never answered in part: read a narrower path
 ([bounds](../reference/bounds.md#live-inspection)). Nothing writes below a top-level field. A grant
 scopes a read by its target and its shape, never by its path: a weave that wants a part read by
 fewer holds it back with `ZEN_HIDE` and tells it through a door of its own, which judges the asker.
+
+A weave that keeps its state as a `loom::Value`, built from data rather than from a C++ struct,
+answers the same read with `loom::poke_read_tree(value, path, access)`: the same steps, entries,
+bounds and refusals, and any reader holding a value, a snapshot among them, reads it the same way. A
+value carries no tags of its own, since `ZEN_HIDE` is a C++ shape's, so its reader names the access
+model it reads under: a `loom::PokeAccess`, each field it holds back named with its shape. A woven
+state's is `loom::poke_access_of<State>()`, and under it a read of `to_value(state)` answers what
+the weave answers.

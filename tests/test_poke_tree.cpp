@@ -577,3 +577,250 @@ TEST_CASE("the console reads a place by its spelling, through the Poke weave") {
 }
 
 } // TEST_SUITE
+
+// The read of a loom::Value: the same path, the same tree and the same refusals as the woven
+// read, under an access model its reader names, since a value carries no tags of its own.
+
+namespace {
+
+/// A whole answer as one text, so two reads are compared entry by entry and word by word.
+std::string said(const std::variant<PokeTree, Refused>& r) {
+    if (const Refused* refused = std::get_if<Refused>(&r)) {
+        return "refused: " + refused->reason;
+    }
+    const PokeTree& t = std::get<PokeTree>(r);
+    std::string out = "tree '" + t.path + "' " + t.type + "\n";
+    for (const PokeEntry& e : t.entries) {
+        out += e.path + " " + e.type + " = " + e.value + (e.present ? "\n" : " (absent)\n");
+    }
+    for (const std::string& w : t.withheld) {
+        out += "withheld " + w + "\n";
+    }
+    return out;
+}
+
+struct Sealed {
+    std::string pin;
+    std::string note;
+    ZEN_HIDE();
+    ZEN_SHAPE(Sealed, 1, ZEN_FIELD(pin), ZEN_FIELD(note));
+};
+struct Vault {
+    std::string label;
+    std::vector<Sealed> boxes;
+    ZEN_SHAPE(Vault, 1, ZEN_FIELD(label), ZEN_FIELD(boxes));
+};
+
+/// A state whose shape is known only at run time, as a weave built from a definition keeps one:
+/// every kind a field may hold, an enumeration and an open field among them.
+std::shared_ptr<const Schema> mood_schema() {
+    static const auto s = make_union("Mood", 1, {case_bare("calm"), case_bare("busy")});
+    return s;
+}
+std::shared_ptr<const Schema> gauge_schema() {
+    static const auto s = SchemaBuilder("Gauge", 1)
+                              .field("count", Kind::Int)
+                              .field("rate", Kind::Float)
+                              .field("on", Kind::Bool)
+                              .field("blob", Kind::Bytes)
+                              .message("mood", mood_schema())
+                              .list("samples", type_of(Kind::Int))
+                              .field("label", Kind::Text, false)
+                              .add(Field{"kept", type_any(), false})
+                              .build();
+    return s;
+}
+Value gauge() {
+    Value mood(mood_schema());
+    mood.choose("busy");
+    Value v(gauge_schema());
+    v.set("count", Cell::integer(7))
+        .set("rate", Cell::real(0.5))
+        .set("on", Cell::boolean(true))
+        .set("blob", Cell::bytes(Bytes{0x0f, 0xa0}))
+        .set("mood", Cell::message(std::move(mood)))
+        .set("samples", Cell::list({Cell::integer(4), Cell::integer(9)}))
+        .set("kept", Cell::message(au::to_value(Setting{"theme", "night"})));
+    return v;
+}
+
+} // namespace
+
+TEST_SUITE("poke_tree") {
+
+TEST_CASE("a value reads by its path as the woven state it was made from: the same tree, or the "
+          "same refusal, at every path") {
+    const PokeAccess access = au::poke_access_of<OwnerState>();
+    const auto both = [&](const OwnerState& s, const std::vector<std::string>& path) {
+        INFO("path: " << au::poke_path_text(path));
+        const std::string woven = said(au::poke_read_tree(s, path));
+        CHECK(woven == said(au::poke_read_tree(au::to_value(s), path, access)));
+    };
+    const OwnerState s = two_layouts();
+    const std::vector<std::vector<std::string>> paths{
+        {},
+        {"edits"},
+        {"token"},
+        {"run"},
+        {"run", "layouts"},
+        {"run", "layouts", "0", "desk"},
+        {"run", "layouts", "0", "desk", "panes", "1", "place"},
+        {"run", "layouts", "0", "desk", "panes", "1", "place", "y"},
+        {"run", "layouts", "0", "desk", "panes", "1", "settings"},
+        {"run", "layouts", "0", "desk", "panes", "1", "settings", "0", "value"},
+        {"run", "layouts", "0", "desk", "panes", "1", "fold"},
+        {"run", "layouts", "0", "desk", "panes", "1", "fold", "shut"},
+        {"run", "layouts", "0", "link"},
+        {"run", "layouts", "0", "link", "Linked", "path"},
+        {"run", "layouts", "1", "link", "Unlinked"},
+        {"run", "layouts", "1", "link", "Linked"},
+        {"run", "layouts", "1", "link", "Elsewhere"},
+        {"run", "layouts", "2"},
+        {"run", "layouts", "first"},
+        {"run", "layouts", "-1"},
+        {"run", "active", "x"},
+        {"run", "shelf"},
+        std::vector<std::string>(au::kMaxPokePathSteps + 1, "run"),
+    };
+    for (const auto& path : paths) {
+        both(s, path);
+    }
+
+    // At the bound and past it, with withheld paths counted beside the entries.
+    OwnerState big;
+    Layout l;
+    l.desk.panes.resize((au::kMaxPokeTreeEntries - 1) / 7);
+    big.run.layouts = {l};
+    both(big, {"run", "layouts", "0", "desk", "panes"});
+    big.run.layouts[0].desk.panes.resize((au::kMaxPokeTreeEntries - 1) / 7 + 1);
+    both(big, {"run", "layouts", "0", "desk", "panes"});
+    CHECK(said(au::poke_read_tree(au::to_value(big), {"run", "layouts", "0", "desk", "panes"},
+                                  access)) ==
+          "refused: the state at 'run.layouts[0].desk.panes' holds more than 8192 leaves "
+          "(kMaxPokeTreeEntries): read a narrower path");
+}
+
+TEST_CASE("a woven state's access model names every hidden field of every shape it reaches, and "
+          "nothing else") {
+    const PokeAccess owner = au::poke_access_of<OwnerState>();
+    CHECK(owner.hidden(*au::schema_of<OwnerState>(), "token"));
+    CHECK(owner.hidden(*au::schema_of<Row>(), "settings"));
+    CHECK_FALSE(owner.hidden(*au::schema_of<OwnerState>(), "edits"));
+    CHECK_FALSE(owner.hidden(*au::schema_of<Row>(), "pane"));
+    CHECK_FALSE(owner.hidden(*au::schema_of<Setting>(), "value"));
+    // A shape is matched by identity: another definition under Row's name and version is not
+    // the one whose settings are hidden.
+    const auto other_row = make_schema("Row", 1, {Field{"settings", type_of(Kind::Text)}});
+    CHECK_FALSE(owner.hidden(*other_row, "settings"));
+
+    // A bare ZEN_HIDE() in a nested shape holds back every one of its fields.
+    const PokeAccess vault = au::poke_access_of<Vault>();
+    CHECK(vault.hidden(*au::schema_of<Sealed>(), "pin"));
+    CHECK(vault.hidden(*au::schema_of<Sealed>(), "note"));
+    CHECK_FALSE(vault.hidden(*au::schema_of<Vault>(), "label"));
+    Vault v;
+    v.label = "east";
+    v.boxes = {Sealed{"1234", "spare key"}};
+    const std::string read = said(au::poke_read_tree(au::to_value(v), {}, vault));
+    CHECK(read == said(au::poke_read_tree(v, {})));
+    CHECK(read.find("1234") == std::string::npos);
+    CHECK(read.find("spare key") == std::string::npos);
+    CHECK(read.find("withheld boxes[0].pin\nwithheld boxes[0].note\n") != std::string::npos);
+
+    // A state held back almost whole is bounded as the woven read bounds it: every withheld path
+    // counts, though no entry follows it to trip the bound.
+    Vault packed;
+    packed.boxes.resize(au::kMaxPokeTreeEntries / 2);
+    CHECK(said(au::poke_read_tree(au::to_value(packed), {"boxes"}, vault)) ==
+          said(au::poke_read_tree(packed, {"boxes"})));
+    CHECK(refusal(au::poke_read_tree(au::to_value(packed), {"boxes"}, vault)) ==
+          "the state at 'boxes' holds more than 8192 leaves (kMaxPokeTreeEntries): read a "
+          "narrower path");
+}
+
+TEST_CASE("a value's reader names the access model it reads under: the model, never the value, "
+          "holds a field back, and a field the shape does not declare cannot be named") {
+    const Value v = au::to_value(two_layouts());
+    const std::vector<std::string> row{"run", "layouts", "0", "desk", "panes", "0"};
+    // Under no model the row's settings read, since nothing in the value marks them.
+    const PokeTree open = tree(au::poke_read_tree(v, row, PokeAccess{}));
+    CHECK(open.withheld.empty());
+    REQUIRE(entry(open, "run.layouts[0].desk.panes[0].settings[0].value") != nullptr);
+    CHECK(entry(open, "run.layouts[0].desk.panes[0].settings[0].value")->value == "night");
+    // Under the woven state's model they are withheld, and a step into them is refused.
+    PokeAccess access;
+    access.hide(au::schema_of<Row>(), "settings");
+    const PokeTree held = tree(au::poke_read_tree(v, row, access));
+    CHECK(held.withheld == std::vector<std::string>{"run.layouts[0].desk.panes[0].settings"});
+    CHECK(said(au::poke_read_tree(v, row, access)).find("night") == std::string::npos);
+    std::vector<std::string> into = row;
+    into.insert(into.end(), {"settings", "0"});
+    CHECK(refusal(au::poke_read_tree(v, into, access)) ==
+          "field 'run.layouts[0].desk.panes[0].settings' is hidden (ZEN_HIDE): its value is "
+          "message-only — ask the weave through its own interface");
+
+    CHECK_THROWS_AS(PokeAccess{}.hide(au::schema_of<Row>(), "setings"), std::invalid_argument);
+    CHECK_THROWS_AS(PokeAccess{}.hide(nullptr, "settings"), std::invalid_argument);
+}
+
+TEST_CASE("a value built from a schema at run time reads by its path: bytes as hex, an open "
+          "field as its JSON envelope, an enumeration as its spelling and a leaf") {
+    const Value v = gauge();
+    const PokeTree t = tree(au::poke_read_tree(v, {}, PokeAccess{}));
+    CHECK(t.type == "Gauge");
+    CHECK(said(t) == "tree '' Gauge\n"
+                     "count Int = 7\n"
+                     "rate Float = 0.5\n"
+                     "on Bool = true\n"
+                     "blob Bytes = 0fa0\n"
+                     "mood Mood = busy\n"
+                     "samples List<Int> = 2\n"
+                     "samples[0] Int = 4\n"
+                     "samples[1] Int = 9\n"
+                     "label Text =  (absent)\n"
+                     "kept Any = " +
+                         au::compat::serialize(au::to_value(Setting{"theme", "night"})) + "\n");
+    CHECK(said(au::poke_read_tree(v, {"samples", "1"}, PokeAccess{})) ==
+          "tree 'samples[1]' Int\nsamples[1] Int = 9\n");
+    CHECK(refusal(au::poke_read_tree(v, {"mood", "busy"}, PokeAccess{})) ==
+          "'mood' is Mood: nothing is below it");
+    CHECK(refusal(au::poke_read_tree(v, {"kept", "key"}, PokeAccess{})) ==
+          "'kept' is Any: nothing is below it");
+    CHECK(refusal(au::poke_read_tree(v, {"label"}, PokeAccess{})) ==
+          "'label' is optional and absent");
+
+    PokeAccess access;
+    access.hide(gauge_schema(), "blob");
+    const PokeTree held = tree(au::poke_read_tree(v, {}, access));
+    CHECK(held.withheld == std::vector<std::string>{"blob"});
+    CHECK(entry(held, "blob") == nullptr);
+}
+
+TEST_CASE("a value whose cells do not fit its shape is refused where they do not, never read as "
+          "another kind") {
+    Value misfit = gauge();
+    misfit.set("count", Cell::text("seven"));
+    CHECK(refusal(au::poke_read_tree(misfit, {}, PokeAccess{})) ==
+          "'count' holds Text where its shape declares Int");
+    CHECK(refusal(au::poke_read_tree(misfit, {"count"}, PokeAccess{})) ==
+          "'count' holds Text where its shape declares Int");
+
+    // A required field the value does not hold reads as absent, and a step onto it is refused.
+    Value bare(gauge_schema());
+    bare.set("count", Cell::integer(1));
+    const PokeTree t = tree(au::poke_read_tree(bare, {}, PokeAccess{}));
+    REQUIRE(entry(t, "rate") != nullptr);
+    CHECK_FALSE(entry(t, "rate")->present);
+    CHECK(refusal(au::poke_read_tree(bare, {"rate"}, PokeAccess{})) ==
+          "'rate' is absent, though its shape requires it");
+
+    // A union that holds no case is refused, reading it and stepping into it.
+    Value layout = au::to_value(Layout{});
+    layout.set("link", Cell::message(Value(au::schema_of<Link>())));
+    CHECK(refusal(au::poke_read_tree(layout, {}, PokeAccess{})) ==
+          "'link' is a union that holds no case");
+    CHECK(refusal(au::poke_read_tree(layout, {"link", "Linked"}, PokeAccess{})) ==
+          "'link' is a union that holds no case");
+}
+
+} // TEST_SUITE
