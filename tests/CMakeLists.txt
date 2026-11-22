@@ -35,6 +35,7 @@ set(ZEN_TEST_SOURCES_PORTABLE
     test_ask_book.cpp
     test_role_request.cpp
     test_poke.cpp
+    test_poke_tree.cpp
     test_describe.cpp
     test_console.cpp
     test_history_recorder.cpp

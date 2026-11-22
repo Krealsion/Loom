@@ -48,7 +48,7 @@ struct DescribeAccepted {
 
 /// The answer's grammar, hand-built because its fields are lists of `zen.ShapeDesc`, as
 /// zen.Manifest's are. `referenced` is optional; absent and empty mean the same. `accepted` is
-/// never empty for a woven weave, which has at least the five substrate doors; a weave that
+/// never empty for a woven weave, which has at least the six substrate doors; a weave that
 /// declines to describe itself sends no answer.
 inline std::shared_ptr<const Schema> accepted_shapes_schema() {
     static const auto s = SchemaBuilder(kAcceptedShapesShapeName, 2)

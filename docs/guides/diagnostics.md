@@ -60,3 +60,28 @@ reads unless `ZEN_HIDE` holds its value back, and is written only where `ZEN_EXP
 (a reset, only when every field is). The answers leave only where the weave's grant allows them
 (`allow_poke_answers`, which `mount` adds) — see the Poke doors in
 [reference/messaging](../reference/messaging.md#observation).
+
+A place inside the state reads by its path. Version 2 of `zen.PokeRead` takes the path's steps, each
+a field's name, a list's index or the name of the case a union holds, and is answered by a
+`zen.PokeTree`: every readable leaf below that place, each by its path, its kind and its value as
+text; a list's length before its elements; and the path of each field `ZEN_HIDE` holds back, with
+nothing of its value. From the console, the Poke weave's `zen.PokeGetTree` takes the place as one
+spelling, `run.layouts[0].desk`, and relays the tree:
+
+```text
+send <poke weave> zen.PokeGetTree 1 target=<weave> path=run.layouts[0].desk
+```
+
+One read answers at most `kMaxPokeTreeEntries` leaves and withheld paths together, and is refused
+past it, naming the bound, never answered in part: read a narrower path
+([bounds](../reference/bounds.md#live-inspection)). Nothing writes below a top-level field. A grant
+scopes a read by its target and its shape, never by its path: a weave that wants a part read by
+fewer holds it back with `ZEN_HIDE` and tells it through a door of its own, which judges the asker.
+
+A weave that keeps its state as a `loom::Value`, built from data rather than from a C++ struct,
+answers the same read with `loom::poke_read_tree(value, path, access)`: the same steps, entries,
+bounds and refusals, and any reader holding a value, a snapshot among them, reads it the same way. A
+value carries no tags of its own, since `ZEN_HIDE` is a C++ shape's, so its reader names the access
+model it reads under: a `loom::PokeAccess`, each field it holds back named with its shape. A woven
+state's is `loom::poke_access_of<State>()`, and under it a read of `to_value(state)` answers what
+the weave answers.

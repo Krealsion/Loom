@@ -11,7 +11,8 @@
 // weave exposed. docs/guides/diagnostics.md#5-live-inspection
 //
 //   zen.PokeInspect{target}            -> forwards zen.PokeDescribe
-//   zen.PokeGet{target, field}         -> forwards zen.PokeRead
+//   zen.PokeGet{target, field}         -> forwards zen.PokeRead version 1
+//   zen.PokeGetTree{target, path}      -> forwards zen.PokeRead version 2, the path's steps
 //   zen.PokeSet{target, field, value}  -> forwards zen.PokeWrite
 //   zen.PokeReset{target}              -> forwards zen.PokeResetState
 //
@@ -27,6 +28,9 @@
 #include <cstdint>
 #include <string>
 #include <tuple>
+#include <utility>
+#include <variant>
+#include <vector>
 
 namespace loom {
 
@@ -52,6 +56,20 @@ struct PokeGet {
     static constexpr std::uint32_t zen_version = 1;
     template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(target), ZEN_FIELD(field)); }
+};
+
+/// Read the place a path names inside a weave's state, and every readable leaf below it. `path`
+/// is the spelling a person types, `run.layouts[0].desk` (poke_path_steps), and the empty path
+/// is the whole state; a spelling that names no steps cleanly is refused here, by this weave,
+/// and nothing is forwarded. The answer is the target's zen.PokeTree, relayed.
+struct PokeGetTree {
+    std::int64_t target = 0;
+    std::string path;
+    using ZenSelf = PokeGetTree;
+    static constexpr const char* zen_name = "zen.PokeGetTree";
+    static constexpr std::uint32_t zen_version = 1;
+    template <int ZenLazy = 0>
+    static auto zen_fields() { return std::make_tuple(ZEN_FIELD(target), ZEN_FIELD(path)); }
 };
 
 /// Set one field on a weave; the value is a text literal the target parses against the field's
@@ -82,19 +100,39 @@ struct PokeReset {
 /// The poke participant. Mount it like any weave, `loom::mount<PokeWeave>(bus)`, and drive it by
 /// message; its state is the relay bookkeeping and nothing else.
 class PokeWeave : public WeaveBase<PokeWeave, RelayState,
-                                   Accept<PokeInspect, PokeGet, PokeSet, PokeReset, PokeStructure,
-                                          Result, Ack, Refused>,
-                                   Emit<PokeDescribe, PokeRead, PokeWrite, PokeResetState,
-                                        PokeStructure, Result, Ack, Refused>> {
+                                   Accept<PokeInspect, PokeGet, PokeGetTree, PokeSet, PokeReset,
+                                          PokeStructure, PokeTree, Result, Ack, Refused>,
+                                   Emit<PokeDescribe, PokeRead, PokeReadPath, PokeWrite,
+                                        PokeResetState, PokeStructure, PokeTree, Result, Ack,
+                                        Refused>> {
 public:
     void on(const PokeInspect& c, Mail& mail) { forward(mail, state_, c.target, PokeDescribe{}); }
     void on(const PokeGet& c, Mail& mail) { forward(mail, state_, c.target, PokeRead{c.field}); }
+    void on(const PokeGetTree& c, Mail& mail) {
+        std::variant<std::vector<std::string>, Refused> steps = poke_path_steps(c.path);
+        if (const Refused* refused = std::get_if<Refused>(&steps)) {
+            // Told to whoever a forward would have answered, as the target's refusal would be.
+            const WeaveId asker = mail.reply_to().valid() ? mail.reply_to() : mail.sender();
+            if (!asker.valid()) {
+                return;
+            }
+            if (asker == mail.sender()) {
+                (void)mail.answer(*refused);
+            } else {
+                mail.send(asker, *refused, mail.correlation());
+            }
+            return;
+        }
+        forward(mail, state_, c.target,
+                PokeReadPath{std::move(std::get<std::vector<std::string>>(steps))});
+    }
     void on(const PokeSet& c, Mail& mail) {
         forward(mail, state_, c.target, PokeWrite{c.field, c.value});
     }
     void on(const PokeReset& c, Mail& mail) { forward(mail, state_, c.target, PokeResetState{}); }
 
     void on(const PokeStructure& a, Mail& mail) { relay(mail, state_, a); }
+    void on(const PokeTree& a, Mail& mail) { relay(mail, state_, a); }
     void on(const Result& a, Mail& mail) { relay(mail, state_, a); }
     void on(const Ack& a, Mail& mail) { relay(mail, state_, a); }
     void on(const Refused& a, Mail& mail) { relay(mail, state_, a); }

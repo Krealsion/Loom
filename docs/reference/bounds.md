@@ -476,6 +476,20 @@ snapshot keeps its own entries alive — so a schema may legitimately outlive it
 Registry membership in memory. As with [LIFE-07](../laws/lifecycle-laws.md), the
 bound is on what is *live and reachable*, never an RSS guarantee.
 
+## Live inspection
+
+What one poke may ask of a weave's state ([live inspection](../guides/diagnostics.md#5-live-inspection)).
+
+| Bound | Value | Scope | Overflow behavior |
+|---|---|---|---|
+| `kMaxPokePathSteps` | <!-- value kMaxPokePathSteps -->64<!-- /value --> | the steps one path takes: a schema descriptor's own depth, `kMaxTypeDepth`, so no place in a state lies deeper than a path reaches | `zen.Refused`, naming the count; nothing is read |
+| `kMaxPokeTreeEntries` | <!-- value kMaxPokeTreeEntries grouped -->8,192<!-- /value --> | the entries and withheld paths one tree read answers together | `zen.Refused` whole, naming the bound and the place, never a tree cut short; the reader reads a narrower path |
+
+**Why that many leaves.** An entry is five cells of the answer and a withheld path one, so the
+largest tree stays inside `kMaxDecodedCells` and crosses every gate on its way to its reader: a
+compile-time check in `zen/weave/poke.hpp` holds the two together. A leaf's text is the state's
+own, as large as the state holds it.
+
 ## Gate / serialization
 
 Depth and size caps make hostile input total (see
