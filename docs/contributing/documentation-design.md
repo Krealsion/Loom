@@ -92,6 +92,10 @@ clearer and smaller does.
   reaches the start file.
 - **Frozen history** stays in the tree, in an area of its own whose `README.md` says why it exists:
   it is in no total, and on no required path.
+- **No dates and no authors.** A page or a comment says what holds, not when it was decided or by
+  whom; Git's history keeps when it changed. A record of a time, such as an audit under
+  `docs/evidence/`, keeps the dates and names it was written with, and frozen history stays as it
+  was written.
 - **What the design binds.** Every page and comment; what the program says (a notice, a refusal, a
   label, a `--help`); test names. Commits, issues and pull requests are bound lightly, to plain
   language: they hold the story of a change, and no page or comment tells it.
