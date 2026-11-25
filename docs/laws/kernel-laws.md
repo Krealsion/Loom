@@ -52,7 +52,10 @@ MEANS
 - a role moved by admission, with no Kernel call anywhere, is reported
   correctly and immediately;
 - during a pending admission the Kernel reports the incumbent (truthfully),
-  and the candidate only after dispatch.
+  and the candidate only after dispatch;
+- Loom's participants claim reads the same tables, made at each read
+  (SENSE-08), so a reader of it is told no less and no later than an asker of
+  the control door.
 
 DOES NOT MEAN
 - that the Kernel has no books at all — artifacts (names, libraries,
@@ -60,7 +63,9 @@ DOES NOT MEAN
 
 PROVEN BY — `roles_of`/`query_role`/`unload_role`/`release_role` all derive;
 suite `kernel` (direct-admission visibility, pending-window truth), suite
-`manager` (a library loaded into a set of roles, and one of them released).
+`manager` (a library loaded into a set of roles, and one of them released),
+suite `participants` (the participants claim after a role moves, a weave is
+replaced and a participant ends; a loaded one in suite `kernel`).
 
 ## KERN-04 — The ABI seam grows, and refuses loudly what it cannot carry
 

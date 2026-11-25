@@ -286,3 +286,45 @@ lifecycle), `joint_records`, `kMaxJointOperations`; `mint_joint_authority` and
 release, the committed record outliving an unrelated begin under both
 schedules, the aborted record outliving one, the initiator's lifetime, the
 foreign initiator, the retained capability).
+
+## SENSE-08 — A derived claim is made at each read, and is never behind what it is made of
+
+LAW — A derived claim's value is made by Loom at each read, from the bus's live
+tables, by the derivation its claim named; no value is stored, so no read
+returns what was so only before a change.
+
+MEANS
+- a read after a role moves, a weave is replaced or a participant ends shows
+  it, with no claim made since, as the control door's answers do
+  ([KERN-03](kernel-laws.md#kern-03--role-truth-is-derived-never-cached)); a
+  read inside the handler that made the change meets what the change left;
+- the claim is still an act, checked as one: made through the host's door
+  `DerivedClaims::derive_role_claim_as`, only by the role's holder at that moment and only of
+  a shape in its `Claims<...>`, or refused and nothing stored (SENSE-04);
+- it is keyed, read and ended as a role claim: a reader needs its observe rule
+  (SENSE-05), the role's end drops it, a move in place leaves it stamped
+  (SENSE-03), and the claimant's next ordinary claim of the shape replaces it;
+- the derivation is a function of the bus alone, `Value (*)(const
+  Switchboard&)`, which captures nothing and changes nothing, so the value has
+  no source but the tables;
+- its revision counts its claims, and says nothing about the tables' changes.
+
+DOES NOT MEAN
+- that a weave can derive a claim: `Mail` has no spelling for it, and a loaded
+  artifact reaches only the gated claim doors;
+- that a reading is a table a reader may keep: the next read is made again,
+  and a copy a reader keeps is its own, and falls behind;
+- that a derived value is authority: Loom's participants claim names what each
+  participant declared, never what it may send;
+- that another weave can make a claim a reader takes for Loom's participants
+  claim: its role, `kParticipantsRole`, is Loom's own, bound only by
+  `DerivedClaims::mount_claimant`, the door `mount_participants` mounts its
+  claimant through, and held by that claimant or by nobody
+  ([MSG-13](messaging-laws.md#msg-13--a-weave-answers-to-the-set-of-roles-it-was-bound-to)).
+
+PROVEN BY — `DerivedClaims::derive_role_claim_as`, `Switchboard::observe_role`
+(the value made at the read), `loom::host::participants_now`; suite `sense`
+(the derived claim made at each read, refused and stored nothing, replaced and
+ended), suite `participants` (a role moved, a weave replaced in place, a
+participant ended, a read inside the handler that changed the table), suite
+`kernel` (a loaded holder, a reload in place, a loaded reader).

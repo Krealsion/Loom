@@ -507,7 +507,14 @@ MEANS
 - a replacement moves one role, so an incumbent holding several is refused, in
   words, before anything moves: `TxnReason::SeveralRoles` at `begin`,
   `AdmitRefusal::SeveralRoles` at an admission, `false` from a direct commit,
-  and a `zen.Refused` from the Weave Manager's swap before it unloads anything.
+  and a `zen.Refused` from the Weave Manager's swap before it unloads anything;
+- one role is Loom's own, `kParticipantsRole`, whose claim a reader trusts as
+  Loom's ([SENSE-08](sense-laws.md#sense-08--a-derived-claim-is-made-at-each-read-and-is-never-behind-what-it-is-made-of)):
+  a registration or a load naming it is refused, whether or not anyone holds
+  it, and binds none of its set; a replacement never moves it off its claimant,
+  `TxnReason::PreconditionFailed` at `begin`, `AdmitRefusal::RoleNotHeld` at an
+  admission, `false` from a direct commit. `DerivedClaims::mount_claimant`
+  alone binds it, for `mount_participants`, and its claimant may still release it.
 
 DOES NOT MEAN
 - that a running weave can take a role: a role is bound only when a weave is
@@ -519,13 +526,16 @@ DOES NOT MEAN
   Whether a second role is right is the application's judgement, not Loom's.
 
 PROVEN BY — `Switchboard::register_weave` (the set overload), `release_role`,
-`roles_of`, `admission_blocked`, `begin_prepared_replacement`; suite
+`roles_of`, `admission_blocked`, `begin_prepared_replacement`,
+`commit_candidate`, `DerivedClaims::reserved_role` and `mount_claimant`; suite
 `role_authorship` (the set reached, authoring and claiming as each role; a set
 refused whole; release and removal letting go of exactly their roles; a release
 aborting a replacement; a two-role incumbent's replacement refused), suite
 `manager` (a library loaded into a set, the control door's list, release and
 the older load; a two-role holder's swap refused), suite `host_policy` (a boot
-row's `roles`). [Decision](../decisions/a-weave-answers-to-the-roles-it-is-loaded-with.md).
+row's `roles`), suite `participants` (Loom's own role refused to a registration
+and never moved off its claimant), suite `kernel` (a load naming it refused).
+[Decision](../decisions/a-weave-answers-to-the-roles-it-is-loaded-with.md).
 
 ## MSG-14 — A call is a function of its argument alone
 

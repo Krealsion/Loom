@@ -490,6 +490,21 @@ largest tree stays inside `kMaxDecodedCells` and crosses every gate on its way t
 compile-time check in `zen/weave/poke.hpp` holds the two together. A leaf's text is the state's
 own, as large as the state holds it.
 
+## The participants claim
+
+What one reading of Loom's participants claim carries
+([reading who is on the bus](capabilities.md#reading-who-is-on-the-bus)).
+
+| Bound | Value | Overflow behavior |
+|---|---|---|
+| the table one reading carries | what one decode admits, `kMaxDecodedCells` cells, the claim's own fields with every row | refused whole: `whole` false, `count` says how many participants there are, and no row is given; never a table cut short, which would read a holder as absent |
+
+**Why that bound.** A loaded reader receives the claim as bytes and admits them against its own
+definition, so a table past what one decode admits would refuse there, in the reader, where nothing
+says why. The bound is checked where the table is made, at each read, as `participants_now` weighs
+it (`loom::decoded_cells`); a bus with many participants of many shapes each meets it, and one that
+sheds participants is whole again at the next read.
+
 ## Gate / serialization
 
 Depth and size caps make hostile input total (see

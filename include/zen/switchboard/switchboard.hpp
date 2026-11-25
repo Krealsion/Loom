@@ -8,6 +8,7 @@
 #include <zen/registry.hpp>
 #include <zen/schema.hpp>
 #include <zen/switchboard/asks.hpp>
+#include <zen/switchboard/derived_claims.hpp>
 #include <zen/switchboard/grant.hpp>
 #include <zen/switchboard/message.hpp>
 #include <zen/switchboard/pending_speech.hpp>
@@ -182,7 +183,9 @@ enum class AdmitRefusal : std::uint8_t {
     NotACandidate,    ///< missing, dead, or not sealed at all
     OwnerChanged,     ///< the exact coordinator life/incarnation that sealed it is gone
     IncumbentUnfit,   ///< missing, dead, or already sealed
-    RoleNotHeld,      ///< the role is empty, or held by somebody other than the incumbent
+    /// The role is empty, held by somebody other than the incumbent, or `kParticipantsRole`,
+    /// which is never moved off its claimant.
+    RoleNotHeld,
     /// The incumbent holds other roles beside this one, and an admission moves one role: it
     /// would leave the rest on a weave sealed for retirement. Refused until a replacement can
     /// move a set (MSG-13).
@@ -373,9 +376,10 @@ public:
     /// As register_weave(weave, grant), and bind the Weave to every role in `roles`, in that
     /// order. Each role has one holder; a weave may hold several. The set is judged whole before
     /// anything is recorded: an empty name, a name twice, a held name, or more than
-    /// `kMaxRolesPerWeave` throws std::invalid_argument and binds none of them. Registration is
-    /// the only moment a role is bound. The bindings survive the holder reloading; each ends at
-    /// `release_role` or `unregister_weave`.
+    /// `kMaxRolesPerWeave` throws std::invalid_argument and binds none of them, and so does
+    /// Loom's own role, `kParticipantsRole`, which `DerivedClaims::mount_claimant` alone binds.
+    /// Registration is the only moment a role is bound. The bindings survive the holder
+    /// reloading; each ends at `release_role` or `unregister_weave`.
     /// MSG-13; docs/laws/messaging-laws.md
     WeaveId register_weave(std::unique_ptr<Weave> weave, Grant grant,
                            std::vector<std::string> roles);
@@ -788,7 +792,8 @@ public:
     /// The commit: unseal `candidate` and move `role` from `incumbent` to it, between two
     /// deliveries, so no turn can observe it half-done (MSG-01). Refuses, changing nothing, if the
     /// candidate is not sealed, either weave is missing or dead, the role is held by anyone but
-    /// the incumbent, or the incumbent holds another role too (a commit moves one role).
+    /// the incumbent, the incumbent holds another role too (a commit moves one role), or the role
+    /// is `kParticipantsRole`, which is never moved off its claimant.
     bool commit_candidate(WeaveId candidate, WeaveId incumbent, const std::string& role);
 
     /// The admission: the commit above, accounting for the incumbent and for activation, and
@@ -834,7 +839,8 @@ public:
     static constexpr std::uint32_t kMaxPreparationBudget = 1024;
 
     /// Begin one prepared replacement. Everything is validated before anything is stored, so a
-    /// refusal changes nothing and never disturbs the incumbent.
+    /// refusal changes nothing and never disturbs the incumbent. `kParticipantsRole` is never
+    /// replaced: naming it is `PreconditionFailed`.
     TxnResult begin_prepared_replacement(WeaveId op, WeaveId coordinator, WeaveId incumbent,
                                          WeaveId candidate, const std::string& role,
                                          std::uint32_t budget);
@@ -1199,6 +1205,7 @@ private:
     /// Message carried.
     friend struct DispatchRefusalProbe; // test-only counter boundary and retained-size witness
     friend struct CallDoor;             // the call unit: resolves, gates and tells the tap
+    friend struct DerivedClaims;        // the derived-claim unit: makes a role claim at each read
     std::uint64_t allocate_sequence();
     void capture_refusal_recipient(Envelope& env);
     /// Queue Loom's notice `value`, attested `kind`, for the exact recipient `to` at `life` and
@@ -1388,6 +1395,10 @@ private:
         /// then: the attribution a failure keeps.
         std::uint64_t published_by = 0;
         std::uint64_t published_revision = 0;
+        /// A derived claim's derivation and its declared shape; null for a stored claim, whose
+        /// value is `value`. Set only by `DerivedClaims::derive_role_claim_as`.
+        ClaimDerivation derive = nullptr;
+        std::shared_ptr<const Schema> derived_shape{};
     };
     /// key: (claimant id, shape name, shape version)
     using PersonalKey = std::tuple<std::uint64_t, std::string, std::uint32_t>;

@@ -141,6 +141,46 @@ judged again by whoever it reaches. Who may ask is the asker's grant to send
 drops before it answers; it keeps counters and nothing it read. A host mounts it
 with `authority_reader_grant()`.
 
+### Reading who is on the bus
+
+A weave that needs the bus's facts about its participants -- who holds a role,
+at which incarnation, what that holder accepts and declares it emits, and every
+participant a line can be addressed to -- reads them as a Sense, inside its
+handler, with nothing asked and nothing waiting: Loom's participants claim,
+[`loom::host::Participants`](../../include/zen/host/participants.hpp), made as
+the role `loom.participants` (`kParticipantsRole`). Each row is one participant
+as the bus holds it: its id, its roles in binding order, whether it is alive,
+its life and incarnation, whether it accepts any registered shape, and the
+shapes it accepts and declares it emits, by name and version. A weave built by
+hand on `loom::Weave`, one mounted natively and one loaded are read alike,
+since the row is the bus's record and no weave's own answer; a sealed candidate
+has none. The claim is derived
+([SENSE-08](../laws/sense-laws.md#sense-08--a-derived-claim-is-made-at-each-read-and-is-never-behind-what-it-is-made-of)):
+Loom makes its value at each read from the tables routing resolves against, so
+it is never behind them ([role truth](kernel.md#role-truth)).
+
+Reading it takes an observe rule for `zen.Participants` v1,
+`allow_observe_participants(grant)`, absent by default; a reader not granted it
+is refused `NotAuthorized` before the lookup and learns nothing, and no reader
+needs `allow_observe_any` for it. It hands its reader nothing to spend: a row
+names what a participant declared, never what it may send, which stays its
+grant's and is asked of the authority reader at each act, and it carries no
+handle, grant or capability. Its claimant is host wiring: `mount_participants`
+mounts it in its role and makes the claim through the bus's derived-claim door
+(`DerivedClaims`), which takes the `Switchboard` no message can hand a weave.
+The role is Loom's own, on every bus, whether or not a claimant is mounted: a
+registration or a load naming it is refused, and no commit, admission or
+prepared replacement moves it off the claimant; `DerivedClaims::mount_claimant`,
+the door `mount_participants` goes through, alone binds it
+([MSG-13](../laws/messaging-laws.md#msg-13--a-weave-answers-to-the-set-of-roles-it-was-bound-to)).
+So a host that mounts no claimant has no Loom's claim for a reader to trust,
+rather than another weave's under its name. Another weave's claim of a shape
+named `zen.Participants`, personal or as a role of its own, is under another key
+and is never read as Loom's. It reaches no
+farther than its bus: the observation relay carries messages and the bridge
+offers no read of a claim. Whether a Kernel loaded a participant is the Kernel's
+book, answered by `QueryParticipant`.
+
 ### When delegated authority can first be installed
 
 A capability names a subject, and a subject does not exist until the Kernel has

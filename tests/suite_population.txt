@@ -26,7 +26,8 @@ fuzz               portable  9
 switchboard        portable  46
 provenance         portable  62
 role_authorship    portable  17
-sense              portable  19
+sense              portable  22
+participants       portable  14
 grant              portable  21
 weaver             portable  26
 terminal           portable  43
@@ -46,7 +47,7 @@ component          portable  20
 pixel              portable  12
 bridge             portable  39
 bridge             posix     8
-kernel             kernel    139
+kernel             kernel    142
 kernel             posix     2
 handoff            kernel    10
 manager            kernel    43

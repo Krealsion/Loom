@@ -29,6 +29,7 @@
 // what the child reaches from inside its sandbox; MEM_BOMB and FORK_BOMB trip memory.max and
 // pids.max.
 
+#include <zen/host/participants.hpp>
 #include <zen/kernel/export.hpp>
 #include <zen/switchboard.hpp>
 #include <zen/weave/lifecycle.hpp>
@@ -509,6 +510,22 @@ public:
         // than by a bound this artifact would have to know about.
         if (in.payload.schema().name() == "SenseProbe") {
             const std::string role(in.payload.get("role")->as_text());
+            if (role == loom::host::kParticipantsRole) {
+                // Loom's participants claim, read across the seam as a loaded reader reads it:
+                // `read_hp` keeps how many rows the table holds, -2 for one not whole, -1 for none.
+                const SenseReading t =
+                    bus.observe_role(role, schema_of<loom::host::Participants>());
+                read_hp_ = -1;
+                read_role_.clear();
+                if (t) {
+                    const auto table = from_value<loom::host::Participants>(*t.value);
+                    read_hp_ = table.whole ? static_cast<std::int64_t>(table.rows.size()) : -2;
+                    read_role_ = t.by.role;
+                    read_author_ = static_cast<std::int64_t>(t.by.author.value);
+                    read_personal_ = t.by.role.empty();
+                }
+                return;
+            }
             const SenseReading r = bus.observe_role(role, sensehealth_schema());
             if (r) {
                 read_role_ = r.by.role;

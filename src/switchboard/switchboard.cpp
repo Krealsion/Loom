@@ -424,10 +424,7 @@ WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant
 }
 
 WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant, std::string role) {
-    std::vector<std::string> roles;
-    if (!role.empty()) {
-        roles.push_back(std::move(role));
-    }
+    std::vector<std::string> roles(role.empty() ? 0 : 1, role); // a set of one, or none
     return register_weave(std::move(incoming), std::move(grant), std::move(roles));
 }
 
@@ -453,6 +450,7 @@ WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant
                                             "' is named twice in the set");
             }
         }
+        DerivedClaims::refuse_reserved_role(roles[i]);
         if (roles_.count(roles[i]) != 0) {
             throw std::invalid_argument("register_weave: role '" + roles[i] +
                                         "' is already held (a role has one holder), so no role "
@@ -926,11 +924,11 @@ SenseReading Switchboard::observe(WeaveId author, std::string_view shape_name,
     if (it == personal_claims_.end()) {
         return SenseReading{SenseRefusal::NoClaim, {}, std::nullopt};
     }
-    SenseReading out;
-    out.refusal = SenseRefusal::None;
-    out.by = authorship_of(it->second, std::string{}, std::string(shape_name), shape_version);
-    out.value = it->second.value; // BY VALUE: the reader owns its copy, always
-    return out;
+    // BY VALUE: the reader owns its copy, always.
+    return SenseReading{SenseRefusal::None,
+                        authorship_of(it->second, std::string{}, std::string(shape_name),
+                                      shape_version),
+                        it->second.value};
 }
 
 SenseReading Switchboard::observe_role(std::string_view role, std::string_view shape_name,
@@ -940,11 +938,12 @@ SenseReading Switchboard::observe_role(std::string_view role, std::string_view s
     if (it == role_claims_.end()) {
         return SenseReading{SenseRefusal::NoClaim, {}, std::nullopt};
     }
-    SenseReading out;
-    out.refusal = SenseRefusal::None;
-    out.by = authorship_of(it->second, std::string(role), std::string(shape_name), shape_version);
-    out.value = it->second.value;
-    return out;
+    SenseAuthorship by =
+        authorship_of(it->second, std::string(role), std::string(shape_name), shape_version);
+    if (it->second.derive != nullptr) { // made at this read, never stored (SENSE-08)
+        return DerivedClaims::made(*this, it->second.derive, *it->second.derived_shape, by);
+    }
+    return SenseReading{SenseRefusal::None, std::move(by), it->second.value};
 }
 
 SenseReading Switchboard::observe_as(WeaveId reader, WeaveId author, std::string_view shape_name,
@@ -3063,7 +3062,7 @@ bool Switchboard::commit_candidate(WeaveId candidate, WeaveId incumbent,
     WeaveRecord* cand = find(candidate);
     WeaveRecord* inc = find(incumbent);
     if (cand == nullptr || inc == nullptr || !cand->sealed_by.valid() || !cand->alive ||
-        !inc->alive || role.empty()) {
+        !inc->alive || role.empty() || DerivedClaims::reserved_role(role)) {
         return false;
     }
     const auto held = roles_.find(role);
@@ -3119,7 +3118,7 @@ AdmitRefusal Switchboard::admission_blocked(const ParticipantRef& candidate,
         return AdmitRefusal::OwnerChanged;
     }
 
-    if (role.empty()) {
+    if (role.empty() || DerivedClaims::reserved_role(role)) {
         return AdmitRefusal::RoleNotHeld;
     }
     const auto held = roles_.find(role);
@@ -3519,7 +3518,8 @@ TxnResult Switchboard::begin_prepared_replacement(WeaveId op, WeaveId coordinato
     if (txns_.size() >= kMaxPreparedReplacements) {
         return {false, TxnId{}, TxnReason::CapacityExhausted};
     }
-    if (budget == 0 || budget > kMaxPreparationBudget || role.empty()) {
+    if (budget == 0 || budget > kMaxPreparationBudget || role.empty() ||
+        DerivedClaims::reserved_role(role)) {
         return {false, TxnId{}, TxnReason::PreconditionFailed};
     }
     const ParticipantRef o = participant(op);
