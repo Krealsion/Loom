@@ -11,11 +11,15 @@
 // the subject on.
 
 #include <zen/schema.hpp>
+#include <zen/switchboard/grant.hpp>
 #include <zen/switchboard/message.hpp>
 #include <zen/switchboard/sense.hpp>
+#include <zen/switchboard/weave_contract.hpp>
 #include <zen/value.hpp>
 
 #include <cstdint>
+#include <memory>
+#include <string>
 #include <string_view>
 
 namespace loom {
@@ -26,8 +30,31 @@ class Switchboard;
 /// function and nothing it could capture, so the value has no source but the bus.
 using ClaimDerivation = Value (*)(const Switchboard&);
 
+/// The role Loom's participants claim is made as (zen/host/participants.hpp), which a reader
+/// trusts as Loom's: a name a reader knows without being told an id. Loom's own: no registration,
+/// load, commit, admission or prepared replacement naming it binds it or moves it, on any bus,
+/// whether or not a claimant is mounted. `DerivedClaims::mount_claimant` alone binds it.
+inline constexpr const char* kParticipantsRole = "loom.participants";
+
 /// The derived-claim door and what the bus asks of it at a read.
 struct DerivedClaims {
+    /// Whether `role` is one only `mount_claimant` binds: `kParticipantsRole`, and no other. The
+    /// bus asks it wherever a role is bound or moved, and refuses there.
+    static bool reserved_role(std::string_view role) noexcept;
+
+    /// Registration's refusal of a reserved role in its set: throws `std::invalid_argument`
+    /// naming it, before anything is recorded, so no role of the set is bound (MSG-13).
+    static void refuse_reserved_role(const std::string& role);
+
+    /// Register `claimant` holding the reserved role `as_role`, and claim as it the value `derive`
+    /// makes at each read (`derive_role_claim_as`): the one door that binds a reserved role, and
+    /// a host's, as registration is. All or nothing: throws `std::invalid_argument` for a role
+    /// that is not reserved or is held already, and `std::logic_error` when the claim is refused,
+    /// leaving nothing registered. `mount_participants` mounts Loom's claimant through it.
+    static WeaveId mount_claimant(Switchboard& bus, std::unique_ptr<Weave> claimant, Grant grant,
+                                  std::string_view as_role, std::string_view shape_name,
+                                  std::uint32_t shape_version, ClaimDerivation derive);
+
     /// Claim as the role `as_role` the value `derive` makes at each read. The host's door, as
     /// `Switchboard::role_claim_as` is, and checked as that is: the claimant is live and holds the
     /// role now, refused `RoleNotHeld`; it declared the shape in `Claims<...>` and names a

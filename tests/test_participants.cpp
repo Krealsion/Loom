@@ -11,10 +11,12 @@
 
 #include "switchboard_fixtures.hpp"
 
+#include <zen/host/lifecycle_wiring.hpp>
 #include <zen/host/participants.hpp>
 #include <zen/serialize.hpp>
 #include <zen/switchboard.hpp>
 #include <zen/weave.hpp>
+#include <zen/weave/lifecycle.hpp>
 
 #include <cstdint>
 #include <memory>
@@ -359,6 +361,67 @@ TEST_CASE("another weave's claim of a same-named shape is never read as Loom's, 
     REQUIRE(imposter2->as_role.accepted);
     CHECK(raw->reading.refusal == SenseRefusal::NoClaim);
     CHECK_FALSE(raw->table.has_value());
+}
+
+TEST_CASE("a registration naming Loom's participants role is refused on a bus with no claimant, "
+          "binding none of its set, and the claimant's own mount still binds it") {
+    Switchboard bus;
+    const std::size_t before = bus.list_weaves().size();
+    // Nobody holds the role here, so only the role being Loom's own can refuse it: a refusal for
+    // a held role would pass this case without the reservation.
+    REQUIRE_FALSE(bus.role_holder(kParticipantsRole).valid());
+    CHECK_THROWS_AS(put<Imposter>(bus, Grant{}, {kParticipantsRole}), std::invalid_argument);
+    CHECK_THROWS_AS(put<Imposter>(bus, Grant{}, {"imposter", kParticipantsRole}),
+                    std::invalid_argument);
+    CHECK_FALSE(bus.role_holder(kParticipantsRole).valid());
+    CHECK_FALSE(bus.role_holder("imposter").valid());
+    CHECK(bus.list_weaves().size() == before);
+
+    const WeaveId loom = mount_participants(bus);
+    CHECK(bus.role_holder(kParticipantsRole) == loom);
+    CHECK(bus.roles_of(loom) == std::vector<std::string>{kParticipantsRole});
+    auto [reader, raw] = put<Reader>(bus, reader_grant(), {});
+    bus.send(reader, Message(to_value(Look{})));
+    bus.drain_until_idle();
+    REQUIRE(raw->table.has_value());
+    CHECK(raw->reading.by.author == loom);
+
+    // The claimant ended, the role is free and still refused to anyone else; a new mount binds it.
+    REQUIRE(bus.unregister_weave(loom));
+    CHECK_THROWS_AS(put<Imposter>(bus, Grant{}, {kParticipantsRole}), std::invalid_argument);
+    CHECK_FALSE(bus.role_holder(kParticipantsRole).valid());
+    const WeaveId again = mount_participants(bus);
+    CHECK(bus.role_holder(kParticipantsRole) == again);
+}
+
+TEST_CASE("Loom's participants role is never moved off its claimant: a commit, an admission and a "
+          "prepared replacement naming it are refused, and the claimant still holds it") {
+    Rig r;
+    const Registered coordinator = register_probe(r.bus, {ping_schema()});
+    // The candidate accepts the activation and holds no role, so every other precondition of a
+    // move holds: what refuses it is the role.
+    const Registered candidate = register_probe(r.bus, {schema_of<Activated>(), ping_schema()});
+    REQUIRE(r.bus.seal_weave(candidate.id, coordinator.id));
+    const std::string role(kParticipantsRole);
+
+    CHECK_FALSE(r.bus.commit_candidate(candidate.id, r.loom, role));
+    CHECK(r.bus.role_holder(kParticipantsRole) == r.loom);
+
+    const AdmitResult admitted =
+        r.bus.admit_candidate(candidate.id, r.loom, role, host_lifecycle_authority(r.bus),
+                              Message(to_value(Activated{1})), 1);
+    CHECK_FALSE(admitted.scheduled);
+    CHECK(admitted.why == AdmitRefusal::RoleNotHeld);
+    r.bus.drain_until_idle();
+    CHECK(r.bus.role_holder(kParticipantsRole) == r.loom);
+
+    const TxnResult begun = r.bus.begin_prepared_replacement(coordinator.id, coordinator.id,
+                                                             r.loom, candidate.id, role, 4);
+    CHECK_FALSE(begun.ok);
+    CHECK(begun.why == TxnReason::PreconditionFailed);
+    CHECK(r.bus.role_holder(kParticipantsRole) == r.loom);
+    CHECK(row_of(r.look().holder_of(kParticipantsRole)).id ==
+          static_cast<std::int64_t>(r.loom.value));
 }
 
 TEST_CASE("a table past what one decode admits is refused whole, its count kept, and is whole "

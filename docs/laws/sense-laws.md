@@ -315,7 +315,12 @@ DOES NOT MEAN
 - that a reading is a table a reader may keep: the next read is made again,
   and a copy a reader keeps is its own, and falls behind;
 - that a derived value is authority: Loom's participants claim names what each
-  participant declared, never what it may send.
+  participant declared, never what it may send;
+- that another weave can make a claim a reader takes for Loom's participants
+  claim: its role, `kParticipantsRole`, is Loom's own, bound only by
+  `DerivedClaims::mount_claimant`, the door `mount_participants` mounts its
+  claimant through, and held by that claimant or by nobody
+  ([MSG-13](messaging-laws.md#msg-13--a-weave-answers-to-the-set-of-roles-it-was-bound-to)).
 
 PROVEN BY — `DerivedClaims::derive_role_claim_as`, `Switchboard::observe_role`
 (the value made at the read), `loom::host::participants_now`; suite `sense`

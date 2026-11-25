@@ -42,7 +42,6 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -51,9 +50,9 @@
 
 namespace loom::host {
 
-/// The role Loom's participants claim is made as: the name a reader knows without being told an
-/// id.
-inline constexpr const char* kParticipantsRole = "loom.participants";
+/// The role Loom's participants claim is made as, and Loom's own: `loom::kParticipantsRole`
+/// (zen/switchboard/derived_claims.hpp) says who binds it.
+using loom::kParticipantsRole;
 
 /// One participant on the bus, as the bus holds it now.
 struct Participant {
@@ -187,24 +186,18 @@ class ParticipantsClaimant final
                        Claims<Participants>> {};
 
 /// Mount the claimant in `kParticipantsRole` and claim the participants as it, derived from
-/// `bus`. Throws `std::invalid_argument` when the role is held already, as any registration into a
-/// held role does, and binds nothing.
+/// `bus`, through `DerivedClaims::mount_claimant`, the one door that binds the role. Throws
+/// `std::invalid_argument` when the role is held already, as that door does, and binds nothing.
 inline WeaveId mount_participants(Switchboard& bus) {
     auto weave = std::make_unique<ParticipantsClaimant>();
     ParticipantsClaimant* raw = weave.get();
     Grant grant;
     allow_poke_answers(grant);
     allow_describe_answers(grant);
-    const WeaveId id = bus.register_weave(std::move(weave), std::move(grant),
-                                          std::string(kParticipantsRole));
+    const WeaveId id = DerivedClaims::mount_claimant(
+        bus, std::move(weave), std::move(grant), kParticipantsRole, Participants::zen_name,
+        Participants::zen_version, &participants_now);
     raw->zen_set_self(id);
-    const SenseClaimResult claimed =
-        DerivedClaims::derive_role_claim_as(bus, id, kParticipantsRole, Participants::zen_name,
-                                            Participants::zen_version, &participants_now);
-    if (!claimed.accepted) {
-        (void)bus.unregister_weave(id);
-        throw std::logic_error("mount_participants: the participants claim was refused");
-    }
     return id;
 }
 

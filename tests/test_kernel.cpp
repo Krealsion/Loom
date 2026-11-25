@@ -7539,6 +7539,36 @@ TEST_CASE("the participants claim reads a holder this Kernel loaded by its image
     CHECK(read().find(live.id) == nullptr);
 }
 
+TEST_CASE("a load naming Loom's participants role is refused on a Kernel with no claimant, binding "
+          "none of its set and leaving nothing loaded, and the claimant's own mount still binds it") {
+    Switchboard bus;
+    Kernel kernel(bus, sbfx::fixture_admission());
+    const std::size_t before = bus.list_weaves().size();
+    // Nobody holds the role, so a refusal for a held role cannot be what refuses this load.
+    REQUIRE_FALSE(bus.role_holder(loom::host::kParticipantsRole).valid());
+
+    const LoadResult alone = kernel.load(
+        "alone", ZEN_SO_ACTIVATES, std::vector<std::string>{loom::host::kParticipantsRole});
+    CHECK_FALSE(alone.ok);
+    CHECK(alone.error.find(loom::host::kParticipantsRole) != std::string::npos);
+    const LoadResult beside =
+        kernel.load("beside", ZEN_SO_ACTIVATES,
+                    std::vector<std::string>{"live.role", loom::host::kParticipantsRole});
+    CHECK_FALSE(beside.ok);
+    CHECK_FALSE(bus.role_holder(loom::host::kParticipantsRole).valid());
+    CHECK_FALSE(bus.role_holder("live.role").valid());
+    CHECK(bus.list_weaves().size() == before);
+    CHECK_FALSE(kernel.unload("alone"));
+    CHECK_FALSE(kernel.unload("beside"));
+
+    const WeaveId claimant = loom::host::mount_participants(bus);
+    CHECK(bus.role_holder(loom::host::kParticipantsRole) == claimant);
+    const LoadResult after = kernel.load(
+        "after", ZEN_SO_ACTIVATES, std::vector<std::string>{loom::host::kParticipantsRole});
+    CHECK_FALSE(after.ok);
+    CHECK(bus.role_holder(loom::host::kParticipantsRole) == claimant);
+}
+
 TEST_CASE("a loaded reader reads Loom's participants claim across the seam, as bytes, and a loaded "
           "reader not granted it is refused") {
     Switchboard bus;

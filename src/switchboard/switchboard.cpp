@@ -424,10 +424,7 @@ WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant
 }
 
 WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant, std::string role) {
-    std::vector<std::string> roles;
-    if (!role.empty()) {
-        roles.push_back(std::move(role));
-    }
+    std::vector<std::string> roles(role.empty() ? 0 : 1, role); // a set of one, or none
     return register_weave(std::move(incoming), std::move(grant), std::move(roles));
 }
 
@@ -453,6 +450,7 @@ WeaveId Switchboard::register_weave(std::unique_ptr<Weave> incoming, Grant grant
                                             "' is named twice in the set");
             }
         }
+        DerivedClaims::refuse_reserved_role(roles[i]);
         if (roles_.count(roles[i]) != 0) {
             throw std::invalid_argument("register_weave: role '" + roles[i] +
                                         "' is already held (a role has one holder), so no role "
@@ -3064,7 +3062,7 @@ bool Switchboard::commit_candidate(WeaveId candidate, WeaveId incumbent,
     WeaveRecord* cand = find(candidate);
     WeaveRecord* inc = find(incumbent);
     if (cand == nullptr || inc == nullptr || !cand->sealed_by.valid() || !cand->alive ||
-        !inc->alive || role.empty()) {
+        !inc->alive || role.empty() || DerivedClaims::reserved_role(role)) {
         return false;
     }
     const auto held = roles_.find(role);
@@ -3120,7 +3118,7 @@ AdmitRefusal Switchboard::admission_blocked(const ParticipantRef& candidate,
         return AdmitRefusal::OwnerChanged;
     }
 
-    if (role.empty()) {
+    if (role.empty() || DerivedClaims::reserved_role(role)) {
         return AdmitRefusal::RoleNotHeld;
     }
     const auto held = roles_.find(role);
@@ -3520,7 +3518,8 @@ TxnResult Switchboard::begin_prepared_replacement(WeaveId op, WeaveId coordinato
     if (txns_.size() >= kMaxPreparedReplacements) {
         return {false, TxnId{}, TxnReason::CapacityExhausted};
     }
-    if (budget == 0 || budget > kMaxPreparationBudget || role.empty()) {
+    if (budget == 0 || budget > kMaxPreparationBudget || role.empty() ||
+        DerivedClaims::reserved_role(role)) {
         return {false, TxnId{}, TxnReason::PreconditionFailed};
     }
     const ParticipantRef o = participant(op);

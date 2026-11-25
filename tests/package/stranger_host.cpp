@@ -22,8 +22,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -338,6 +340,17 @@ int main() {
     // Loom's participants claim, mounted and read by a reader granted to observe it: the loaded
     // weave's row is the bus's record of its image, beside the native collector's.
     {
+        // The role is Loom's own: a registration naming it is refused before any claimant holds
+        // it, so the only claim a reader meets there is the one the claimant's mount makes.
+        bool refused = false;
+        try {
+            (void)bus.register_weave(std::make_unique<Collector>(), loom::Grant{},
+                                     std::string(loom::host::kParticipantsRole));
+        } catch (const std::invalid_argument&) {
+            refused = true;
+        }
+        check(refused && !bus.role_holder(loom::host::kParticipantsRole).valid(),
+              "a registration naming Loom's participants role is refused");
         const loom::WeaveId claimant = loom::host::mount_participants(bus);
         loom::Grant observe;
         loom::host::allow_observe_participants(observe);

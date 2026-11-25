@@ -168,9 +168,15 @@ grant's and is asked of the authority reader at each act, and it carries no
 handle, grant or capability. Its claimant is host wiring: `mount_participants`
 mounts it in its role and makes the claim through the bus's derived-claim door
 (`DerivedClaims`), which takes the `Switchboard` no message can hand a weave.
-While it holds the role no other weave can, since a role has one holder, and
-another weave's claim of a shape named `zen.Participants`, personal or as a role
-of its own, is under another key and is never read as Loom's. It reaches no
+The role is Loom's own, on every bus, whether or not a claimant is mounted: a
+registration or a load naming it is refused, and no commit, admission or
+prepared replacement moves it off the claimant; `DerivedClaims::mount_claimant`,
+the door `mount_participants` goes through, alone binds it
+([MSG-13](../laws/messaging-laws.md#msg-13--a-weave-answers-to-the-set-of-roles-it-was-bound-to)).
+So a host that mounts no claimant has no Loom's claim for a reader to trust,
+rather than another weave's under its name. Another weave's claim of a shape
+named `zen.Participants`, personal or as a role of its own, is under another key
+and is never read as Loom's. It reaches no
 farther than its bus: the observation relay carries messages and the bridge
 offers no read of a claim. Whether a Kernel loaded a participant is the Kernel's
 book, answered by `QueryParticipant`.

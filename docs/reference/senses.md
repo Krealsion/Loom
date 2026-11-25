@@ -274,9 +274,10 @@ personal and role keys, the bounded repository, authorization, discovery, the
 reading-owns-its-value case, the no-bus-traffic case, a derived claim made at
 each read); suite `kernel` (role claim across a real committed admission, the
 sealed candidate refused, dynamic parity, and Loom's participants claim over a
-loaded holder, a reload in place and a loaded reader); suite `handoff` (Senses
-meeting an authored handoff); suite `joint` (joint publication, native and
-loaded); suite `participants` (Loom's participants claim, derived at each read:
+loaded holder, a reload in place, a loaded reader and a load naming its role
+refused); suite `handoff` (Senses meeting an authored handoff); suite `joint`
+(joint publication, native and loaded); suite `participants` (Loom's participants claim, derived at each read:
 a role moved, a weave replaced, a participant ended, a native holder, a weave
 holding no role, a hand-built weave, a reader without the grant, another weave's
-same-named claim, the bound).
+same-named claim, the bound, its role refused to a registration and never moved
+off its claimant).

@@ -144,40 +144,60 @@ and that law is a design of its own, not yet made. The relay in [observation](ob
 narrower thing that does exist: a role's own publications, under a policy.
 F and I are separate entries above and below.
 
-## Service discovery is not a participant's power
+## Service discovery is a granted read, never a default power
 
-**Status: KNOWN SEAM in one half; the other half is answered.**
+**Status: CLOSED for a reader a host grants it; nothing ordinary confers it.**
 
 Two different questions:
 
 ```text
-WHO IS RUNNING?              HOST ONLY   Switchboard::list_weaves
+WHO IS RUNNING?              granted     Loom's participants claim, under its own observe rule
 WHAT DOES THAT ONE ACCEPT?   answered    ask the target: zen.DescribeAccepted
+                             granted     its row in Loom's participants claim, by name and version
 ```
 
-**Answered.** A participant holding a role name and an ordinary grant can ask one
-target what it accepts and get back enough schema truth to reconstruct those
-shapes and inspect their fields — see
-[self-description](messaging.md#self-description--what-may-be-said-to-this-weave).
-It is an ordinary ask under an ordinary grant, answered by an ordinary
-participant. It needs no directory: the target is the natural owner of "what I
-accept", so no third party has to hold the fact and no new authority type
-exists for it.
+**Who is running** is answered to a reader granted it, and to no other.
+[Loom's participants claim](capabilities.md#reading-who-is-on-the-bus) is a
+Sense listing every participant on the bus: its id, its roles, whether it is
+alive, its life and incarnation, and what it accepts and declares it emits. A
+weave reads it inside its handler under one observe rule,
+`allow_observe_participants`, which no grant holds by default and which needs no
+`allow_observe_any`; a reader without it is refused `NotAuthorized` and learns
+nothing. So it stays a fact about the running world that no weave holds by being
+a weave: a host that wants a reader to have it names that reader in its grant. It
+is there only where a host mounted the claimant (`mount_participants`), and its
+role is Loom's own
+([MSG-13](../laws/messaging-laws.md#msg-13--a-weave-answers-to-the-set-of-roles-it-was-bound-to)),
+so no other weave's claim stands in for it where none is mounted. A
+[terminal session](terminal.md) holds no such rule and reads no claim, and
+`ConsoleEngine::weaves()` is still the host's own lens, needing a
+`Switchboard&`. `send_to_role` addresses a role without resolving it, which is
+why addressing a role never needs the list.
 
-**Open, deliberately.** `ConsoleEngine::weaves()` enumerates the bus's registry
-and needs a `Switchboard&`; a [terminal session](terminal.md) does not have it,
-and neither does anything else. Enumerating live weaves is a fact about the
-running world rather than about the participant, and handing it to every
-terminal would give an ordinary weave a power nothing granted it. `send_to_role`
-addresses a role without resolving it, which is why addressing a role
-never needs the list.
+**What one accepts** is answered two ways. Asked: a participant holding a role
+name and an ordinary grant can ask one target what it accepts and get back
+enough schema truth to reconstruct those shapes and inspect their fields — see
+[self-description](messaging.md#self-description--what-may-be-said-to-this-weave).
+It is an ordinary ask under an ordinary grant, answered by the target, the
+natural owner of "what I accept", so no new authority type exists for it. Read:
+a granted reader's row for that participant names the shapes the bus recorded
+when it registered, by name and version, and whether it accepts any registered
+shape; it names no field, and it answers for a weave built by hand on
+`loom::Weave`, which answers no describe.
 
 **Absent, and not wanted:** global schema enumeration. Nothing in Loom can
 enumerate schemas — `Registry` offers lookup/contains/size and the `Switchboard`
 publishes no `registry()` accessor — so even the console's "catalog" is derived
-from accept-sets. A `ListSchemas` would have no owner and no natural authority
-scope, and it answers the wrong question: the product question is *what can I
-say to THIS thing*, which is answered directly.
+from accept-sets. Loom's participants claim is not one either: its shapes are
+the accept-sets and emit-sets themselves, each beside the participant that
+declared it, by name and version. It names no field, and no shape the registry
+holds that no participant on the bus declares it accepts or emits — one only
+claimed or kept, one nested in another, or one whose weave has gone — and a
+weave accepting any registered shape is a flag beside its own list, never the
+registry's. It has an owner, the bus's participant table, and an authority
+scope, its observe rule. A `ListSchemas` would have neither, and it answers the
+wrong question: the product question is *what can I say to THIS thing*, which
+the target and its row answer directly.
 
 ## The weaver seat is a WeaveId, not a person
 

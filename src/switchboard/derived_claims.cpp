@@ -6,10 +6,50 @@
 #include <zen/switchboard/derived_claims.hpp>
 #include <zen/switchboard/switchboard.hpp>
 
+#include <stdexcept>
 #include <string>
 #include <utility>
 
 namespace loom {
+
+bool DerivedClaims::reserved_role(std::string_view role) noexcept {
+    return role == kParticipantsRole;
+}
+
+void DerivedClaims::refuse_reserved_role(const std::string& role) {
+    if (reserved_role(role)) {
+        throw std::invalid_argument("register_weave: role '" + role +
+                                    "' is Loom's own, bound by its mount alone, so no role of "
+                                    "the set is bound");
+    }
+}
+
+WeaveId DerivedClaims::mount_claimant(Switchboard& bus, std::unique_ptr<Weave> claimant,
+                                      Grant grant, std::string_view as_role,
+                                      std::string_view shape_name, std::uint32_t shape_version,
+                                      ClaimDerivation derive) {
+    const std::string role(as_role);
+    if (!reserved_role(role)) {
+        throw std::invalid_argument("mount_claimant: role '" + role +
+                                    "' is not one only this door binds");
+    }
+    if (bus.roles_.count(role) != 0) {
+        throw std::invalid_argument("mount_claimant: role '" + role +
+                                    "' is already held (a role has one holder)");
+    }
+    // Registered holding no role, then bound here: registration refuses a reserved role in any
+    // set, and binding is the same two entries registration makes, with no delivery between.
+    const WeaveId id = bus.register_weave(std::move(claimant), std::move(grant));
+    bus.find(id)->roles.push_back(role);
+    bus.roles_.emplace(role, id);
+    const SenseClaimResult claimed =
+        derive_role_claim_as(bus, id, role, shape_name, shape_version, derive);
+    if (!claimed.accepted) {
+        (void)bus.unregister_weave(id);
+        throw std::logic_error("mount_claimant: the claim as '" + role + "' was refused");
+    }
+    return id;
+}
 
 SenseClaimResult DerivedClaims::derive_role_claim_as(Switchboard& bus, WeaveId claimant,
                                                      std::string_view as_role,
