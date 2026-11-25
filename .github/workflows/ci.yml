@@ -5,10 +5,21 @@ on:
   push:
     branches:
       - main
+  # The hourly check (stores.yml) calls this workflow on `main` when the Zengine stranger's
+  # compiler cache is behind Zengine's `main` or Loom's: that job alone runs, rebuilds its store
+  # and saves it as a push's run does.
+  workflow_call:
+    inputs:
+      refresh:
+        description: Rebuild the Zengine stranger's compiler cache on main, that job alone
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
+# The hourly check's run calls this workflow under its own name (stores.yml), so its group is
+# none of this workflow's own, and it holds or replaces no run of this workflow.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -21,6 +32,7 @@ jobs:
   # needs full history to state the invariant over everything reachable, not just this push.
   loom-commit-attribution:
     name: Loom / commit attribution
+    if: ${{ !inputs.refresh }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -75,6 +87,7 @@ jobs:
   # The documentation lane's checks, on every change: they read the source tree, not a build.
   loom-documentation:
     name: Loom / documentation lane
+    if: ${{ !inputs.refresh }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -92,7 +105,7 @@ jobs:
   loom-wasm-modules:
     name: Loom / WebAssembly modules
     needs: loom-change-kind
-    if: ${{ !cancelled() && needs.loom-change-kind.outputs.compiled != 'false' }}
+    if: ${{ !cancelled() && !inputs.refresh && needs.loom-change-kind.outputs.compiled != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -129,7 +142,7 @@ jobs:
   loom-linux-debug:
     name: Loom / Linux / Debug
     needs: [loom-change-kind, loom-wasm-modules]
-    if: ${{ !cancelled() && needs.loom-change-kind.outputs.compiled != 'false' }}
+    if: ${{ !cancelled() && !inputs.refresh && needs.loom-change-kind.outputs.compiled != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -201,7 +214,7 @@ jobs:
   loom-linux-package-boxed:
     name: Loom / Linux / installed package, boxed
     needs: loom-change-kind
-    if: ${{ !cancelled() && needs.loom-change-kind.outputs.compiled != 'false' }}
+    if: ${{ !cancelled() && !inputs.refresh && needs.loom-change-kind.outputs.compiled != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -249,7 +262,7 @@ jobs:
   loom-linux-release:
     name: Loom / Linux / Release
     needs: loom-change-kind
-    if: ${{ !cancelled() && needs.loom-change-kind.outputs.compiled != 'false' }}
+    if: ${{ !cancelled() && !inputs.refresh && needs.loom-change-kind.outputs.compiled != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -300,7 +313,7 @@ jobs:
   loom-linux-clang:
     name: Loom / Linux / Clang
     needs: loom-change-kind
-    if: ${{ !cancelled() && needs.loom-change-kind.outputs.compiled != 'false' }}
+    if: ${{ !cancelled() && !inputs.refresh && needs.loom-change-kind.outputs.compiled != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -370,7 +383,7 @@ jobs:
   loom-linux-asan-ubsan:
     name: Loom / Linux / ASan + UBSan
     needs: [loom-change-kind, loom-wasm-modules]
-    if: ${{ !cancelled() && needs.loom-change-kind.outputs.compiled != 'false' }}
+    if: ${{ !cancelled() && !inputs.refresh && needs.loom-change-kind.outputs.compiled != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -443,9 +456,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
+      # With its parent, so a pull request's summary can name the `main` its change is on.
       - name: Check out Loom
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 2
           persist-credentials: false
 
       - name: Record toolchain
@@ -476,24 +491,102 @@ jobs:
           git -C "$zengine_source" checkout --detach FETCH_HEAD
           test "$(git -C "$zengine_source" rev-parse HEAD)" = "$ZENGINE_SHA"
 
+      # Loom's tests and examples stay off, as in Zengine's own jobs: Zengine consumes the
+      # installed prefix alone, and this repository's other jobs run Loom's suites.
+      #
+      # NO DEBUG INFORMATION in either build: no step reads it. A failing case names its file
+      # and line from the source, and nothing in Zengine or Loom reads debug information as it
+      # runs; without it a compile writes and a link reads far less. Only these configure lines
+      # set it, and a weaver's own Debug build keeps CMake's `-g`.
       - name: Build and install Loom to a fresh prefix
         run: |
           loom_prefix="$RUNNER_TEMP/loom-prefix"
           test ! -e "$loom_prefix"
-          cmake -S . -B build-stranger -DCMAKE_BUILD_TYPE=Debug
+          cmake -S . -B build-stranger -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_FLAGS_DEBUG=-g0 -DCMAKE_CXX_FLAGS_DEBUG=-g0 \
+            -DZEN_BUILD_TESTS=OFF -DZEN_BUILD_EXAMPLES=OFF
           cmake --build build-stranger --parallel "$(nproc)"
           cmake --install build-stranger --prefix "$loom_prefix"
+
+      # THE COMPILER CACHE holds intermediates only, for Zengine's build: objects ccache keys by
+      # the compiler's bytes (its `content` check), its command line and every byte the source
+      # read, Loom's installed headers among them, so an object compiled against another Loom is
+      # never a hit. One store, named by a digest of the compilers' bytes, the Zengine commit and
+      # the Loom commit it was built against (tests/ci_store.cmake). Every run restores the newest
+      # store for its Zengine and Loom, else for its Zengine, else for its compiler, and says which
+      # in its summary. Only a run on Loom's `main` saves one, and only while its Zengine is
+      # Zengine's `main` and its Loom Loom's `main`, so the newest store is the newest pair: a pull
+      # request's run never saves, since its objects would feed `main`'s next build. A Zengine
+      # merge leaves the store behind, and the hourly check (stores.yml) runs this job on `main`
+      # again. A product is never taken from it: the objects only feed Zengine's links, and
+      # Loom's build above has no launcher.
+      - name: Fetch pinned ccache 4.13.6
+        id: ccache
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/ccache.tar.xz" \
+            https://github.com/ccache/ccache/releases/download/v4.13.6/ccache-4.13.6-linux-x86_64-musl-static.tar.xz
+          echo "156ec57c5198cc849d92834023d09910b83dc5504c6cf405d09e6ae7b208a3e5  $RUNNER_TEMP/ccache.tar.xz" \
+            | sha256sum --check --strict -
+          mkdir "$RUNNER_TEMP/ccache-bin"
+          tar -xJf "$RUNNER_TEMP/ccache.tar.xz" -C "$RUNNER_TEMP/ccache-bin" --strip-components=1
+          "$RUNNER_TEMP/ccache-bin/ccache" --version | head -n 1
+          compilers="$(readlink -f "$(command -v cc)") $(readlink -f "$(command -v c++)")"
+          compiler="$(sha256sum $compilers | cut -d ' ' -f 1 | sha256sum | cut -c 1-16)"
+          echo "Runner image $ImageOS-$ImageVersion; compilers $compilers ($(c++ --version | head -n 1)); store compiler $compiler"
+          {
+            echo "ZEN_CCACHE=$RUNNER_TEMP/ccache-bin/ccache"
+            echo "ZEN_CCACHE_SINCE=$(date +%s)"
+            echo "CCACHE_DIR=$RUNNER_TEMP/ccache"
+            echo "CCACHE_MAXSIZE=3G"
+            echo "CCACHE_COMPILERCHECK=content"
+          } >> "$GITHUB_ENV"
+          echo "compiler=$compiler" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the compiler cache
+        id: restore
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: ccache-zengine-stranger-${{ steps.ccache.outputs.compiler }}-${{ steps.zengine.outputs.sha }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ccache-zengine-stranger-${{ steps.ccache.outputs.compiler }}-${{ steps.zengine.outputs.sha }}-${{ github.sha }}-
+            ccache-zengine-stranger-${{ steps.ccache.outputs.compiler }}-${{ steps.zengine.outputs.sha }}-
+            ccache-zengine-stranger-${{ steps.ccache.outputs.compiler }}-
+
+      # A pull request's Loom is its merge commit, never a store's; its first parent is the
+      # `main` the change is on, which a store from that `main` was built against.
+      - name: Say which store was restored
+        env:
+          ZEN_STORE: ${{ steps.restore.outputs.cache-matched-key }}
+          ZENGINE_SHA: ${{ steps.zengine.outputs.sha }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          base=""
+          if [ "$EVENT" = pull_request ]; then base="$(git rev-parse HEAD^1)"; fi
+          cmake -DZEN_STORE_DO=say -DZEN_STORE_KEY="$ZEN_STORE" -DZEN_ZENGINE="$ZENGINE_SHA" \
+            -DZEN_LOOM="$GITHUB_SHA" -DZEN_LOOM_BASE="$base" -P tests/ci_store.cmake
 
       - name: Configure canonical Zengine as a stranger
         run: |
           cmake -S "$RUNNER_TEMP/zengine-src" -B "$RUNNER_TEMP/zengine-build" \
             -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_FLAGS_DEBUG=-g0 \
+            -DCMAKE_CXX_FLAGS_DEBUG=-g0 \
             -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/loom-prefix" \
+            -DCMAKE_C_COMPILER_LAUNCHER="$ZEN_CCACHE" \
+            -DCMAKE_CXX_COMPILER_LAUNCHER="$ZEN_CCACHE" \
             -DZEN_LOOM_DEV=OFF \
             -DBUILD_TESTING=ON
 
       - name: Build canonical Zengine
-        run: cmake --build "$RUNNER_TEMP/zengine-build" --parallel "$(nproc)"
+        run: |
+          "$ZEN_CCACHE" --zero-stats
+          cmake --build "$RUNNER_TEMP/zengine-build" --parallel "$(nproc)"
+          {
+            printf '## Loom -> canonical Zengine stranger: the compiler cache\n\n```text\n'
+            "$ZEN_CCACHE" --show-stats --verbose
+            printf '```\n'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # Zengine's OWN official lane, run from the canonical checkout this job fetched.
       # This job claims to verify Zengine, so it has to ask Zengine's question: a bare
@@ -519,10 +612,33 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$verify_rc"
 
+      # Only Loom's `main` saves, only while this run's store would be the newest, and only what
+      # this run used: entries no compile read since the job began are dropped first, so the
+      # store follows both mains.
+      - name: Ask whether this run's store would be the newest
+        id: newest
+        if: ${{ !cancelled() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+        env:
+          ZENGINE_SHA: ${{ steps.zengine.outputs.sha }}
+        run: cmake -DZEN_STORE_DO=newest -DZEN_ZENGINE="$ZENGINE_SHA" -DZEN_LOOM="$GITHUB_SHA" -P tests/ci_store.cmake
+
+      - name: Keep only what this run used
+        if: ${{ !cancelled() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && steps.newest.outputs.save == 'true' }}
+        run: |
+          "$ZEN_CCACHE" --evict-older-than "$(( $(date +%s) - ZEN_CCACHE_SINCE + 60 ))s"
+          "$ZEN_CCACHE" --show-stats
+
+      - name: Save the compiler cache
+        if: ${{ !cancelled() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && steps.newest.outputs.save == 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: ccache-zengine-stranger-${{ steps.ccache.outputs.compiler }}-${{ steps.zengine.outputs.sha }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+
   loom-windows-kernel-full:
     name: Loom / Windows / kernel-full (advisory)
     needs: [loom-change-kind, loom-wasm-modules]
-    if: ${{ !cancelled() && needs.loom-change-kind.outputs.compiled != 'false' }}
+    if: ${{ !cancelled() && !inputs.refresh && needs.loom-change-kind.outputs.compiled != 'false' }}
     runs-on: windows-2025
     continue-on-error: true
     timeout-minutes: 45
@@ -597,7 +713,7 @@ jobs:
   loom-windows-msvc:
     name: Loom / Windows / MSVC + installed-package witness (advisory)
     needs: [loom-change-kind, loom-wasm-modules]
-    if: ${{ !cancelled() && needs.loom-change-kind.outputs.compiled != 'false' }}
+    if: ${{ !cancelled() && !inputs.refresh && needs.loom-change-kind.outputs.compiled != 'false' }}
     runs-on: windows-2025
     continue-on-error: true
     timeout-minutes: 60
@@ -671,7 +787,7 @@ jobs:
   loom-windows-kernel-less:
     name: Loom / Windows / default kernel-less (advisory)
     needs: loom-change-kind
-    if: ${{ !cancelled() && needs.loom-change-kind.outputs.compiled != 'false' }}
+    if: ${{ !cancelled() && !inputs.refresh && needs.loom-change-kind.outputs.compiled != 'false' }}
     runs-on: windows-2025
     continue-on-error: true
     timeout-minutes: 45

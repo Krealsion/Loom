@@ -1,0 +1,74 @@
+name: Stores level
+
+# THE ZENGINE STRANGER'S COMPILER CACHE KEPT LEVEL WITH ZENGINE. That job builds canonical
+# Zengine's `main` as it resolves it, and a store built against an older Zengine misses every
+# compile that Zengine's change reached. So every hour this asks whether `main`'s newest store was
+# built against Zengine's `main` and Loom's `main` now; when it was not, or there is none, it runs
+# that job on `main` again (ci.yml, called with `refresh`), which rebuilds the store and saves it
+# as a push's run does. When the store is level it asks and does nothing more. It needs no secret
+# and no token: a lookup reads a store's key without restoring it. The job it calls runs in this
+# workflow's run, under its name, so the run is none of ci.yml's: it never holds, replaces or is
+# replaced by a push's run, and no reader of ci.yml's runs reads it. A pull request touching it
+# runs the ask on its own head, a dry run that rebuilds nothing.
+on:
+  schedule:
+    - cron: '13 * * * *'
+  pull_request:
+    paths:
+      - .github/workflows/stores.yml
+      - tests/ci_store.cmake
+
+permissions:
+  contents: read
+
+# One check at a time; a newer hour's waits behind the one running and replaces one still waiting.
+# The group names the event, so it is never the group ci.yml's own names when this run calls it
+# (`<this workflow>-<ref>`), which would hold each behind the other.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # A lookup reads the key of the newest store, its prefix the job's store family, without
+  # restoring it; its path is the job's own, as a store is found only by the path it was saved
+  # under.
+  ask:
+    name: Stores level / ask
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      level: ${{ steps.ask.outputs.level }}
+    steps:
+      - name: Check out the store tool
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: tests/ci_store.cmake
+          sparse-checkout-cone-mode: false
+
+      - name: The store tool, on its fixed cases
+        run: cmake -DZEN_STORE_DO=self-test -P tests/ci_store.cmake
+
+      - name: Look up the Zengine stranger's newest store
+        id: stranger
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: ccache-zengine-stranger-
+          restore-keys: ccache-zengine-stranger-
+          lookup-only: true
+
+      - name: Ask whether it was built against both mains
+        id: ask
+        env:
+          ZEN_STORE: ${{ steps.stranger.outputs.cache-matched-key }}
+        run: cmake -DZEN_STORE_DO=ask -DZEN_STORE_KEY="$ZEN_STORE" -P tests/ci_store.cmake
+
+  # A failed ask answers nothing, so it runs the job, as CI's change kind does.
+  refresh:
+    name: Stores level / rebuild on main
+    needs: ask
+    if: ${{ !cancelled() && github.event_name == 'schedule' && needs.ask.outputs.level != 'true' }}
+    uses: ./.github/workflows/ci.yml
+    with:
+      refresh: true
