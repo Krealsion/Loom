@@ -23,7 +23,8 @@
 //   QueryRole v2   -> RoleInfo v3{holder, loaded, converses, roles, incarnation, emitted}
 //   QueryParticipant -> ParticipantInfo{participant, present, loaded, life, incarnation, roles}
 // The three questions read the bus's facts and change nothing; `query_capability` grants them
-// alone, without the load capability.
+// alone, without the load capability. No question lists the participants: Loom's participants
+// claim does (zen/host/participants.hpp).
 // The door executes primitives only; composites such as a swap belong to an orchestrator (the
 // Weave Manager, kernel/manager.hpp), which another can replace.
 //
@@ -36,6 +37,7 @@
 
 #include <zen/host/lifecycle_wiring.hpp> // host wiring: the one mint, not weave-facing
 #include <zen/weave.hpp>
+#include <zen/weave/declared_shape.hpp>
 #include <zen/weave/lifecycle.hpp>
 #include <zen/kernel/kernel.hpp>
 #include <zen/switchboard.hpp>
@@ -158,13 +160,6 @@ struct QueryRoleV2 {
     static constexpr std::uint32_t zen_version = 2;
     template <int ZenLazy = 0>
     static auto zen_fields() { return std::make_tuple(ZEN_FIELD(role)); }
-};
-
-/// One shape by its name and version, as a weave declares it.
-struct DeclaredShape {
-    std::string name;
-    std::int64_t version = 0;
-    ZEN_SHAPE(DeclaredShape, 1, ZEN_FIELD(name), ZEN_FIELD(version));
 };
 
 /// The answer to version 2: the holder now (0 when the role is unheld), whether this Kernel

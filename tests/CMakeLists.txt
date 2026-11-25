@@ -24,6 +24,8 @@ set(ZEN_TEST_SOURCES_PORTABLE
     test_provenance.cpp
     test_role_authorship.cpp
     test_sense.cpp
+    # Loom's participants claim: who is on the bus, derived from its tables at each read.
+    test_participants.cpp
     test_grant.cpp
     test_weaver.cpp
     test_terminal.cpp

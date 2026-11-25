@@ -11,6 +11,7 @@
 
 #include <zen/gate.hpp>
 #include <zen/host/lifecycle_wiring.hpp>
+#include <zen/host/participants.hpp>
 #include <zen/host/prepared_replacement.hpp>
 #include <zen/kernel/kernel.hpp>
 #include <zen/kernel/making_words.hpp>
@@ -7458,6 +7459,113 @@ TEST_CASE("a loaded weave without observe authority is refused a read, and its c
     CHECK(bus.observe(dyn.id, "SenseHealth", 1));
     CHECK(bus.observe_as(dyn.id, dyn.id, "SenseHealth", 1).refusal ==
           SenseRefusal::NotAuthorized);
+}
+
+// ---- Loom's participants claim across the seam (SENSE-08) ------------------
+// The claim is made at each read from the bus's tables, so a holder this Kernel loaded is read by
+// the bus's record of its image, a reload in place at the next read, and a loaded reader receives
+// it as bytes like any claim.
+
+namespace {
+loom::Grant participants_reader_grant(loom::Grant g = {}) {
+    loom::host::allow_observe_participants(g);
+    return g;
+}
+
+std::vector<std::string> shape_names(const std::vector<loom::DeclaredShape>& shapes) {
+    std::vector<std::string> out;
+    for (const loom::DeclaredShape& s : shapes) {
+        out.push_back(s.name + " v" + std::to_string(s.version));
+    }
+    return out;
+}
+
+std::vector<std::string> shape_names(const std::vector<std::shared_ptr<const Schema>>& shapes) {
+    std::vector<std::string> out;
+    for (const auto& s : shapes) {
+        out.push_back(s->name() + " v" + std::to_string(s->version()));
+    }
+    return out;
+}
+} // namespace
+
+TEST_CASE("the participants claim reads a holder this Kernel loaded by its image's declarations, "
+          "and a reload in place at the next read: the same id, the next incarnation, the life "
+          "standing") {
+    Switchboard bus;
+    Kernel kernel(bus, sbfx::fixture_admission());
+    const WeaveId claimant = loom::host::mount_participants(bus);
+    const sbfx::Registered reader =
+        sbfx::register_probe(bus, {ping_schema()}, 2, true, participants_reader_grant());
+    const auto read = [&] {
+        const SenseReading r = bus.observe_role_as(reader.id, loom::host::kParticipantsRole,
+                                                   loom::host::Participants::zen_name,
+                                                   loom::host::Participants::zen_version);
+        REQUIRE(r);
+        CHECK(r.by.author == claimant);
+        return from_value<loom::host::Participants>(*r.value);
+    };
+
+    const LoadResult live =
+        kernel.load("live", ZEN_SO_ACTIVATES, std::vector<std::string>{"live.role"});
+    REQUIRE_MESSAGE(live.ok, live.error);
+    const loom::host::Participants before = read();
+    const loom::host::Participant* row = before.holder_of("live.role");
+    REQUIRE(row != nullptr);
+    CHECK(row->id == static_cast<std::int64_t>(live.id.value));
+    CHECK(row->alive);
+    CHECK(shape_names(row->accepts) == shape_names(bus.accepted_schemas(live.id)));
+    CHECK(shape_names(row->emits) == shape_names(bus.emitted_schemas(live.id)));
+    const std::vector<std::string> accepts = shape_names(row->accepts);
+    CHECK(std::find(accepts.begin(), accepts.end(), "Ping v1") != accepts.end());
+    CHECK(std::find(accepts.begin(), accepts.end(),
+                    std::string(loom::Activated::zen_name) + " v1") != accepts.end());
+    const std::int64_t incarnation = row->incarnation;
+    const std::int64_t life = row->life;
+
+    const ReloadResult reloaded = kernel.reload_from("live", ZEN_SO_ACTIVATES_B);
+    REQUIRE_MESSAGE(reloaded.reloaded, reloaded.error);
+    const loom::host::Participants after = read();
+    REQUIRE(after.holder_of("live.role") != nullptr);
+    CHECK(after.holder_of("live.role")->id == static_cast<std::int64_t>(live.id.value));
+    CHECK(after.holder_of("live.role")->incarnation == incarnation + 1);
+    CHECK(after.holder_of("live.role")->incarnation ==
+          static_cast<std::int64_t>(bus.participant(live.id).incarnation));
+    CHECK(after.holder_of("live.role")->life == life);
+    CHECK(after.count == before.count);
+
+    REQUIRE(kernel.unload("live"));
+    CHECK(read().holder_of("live.role") == nullptr);
+    CHECK(read().find(live.id) == nullptr);
+}
+
+TEST_CASE("a loaded reader reads Loom's participants claim across the seam, as bytes, and a loaded "
+          "reader not granted it is refused") {
+    Switchboard bus;
+    Kernel kernel(bus, sbfx::fixture_admission());
+    const WeaveId claimant = loom::host::mount_participants(bus);
+    const LoadResult granted =
+        kernel.load("reader", ZEN_SO_SENSES, "", participants_reader_grant(Grant{}.allow_any()));
+    REQUIRE_MESSAGE(granted.ok, granted.error);
+    const LoadResult bare = kernel.load("bare", ZEN_SO_SENSES, "", Grant{}.allow_any());
+    REQUIRE_MESSAGE(bare.ok, bare.error);
+
+    bus.send(granted.id, Message(sense_probe(loom::host::kParticipantsRole)));
+    bus.send(bare.id, Message(sense_probe(loom::host::kParticipantsRole)));
+    bus.drain_until_idle();
+
+    const SenseReading host_read = bus.observe_role(loom::host::kParticipantsRole,
+                                                    loom::host::Participants::zen_name,
+                                                    loom::host::Participants::zen_version);
+    REQUIRE(host_read);
+    const auto table = from_value<loom::host::Participants>(*host_read.value);
+    CHECK(table.rows.size() == 3); // the claimant and the two readers
+    const SenseWindow w = sense_window(bus, granted.id);
+    CHECK(w.read_hp == static_cast<std::int64_t>(table.rows.size()));
+    CHECK(w.read_role == loom::host::kParticipantsRole);
+    CHECK(w.read_author == claimant.value);
+    CHECK_FALSE(w.read_personal);
+    CHECK(sense_window(bus, bare.id).read_hp == -1);
 }
 
 // ---- the silent dynamic seam (MSG-08) -------------------------------------

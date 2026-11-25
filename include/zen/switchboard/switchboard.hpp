@@ -8,6 +8,7 @@
 #include <zen/registry.hpp>
 #include <zen/schema.hpp>
 #include <zen/switchboard/asks.hpp>
+#include <zen/switchboard/derived_claims.hpp>
 #include <zen/switchboard/grant.hpp>
 #include <zen/switchboard/message.hpp>
 #include <zen/switchboard/pending_speech.hpp>
@@ -1199,6 +1200,7 @@ private:
     /// Message carried.
     friend struct DispatchRefusalProbe; // test-only counter boundary and retained-size witness
     friend struct CallDoor;             // the call unit: resolves, gates and tells the tap
+    friend struct DerivedClaims;        // the derived-claim unit: makes a role claim at each read
     std::uint64_t allocate_sequence();
     void capture_refusal_recipient(Envelope& env);
     /// Queue Loom's notice `value`, attested `kind`, for the exact recipient `to` at `life` and
@@ -1388,6 +1390,10 @@ private:
         /// then: the attribution a failure keeps.
         std::uint64_t published_by = 0;
         std::uint64_t published_revision = 0;
+        /// A derived claim's derivation and its declared shape; null for a stored claim, whose
+        /// value is `value`. Set only by `DerivedClaims::derive_role_claim_as`.
+        ClaimDerivation derive = nullptr;
+        std::shared_ptr<const Schema> derived_shape{};
     };
     /// key: (claimant id, shape name, shape version)
     using PersonalKey = std::tuple<std::uint64_t, std::string, std::uint32_t>;

@@ -123,6 +123,15 @@ Grant observer_of_health() {
 std::int64_t hp_of(const SenseReading& r) { return from_value<Health>(*r.value).hp; }
 std::string text_of(const SenseReading& r) { return from_value<Status>(*r.value).text; }
 
+/// A derivation: how many weaves the bus holds now, said as a Status. It can read nothing but
+/// the bus it is handed.
+Value weave_count(const Switchboard& bus) {
+    return to_value(Status{std::to_string(bus.list_weaves().size())});
+}
+
+/// A derivation whose value is not of the shape its claim declared.
+Value wrong_shape(const Switchboard&) { return to_value(Health{1}); }
+
 } // namespace
 
 TEST_SUITE("sense") {
@@ -659,6 +668,96 @@ TEST_CASE("Senses generate no bus traffic: claiming and observing enqueue nothin
     CHECK(events == 2);
     CHECK(bus.pending() == 0);
     CHECK(reader->seen.size() == 1);
+}
+
+// ---- a derived claim (SENSE-08) ---------------------------------------------
+
+TEST_CASE("a derived claim is made at each read from the bus's tables: a change shows with no "
+          "claim made since, and its revision counts its claims alone") {
+    Switchboard bus;
+    auto [aid, holder] = put<RoleHolder>(bus, Grant{}, "station");
+    (void)holder;
+    const SenseClaimResult made = DerivedClaims::derive_role_claim_as(bus, aid, "station", "Status", 1,
+                                                           &weave_count);
+    REQUIRE(made.accepted);
+    CHECK(made.revision == 1);
+
+    SenseReading one = bus.observe_role("station", "Status", 1);
+    REQUIRE(one);
+    CHECK(text_of(one) == "1");
+    CHECK(one.by.author == aid);
+    CHECK(one.by.role == "station");
+    CHECK(one.by.role_holder_is_current);
+
+    // The bus changes and nobody claims: the next read is made from the bus as it is then.
+    auto [bid, other] = put<RoleHolder>(bus, Grant{}, "");
+    (void)other;
+    SenseReading two = bus.observe_role("station", "Status", 1);
+    REQUIRE(two);
+    CHECK(text_of(two) == "2");
+    CHECK(two.by.revision == one.by.revision);
+    (void)bus.unregister_weave(bid);
+    CHECK(text_of(bus.observe_role("station", "Status", 1)) == "1");
+
+    // A gated reader reads it under its observe rule, as any claim; without one it learns nothing.
+    auto [rid, reader] = put<Reader>(bus, observer_of_health(), "");
+    (void)reader;
+    CHECK(text_of(bus.observe_role_as(rid, "station", "Status", 1)) == "2");
+    auto [nid, none] = put<Reader>(bus, Grant{}, "");
+    (void)none;
+    CHECK(bus.observe_role_as(nid, "station", "Status", 1).refusal ==
+          SenseRefusal::NotAuthorized);
+}
+
+TEST_CASE("a derived claim is refused for a role not held, a shape not declared and a missing "
+          "derivation, and nothing is stored; a made value of another shape is refused at its "
+          "read") {
+    Switchboard bus;
+    auto [aid, holder] = put<RoleHolder>(bus, Grant{}, "station");
+    (void)holder;
+    CHECK(DerivedClaims::derive_role_claim_as(bus, aid, "elsewhere", "Status", 1, &weave_count).why ==
+          SenseRefusal::RoleNotHeld);
+    CHECK(DerivedClaims::derive_role_claim_as(bus, aid, "", "Status", 1, &weave_count).why ==
+          SenseRefusal::RoleNotHeld);
+    CHECK(DerivedClaims::derive_role_claim_as(bus, aid, "station", "Health", 1, &weave_count).why ==
+          SenseRefusal::Undeclared);
+    CHECK(DerivedClaims::derive_role_claim_as(bus, aid, "station", "Status", 1, nullptr).why ==
+          SenseRefusal::Undeclared);
+    CHECK(bus.observe_role("station", "Status", 1).refusal == SenseRefusal::NoClaim);
+    CHECK(bus.observe_role("elsewhere", "Status", 1).refusal == SenseRefusal::NoClaim);
+    CHECK(bus.retained_claim_count() == 0);
+
+    // A derivation that makes another shape than the one declared: its reading is refused, and
+    // no value of the wrong shape reaches a reader.
+    REQUIRE(DerivedClaims::derive_role_claim_as(bus, aid, "station", "Status", 1, &wrong_shape).accepted);
+    const SenseReading wrong = bus.observe_role("station", "Status", 1);
+    CHECK(wrong.refusal == SenseRefusal::GateRefused);
+    CHECK_FALSE(wrong.value.has_value());
+}
+
+TEST_CASE("the claimant's ordinary claim replaces its derived claim, and the role's end ends it") {
+    Switchboard bus;
+    auto [aid, holder] = put<RoleHolder>(bus, Grant{}, "station");
+    holder->role = "station";
+    REQUIRE(DerivedClaims::derive_role_claim_as(bus, aid, "station", "Status", 1, &weave_count).accepted);
+
+    bus.send(aid, Message(to_value(ClaimAsRole{"fixed"})));
+    bus.drain_until_idle();
+    REQUIRE(holder->as_role_claim.accepted);
+    CHECK(holder->as_role_claim.revision == 2);
+    auto [bid, other] = put<RoleHolder>(bus, Grant{}, "");
+    (void)other;
+    (void)bid;
+    SenseReading stored = bus.observe_role("station", "Status", 1);
+    REQUIRE(stored);
+    CHECK(text_of(stored) == "fixed"); // a stored value now: the bus's change does not move it
+
+    REQUIRE(DerivedClaims::derive_role_claim_as(bus, aid, "station", "Status", 1, &weave_count).accepted);
+    CHECK(text_of(bus.observe_role("station", "Status", 1)) == "2");
+    CHECK(bus.retained_claim_count() == 1);
+    (void)bus.unregister_weave(aid);
+    CHECK(bus.observe_role("station", "Status", 1).refusal == SenseRefusal::NoClaim);
+    CHECK(bus.retained_claim_count() == 0);
 }
 
 } // TEST_SUITE

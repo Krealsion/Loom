@@ -207,6 +207,37 @@ security-relevant: "no participant can forge an author" is true and useful; "no
 mechanism exists" would be false, and a reader auditing provenance needs to know
 that a host-authored claim is representable.
 
+## A claim Loom derives at each read
+
+A claim can be **derived**: its claimant names, through the host's door
+`DerivedClaims::derive_role_claim_as(bus, claimant, role, shape, version,
+derive)`
+([`zen/switchboard/derived_claims.hpp`](../../include/zen/switchboard/derived_claims.hpp)),
+a derivation, and Loom makes the value at each read by calling it on the bus,
+rather than storing one
+([SENSE-08](../laws/sense-laws.md#sense-08--a-derived-claim-is-made-at-each-read-and-is-never-behind-what-it-is-made-of)).
+For a fact the bus itself holds -- who holds a role, which incarnation stands
+behind an id -- a stored claim would be a second copy of the table, kept level
+by re-claiming after every change that could move it, and a change nobody
+re-claimed after would be read as stale truth. A derived claim has no copy to
+fall behind: a read after a change is made from the bus that change left.
+
+The derivation is `Value (*)(const Switchboard&)`: a function of the bus alone,
+which can capture nothing and change nothing. Everything else is a role
+claim's: the claimant holds the role and declared the shape in `Claims<...>`,
+or it is refused and nothing is stored; a reader needs its observe rule; the
+role's end drops it, and a move in place leaves it stamped
+`role_holder_is_current == false`; the claimant's next ordinary claim of the
+shape replaces it. Its revision counts its claims, never the bus's changes. A
+weave cannot derive: `Mail` has no spelling for it, and a loaded artifact
+reaches only the gated claim doors. A reading's made value that is not of the
+declared shape is refused `GateRefused`.
+
+Loom's participants claim is one: who is on the bus, the roles each holds,
+whether it is alive, at which life and incarnation, and what it accepts and
+declares it emits, read by a weave granted it inside its handler
+([reading who is on the bus](capabilities.md#reading-who-is-on-the-bus)).
+
 ## Lifetime
 
 | Key | Replaced by | Erased when |
@@ -240,7 +271,12 @@ in both directions, as it does for every door that needs a verified identity.
 
 Suite `sense` (ordering, authorship and its two generation facts, role movement,
 personal and role keys, the bounded repository, authorization, discovery, the
-reading-owns-its-value case, the no-bus-traffic case); suite `kernel` (role claim across a real committed
-admission, the sealed candidate refused, dynamic parity); suite `handoff`
-(Senses meeting an authored handoff); suite `joint` (joint publication, native
-and loaded).
+reading-owns-its-value case, the no-bus-traffic case, a derived claim made at
+each read); suite `kernel` (role claim across a real committed admission, the
+sealed candidate refused, dynamic parity, and Loom's participants claim over a
+loaded holder, a reload in place and a loaded reader); suite `handoff` (Senses
+meeting an authored handoff); suite `joint` (joint publication, native and
+loaded); suite `participants` (Loom's participants claim, derived at each read:
+a role moved, a weave replaced, a participant ended, a native holder, a weave
+holding no role, a hand-built weave, a reader without the grant, another weave's
+same-named claim, the bound).

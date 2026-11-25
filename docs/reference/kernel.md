@@ -78,6 +78,19 @@ is live now, whether this Kernel loaded it, its life and incarnation, and its
 roles. All three read the bus and change nothing, and `query_capability(control)`
 grants them without the load capability.
 
+**No question lists the participants; Loom's participants claim does.** A reader
+that needs every participant on the bus -- each one's id, roles, whether it is
+alive, its life and incarnation, and what it accepts and declares it emits --
+reads the Sense claimed as the role `loom.participants`
+([reading who is on the bus](capabilities.md#reading-who-is-on-the-bus)). It is
+derived from the same live tables at each read
+([SENSE-08](../laws/sense-laws.md#sense-08--a-derived-claim-is-made-at-each-read-and-is-never-behind-what-it-is-made-of)),
+so it is never behind them, as these answers never are; and it is read inside the
+reader's handler, where a question would wait for its answer. `ListLibraries` is
+the load capability's and names only this Kernel's libraries, by artifact name;
+the bridge's `ListWeaves` is a wire operation for an attached client, not a
+question a weave can ask.
+
 ## Answers from the control door and the Weave Manager
 
 The control door (`ControlWeave`, `zen/kernel/control.hpp`) answers each operation's asker, the

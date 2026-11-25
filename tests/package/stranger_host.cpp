@@ -10,6 +10,7 @@
 #include "witness_protocol.hpp"
 
 #include <zen/gate.hpp>
+#include <zen/host/participants.hpp>
 #include <zen/kernel/admission.hpp>
 #include <zen/kernel/kernel.hpp>
 #include <zen/registry.hpp>
@@ -331,6 +332,35 @@ int main() {
                       "a DISCOVERED shape is still refused to an asker not granted to send it");
             }
         }
+    }
+
+    // ---- who is on the bus, from the package alone --------------------------------
+    // Loom's participants claim, mounted and read by a reader granted to observe it: the loaded
+    // weave's row is the bus's record of its image, beside the native collector's.
+    {
+        const loom::WeaveId claimant = loom::host::mount_participants(bus);
+        loom::Grant observe;
+        loom::host::allow_observe_participants(observe);
+        const loom::WeaveId reader = loom::mount_granted<Collector>(bus, observe);
+        const loom::SenseReading r = bus.observe_role_as(
+            reader, loom::host::kParticipantsRole, loom::host::Participants::zen_name,
+            loom::host::Participants::zen_version);
+        check(r && r.by.author == claimant,
+              "a granted reader reads Loom's participants claim, made by its claimant");
+        if (r) {
+            const auto table = loom::from_value<loom::host::Participants>(*r.value);
+            const loom::host::Participant* row = table.find(loaded.id);
+            check(row != nullptr && row->alive &&
+                      loom::host::Participants::lists(row->accepts,
+                                                      *loom::schema_of<witness::Ping>()),
+                  "the loaded weave's row names what its image accepts");
+            check(table.find(collector_id) != nullptr, "...beside the native collector's row");
+        }
+        check(bus.observe_role_as(collector_id, loom::host::kParticipantsRole,
+                                  loom::host::Participants::zen_name,
+                                  loom::host::Participants::zen_version)
+                      .refusal == loom::SenseRefusal::NotAuthorized,
+              "a reader not granted the claim is refused");
     }
 
     // ---- unload ------------------------------------------------------------------

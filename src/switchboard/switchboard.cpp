@@ -926,11 +926,11 @@ SenseReading Switchboard::observe(WeaveId author, std::string_view shape_name,
     if (it == personal_claims_.end()) {
         return SenseReading{SenseRefusal::NoClaim, {}, std::nullopt};
     }
-    SenseReading out;
-    out.refusal = SenseRefusal::None;
-    out.by = authorship_of(it->second, std::string{}, std::string(shape_name), shape_version);
-    out.value = it->second.value; // BY VALUE: the reader owns its copy, always
-    return out;
+    // BY VALUE: the reader owns its copy, always.
+    return SenseReading{SenseRefusal::None,
+                        authorship_of(it->second, std::string{}, std::string(shape_name),
+                                      shape_version),
+                        it->second.value};
 }
 
 SenseReading Switchboard::observe_role(std::string_view role, std::string_view shape_name,
@@ -940,11 +940,12 @@ SenseReading Switchboard::observe_role(std::string_view role, std::string_view s
     if (it == role_claims_.end()) {
         return SenseReading{SenseRefusal::NoClaim, {}, std::nullopt};
     }
-    SenseReading out;
-    out.refusal = SenseRefusal::None;
-    out.by = authorship_of(it->second, std::string(role), std::string(shape_name), shape_version);
-    out.value = it->second.value;
-    return out;
+    SenseAuthorship by =
+        authorship_of(it->second, std::string(role), std::string(shape_name), shape_version);
+    if (it->second.derive != nullptr) { // made at this read, never stored (SENSE-08)
+        return DerivedClaims::made(*this, it->second.derive, *it->second.derived_shape, by);
+    }
+    return SenseReading{SenseRefusal::None, std::move(by), it->second.value};
 }
 
 SenseReading Switchboard::observe_as(WeaveId reader, WeaveId author, std::string_view shape_name,
