@@ -6,9 +6,9 @@
 // Derived claims: a role claim whose value Loom makes at each read, from the bus's live tables,
 // by a derivation the claim named, so no read is ever behind the tables it is made from: there is
 // no stored value to fall behind. Made only through the host's door below, which takes the
-// Switchboard no message can hand a weave; `Mail` has no spelling for it. A unit the bus consults,
-// so the Switchboard's own file and class do not take the subject on.
-// SENSE-08; docs/laws/sense-laws.md
+// Switchboard no message can hand a weave; `Mail` has no spelling for it, so no weave derives a
+// claim (SENSE-08). A unit the bus consults, so the Switchboard's own file and class do not take
+// the subject on.
 
 #include <zen/schema.hpp>
 #include <zen/switchboard/message.hpp>
@@ -26,6 +26,7 @@ class Switchboard;
 /// function and nothing it could capture, so the value has no source but the bus.
 using ClaimDerivation = Value (*)(const Switchboard&);
 
+/// The derived-claim door and what the bus asks of it at a read.
 struct DerivedClaims {
     /// Claim as the role `as_role` the value `derive` makes at each read. The host's door, as
     /// `Switchboard::role_claim_as` is, and checked as that is: the claimant is live and holds the

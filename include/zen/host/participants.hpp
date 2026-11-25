@@ -28,8 +28,8 @@
 // (`DerivedClaims::derive_role_claim_as`), which takes the Switchboard no message can hand a weave.
 // While its claimant holds the role, no other weave can: a role has one holder, so a load naming it
 // is refused. Another weave's claim of a shape named `zen.Participants`, personal or as a role of
-// its own, is under another key, and a read of Loom's role never returns it.
-// docs/reference/kernel.md#role-truth
+// its own, is under another key, and a read of Loom's role never returns it. Where it stands
+// among the bus's other facts is docs/reference/kernel.md#role-truth.
 
 #include <zen/gate.hpp>
 #include <zen/serialize.hpp>
