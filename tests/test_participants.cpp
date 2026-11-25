@@ -394,6 +394,42 @@ TEST_CASE("a registration naming Loom's participants role is refused on a bus wi
     CHECK(bus.role_holder(kParticipantsRole) == again);
 }
 
+TEST_CASE("the mount door binds only Loom's own role, refuses it while it is held, and leaves nothing "
+          "registered when the claim cannot be made") {
+    Rig r;
+    const std::size_t before = r.bus.list_weaves().size();
+    const auto probe = [] {
+        return std::make_unique<ProbeWeave>(std::vector<std::shared_ptr<const Schema>>{});
+    };
+    CHECK_THROWS_AS(DerivedClaims::mount_claimant(r.bus, probe(), Grant{}, "station",
+                                                  Participants::zen_name,
+                                                  Participants::zen_version, &participants_now),
+                    std::invalid_argument);
+    CHECK_FALSE(r.bus.role_holder("station").valid());
+
+    // A second mount while the claimant holds the role: refused before anything is registered, so
+    // the claimant keeps the role, and its claim still reads as the claimant's.
+    CHECK_THROWS_AS(mount_participants(r.bus), std::invalid_argument);
+    CHECK(r.bus.role_holder(kParticipantsRole) == r.loom);
+    CHECK(r.bus.list_weaves().size() == before);
+    CHECK(row_of(r.look().holder_of(kParticipantsRole)).id ==
+          static_cast<std::int64_t>(r.loom.value));
+    CHECK(r.reader.second->reading.by.author == r.loom);
+
+    // A claimant that does not declare the shape: the claim is refused, and the door unregisters
+    // what it registered, so the role is free again and the bus as it was.
+    REQUIRE(r.bus.unregister_weave(r.loom));
+    const std::size_t without = r.bus.list_weaves().size();
+    CHECK_THROWS_AS(DerivedClaims::mount_claimant(r.bus, probe(), Grant{}, kParticipantsRole,
+                                                  Participants::zen_name,
+                                                  Participants::zen_version, &participants_now),
+                    std::logic_error);
+    CHECK_FALSE(r.bus.role_holder(kParticipantsRole).valid());
+    CHECK(r.bus.list_weaves().size() == without);
+    const WeaveId again = mount_participants(r.bus);
+    CHECK(r.bus.role_holder(kParticipantsRole) == again);
+}
+
 TEST_CASE("Loom's participants role is never moved off its claimant: a commit, an admission and a "
           "prepared replacement naming it are refused, and the claimant still holds it") {
     Rig r;
