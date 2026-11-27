@@ -136,7 +136,6 @@ kMaxFieldBytes                  src/detail/binary.hpp                     kMaxFi
 kMaxDecodedCells                include/zen/serialize.hpp                 kMaxDecodedCells
 kMaxBinaryDepth                 src/detail/binary.hpp                     kMaxBinaryDepth
 kMaxTypeDepth                   include/zen/kernel/schema_codec.hpp       kMaxTypeDepth
-kMaxUiDepth                     include/zen/ui/component.hpp              kMaxUiDepth
 
 # ---- the Python session package
 Connection.MAX_OPEN             python/loom_session/client.py             MAX_OPEN

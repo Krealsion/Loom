@@ -5,7 +5,7 @@
 #define ZEN_CONSOLE_TUI_RENDER_HPP
 
 // The TUI renderer + key mapping, shared by the in-process console (console_tui.cpp) and the remote
-// console (console_remote.cpp). It lays the renderer-agnostic Widget tree out to terminal cells and
+// console (console_remote.cpp). It lays the console's Widget tree out to terminal cells and
 // maps raw key bytes to semantic Actions — the ONLY place positions, cells, and raw keys exist. Both
 // frontends reuse it unchanged; they differ ONLY in transport (a local Switchboard vs a socket) and
 // in their I/O loop (a synchronous read vs an event-driven multiplexer over {input, socket}). This is
@@ -13,13 +13,12 @@
 
 #include "terminal.hpp"
 
-#include <zen/ui/tree.hpp>
+#include <zen/console/tree.hpp>
 
 namespace loom {
 
 /// Lay `root` out into a `rows`x`cols` character grid (a banner on the top row) and write the
-/// frame through the terminal backend (output behind the seam). The pixel projection lays out
-/// the same tree.
+/// frame through the terminal backend (output behind the seam).
 void tui_draw(const Widget& root, int rows, int cols, TerminalBackend& term);
 
 /// Map one raw byte (already read; 0..255) to a semantic InputEvent. Returns false to signal quit

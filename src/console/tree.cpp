@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Joshua DeMoss
 
-// The tree vocabulary's mechanics: the widget named-constructors, the stable spellings, and the
+// The console's tree mechanics: the widget named-constructors, the stable spellings, and the
 // headless outline renderer (the renderer-agnosticism proof). NOTHING here knows about cells,
-// pixels, coordinates, termios, or any windowing library — layout is a renderer's job alone,
-// and which renderers exist is not this file's business. The vocabulary is Loom's; the console
-// is one consumer of it.
+// coordinates or termios: layout is the renderer's job alone.
 
-#include <zen/ui/tree.hpp>
+#include <zen/console/tree.hpp>
 
 #include <cstdint>
 #include <optional>
@@ -88,16 +86,7 @@ Widget field(std::string prompt, std::string value, std::string hint, bool focus
     return w;
 }
 
-Widget slot(std::string slot_name, std::string accepts, std::vector<Widget> placeholder) {
-    Widget w;
-    w.kind = WidgetKind::Slot;
-    w.slot_name = std::move(slot_name);
-    w.slot_accepts = std::move(accepts);
-    w.children = std::move(placeholder); // the design-time preview, rendered until bound
-    return w;
-}
-
-// ---- Stable spellings (the vocabulary's public contract; also the wire spellings) ----
+// ---- Stable spellings, as the outline prints them ----
 
 const char* name_of(WidgetKind k) noexcept {
     switch (k) {
@@ -115,23 +104,7 @@ const char* name_of(WidgetKind k) noexcept {
         return "Text";
     case WidgetKind::Field:
         return "Field";
-    case WidgetKind::Slot:
-        return "Slot";
     } // no default: a new WidgetKind must be handled here (-Wswitch under -Werror)
-    return "?";
-}
-
-const char* name_of(Overflow o) noexcept {
-    switch (o) {
-    case Overflow::Grow:
-        return "Grow";
-    case Overflow::Scroll:
-        return "Scroll";
-    case Overflow::Wrap:
-        return "Wrap";
-    case Overflow::Truncate:
-        return "Truncate";
-    } // no default (exhaustive by -Wswitch under -Werror)
     return "?";
 }
 
@@ -140,8 +113,8 @@ const char* name_of(Overflow o) noexcept {
 namespace {
 
 // Walk the tree into an indented outline. DELIBERATELY ignores `weight` and `overflow` (hints a
-// renderer resolves, not tree content) — but DOES print interaction intent, bindings, routes,
-// and slots: those are the tree's MEANING, so the outline proves they are content, not medium.
+// renderer resolves, not tree content) — but DOES print interaction intent: that is the tree's
+// MEANING, so the outline proves it is content, not medium.
 // The label per node carries the salient semantic content so a test can assert structure.
 void outline_into(const Widget& node, int depth, std::string& out) {
     for (int i = 0; i < depth; ++i) {
@@ -165,29 +138,17 @@ void outline_into(const Widget& node, int depth, std::string& out) {
     case WidgetKind::Field:
         out += " " + node.prompt + " value=\"" + node.value + "\" hint=\"" + node.hint + "\"";
         break;
-    case WidgetKind::Slot:
-        out += " \"" + node.slot_name + "\" accepts=" + node.slot_accepts;
-        break;
     case WidgetKind::VStack:
     case WidgetKind::HStack:
         break;
     } // no default (exhaustive by -Wswitch)
 
-    // Interaction intent + wiring read as part of the outline: "a list, of rows, activatable".
+    // Interaction intent reads as part of the outline: "a list, of rows, activatable".
     if (node.activatable) {
         out += " (activatable)";
     }
     if (node.editable) {
         out += " (editable)";
-    }
-    if (node.reorderable) {
-        out += " (reorderable)";
-    }
-    if (!node.from_field.empty()) {
-        out += " from=" + node.from_field;
-    }
-    if (!node.route_to.empty()) {
-        out += " -> " + node.route_to;
     }
     out += "\n";
 

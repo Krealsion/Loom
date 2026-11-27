@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Joshua DeMoss
 
-// The shared TUI renderer: it lays out the renderer-agnostic Widget tree (intent and
-// relationship) into a character grid, the only place positions, sizes and cells exist, and maps
-// raw key bytes to semantic Actions. The in-process and remote consoles both use it; the pixel
-// projection (zen/ui/pixel.hpp) lays the same tree out to pixels. Hand-rolled ANSI, no ncurses;
+// The shared TUI renderer: it lays out the console's Widget tree (intent and relationship) into a
+// character grid, the only place positions, sizes and cells exist, and maps raw key bytes to
+// semantic Actions. The in-process and remote consoles both use it. Hand-rolled ANSI, no ncurses;
 // all terminal control lives behind the TerminalBackend seam.
 
 #include "tui_render.hpp"
@@ -187,15 +186,6 @@ void layout(const Widget& node, Rect area, Grid& grid) {
         if (area.height > 1 && !node.hint.empty()) {
             grid.put(area.top + 1, area.left, "  (" + node.hint + ")", area.width);
         }
-        break;
-    }
-    case WidgetKind::Slot: {
-        // A typed open hole: a marker line, then the design-time placeholder preview beneath it
-        // (a component previews with STRESS values until the slot is bound — see component.hpp).
-        std::string marker = "[slot " + node.slot_name + ": accepts " + node.slot_accepts + "]";
-        grid.put(area.top, area.left, marker, area.width);
-        layout_children_vertically(
-            node, Rect{area.top + 1, area.left, area.height - 1, area.width}, grid);
         break;
     }
     } // no default (exhaustive by -Wswitch under -Werror)

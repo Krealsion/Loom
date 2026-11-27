@@ -42,8 +42,6 @@ set(ZEN_TEST_SOURCES_PORTABLE
     test_console.cpp
     test_history_recorder.cpp
     test_history_logger.cpp
-    test_component.cpp
-    test_pixel.cpp
     test_bridge.cpp
     test_host_policy.cpp
     test_host_input.cpp
@@ -303,7 +301,7 @@ target_include_directories(zen-tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src/console) # tui_render.hpp / terminal.hpp for the tui_map_key pin
 
 target_link_libraries(zen-tests
-    PRIVATE loom zen-switchboard zen-ui zen-ui-pixel zen-console zen-history zen-bridge zen-bridge-console zen-tui
+    PRIVATE loom zen-switchboard zen-console zen-history zen-bridge zen-bridge-console zen-tui
             zen-host-boot zen-warnings zen-sanitize)
 if(TARGET zen-kernel)
     target_link_libraries(zen-tests PRIVATE zen-kernel)
