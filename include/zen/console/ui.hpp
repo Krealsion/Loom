@@ -4,15 +4,14 @@
 #ifndef ZEN_CONSOLE_UI_HPP
 #define ZEN_CONSOLE_UI_HPP
 
-// The console's own interface as data: it emits itself as Loom's semantic widget tree
-// (zen/ui/tree.hpp, which the console consumes and does not own). This header holds what is the
-// console's: its presentation state (UiState), the engine-produced guidance, the tree built from
-// the engine's public data, and the ConsoleUi controller that maps semantic Actions onto engine
-// calls. All of it is testable with no terminal; the terminal renderer is one skin over the
-// tree, not a privileged one, and a second skin needs nothing added here.
+// The console's own interface as data: it emits itself as its widget tree (zen/console/tree.hpp).
+// This header holds the rest of it: its presentation state (UiState), the engine-produced guidance,
+// the tree built from the engine's public data, and the ConsoleUi controller that maps semantic
+// Actions onto engine calls. All of it is testable with no terminal; the terminal renderer is one
+// skin over the tree, not a privileged one, and a second skin needs nothing added here.
 
 #include <zen/console/console.hpp>
-#include <zen/ui/tree.hpp>
+#include <zen/console/tree.hpp>
 
 #include <optional>
 #include <string>

@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Joshua DeMoss
 
-// UI as data, the console-side implementation: the engine-side guidance and tree
-// emission (renderer-agnostic, built from the engine's public domain data) and the renderer-
-// agnostic UI controller. The tree vocabulary itself (constructors, spellings, the outline
-// proof) lives in zen/ui (src/ui/tree.cpp) — the console consumes it. NOTHING here knows about
-// cells, pixels, coordinates, or termios — layout is the renderer's job alone.
+// UI as data, the console-side implementation: the engine-side guidance and tree emission
+// (renderer-agnostic, built from the engine's public domain data) and the renderer-agnostic UI
+// controller. The tree's own mechanics (constructors, spellings, the outline proof) are
+// src/console/tree.cpp. NOTHING here knows about cells, pixels, coordinates, or termios — layout is
+// the renderer's job alone.
 
 #include <zen/console/ui.hpp>
 

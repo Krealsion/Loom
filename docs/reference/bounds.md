@@ -508,8 +508,7 @@ sheds participants is whole again at the next read.
 ## Gate / serialization
 
 Depth and size caps make hostile input total (see
-`values-and-admission` and the fuzz suite); the UI vocabulary pins tree depth
-≤ <!-- value kMaxUiDepth -->256<!-- /value --> (`kMaxUiDepth`) and per-kind child arity.
+`values-and-admission` and the fuzz suite).
 
 | Bound | Value | Scope | Overflow behavior |
 |---|---|---|---|

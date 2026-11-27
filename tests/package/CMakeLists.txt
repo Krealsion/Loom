@@ -75,14 +75,14 @@ add_executable(witness-macros macro_surface.cpp)
 target_link_libraries(witness-macros PRIVATE loom::core)
 
 # ---- 2. the terminal core, reached the way a second presentation reaches it -------
-# Links loom::terminal and loom::switchboard and nothing else: no console, UI vocabulary or
-# renderer, none of which is exported.
+# Links loom::terminal and loom::switchboard and nothing else: no console, its tree or renderer,
+# none of which is exported.
 add_executable(witness-terminal stranger_terminal.cpp)
 target_link_libraries(witness-terminal PRIVATE loom::terminal loom::switchboard loom::core)
 
 # ---- 2b. the history pair, reached the way an application outside this repository reaches it --
 # Links loom::history, loom::switchboard and loom::core and nothing else: the Recorder and the
-# Logger are reachable, and no console, UI vocabulary or terminal is.
+# Logger are reachable, and no console, console tree or terminal is.
 add_executable(witness-history stranger_history.cpp)
 target_link_libraries(witness-history PRIVATE loom::history loom::switchboard loom::core)
 

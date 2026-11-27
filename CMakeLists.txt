@@ -272,33 +272,6 @@ add_library(loom::isolation ALIAS zen-isolation)
 
 endif() # NOT WIN32 (isolation)
 
-# ---- The UI vocabulary (zen-ui): the semantic widget tree, in its own target -----------
-# The renderer-agnostic widget tree and the component vocabulary (typed slots serialized as gated
-# Values, zen.ui.*). It depends only on the core, never on the console, the bus or a renderer: the
-# console emits this tree, the TUI projects it, and the vocabulary owns no presentation.
-add_library(zen-ui
-    src/ui/tree.cpp
-    src/ui/component.cpp)
-target_include_directories(zen-ui
-    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
-target_compile_features(zen-ui PUBLIC cxx_std_20)
-target_link_libraries(zen-ui
-    PUBLIC  loom zen-sanitize
-    PRIVATE zen-warnings)
-add_library(loom::ui ALIAS zen-ui)
-
-# The PIXEL projection's logic — one renderer's layout brain (tree -> draw commands). It owns
-# no window, no font library and no display: text metrics are INJECTED, so the layout is a pure
-# function of tree + metrics and is provable in the ordinary suite on every platform this
-# repository builds on. EXECUTING the commands is a presentation's job, and no presentation
-# that does so lives here — which is the point: the brain outlives any one skin.
-add_library(zen-ui-pixel src/ui/pixel.cpp)
-target_compile_features(zen-ui-pixel PUBLIC cxx_std_20)
-target_link_libraries(zen-ui-pixel
-    PUBLIC  zen-ui zen-sanitize
-    PRIVATE zen-warnings)
-add_library(loom::ui-pixel ALIAS zen-ui-pixel)
-
 # ---- The terminal core: an ordinary participant a presentation can drive --------
 # A TerminalSession holds no Switchboard, no tap, no renderer and no frontend: an ordinary weave
 # with one identity, one grant, a supplied vocabulary and its own transcript, over the typed
@@ -343,10 +316,21 @@ add_library(loom::history ALIAS zen-history)
 # Installed for a weave to link, as zen-terminal is (LOOM_PACKAGE_LIBRARIES).
 loom_weave_build_contract(zen-history)
 
-# ---- Console: the engine, then a terminal ------------
+# ---- Console: its tree, the engine, then a terminal ------------
+# The console's interface as a tree of intent and relationship (zen/console/tree.hpp), in a target
+# of its own that depends only on the standard library, so the terminal renderer below links the
+# tree and never the engine.
+add_library(zen-console-tree src/console/tree.cpp)
+target_include_directories(zen-console-tree
+    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+target_compile_features(zen-console-tree PUBLIC cxx_std_20)
+target_link_libraries(zen-console-tree
+    PUBLIC  zen-sanitize
+    PRIVATE zen-warnings)
+
 # A message-native bus participant (discover, compose, gate-send, receive replies into an indexed
 # buffer), built frontend-agnostic so any frontend reuses the engine. It emits its own interface
-# as the zen-ui tree (ui.cpp), a consumer of the vocabulary and not its owner.
+# as its tree (ui.cpp).
 add_library(zen-console
     src/console/console.cpp
     src/console/ui.cpp)
@@ -356,7 +340,7 @@ target_compile_features(zen-console PUBLIC cxx_std_20)
 # ...and zen-terminal, for the one typed composer both use. The dependency runs this way only:
 # the terminal core knows nothing about a console, a tap or a UI tree.
 target_link_libraries(zen-console
-    PUBLIC  loom zen-switchboard zen-terminal zen-ui zen-sanitize
+    PUBLIC  loom zen-switchboard zen-terminal zen-console-tree zen-sanitize
     PRIVATE zen-warnings)
 add_library(loom::console ALIAS zen-console)
 
@@ -368,7 +352,7 @@ target_link_libraries(zen-console-term
 
 # The shared TUI renderer + the TerminalBackend seam, as a small library BOTH consoles link: the
 # in-process TUI and the remote console differ ONLY in transport + I/O loop, never in rendering. The
-# renderer (tui_render.cpp) lays the SAME renderer-agnostic widget tree out to cells — the only place
+# renderer (tui_render.cpp) lays the console's widget tree out to cells — the only place
 # positions and cells exist; the render/controller logic lives in zen-console so it stays headlessly
 # testable. All platform terminal control lives behind the seam (terminal.hpp): a POSIX backend on
 # non-Windows, a Win32 Console backend on Windows; make_terminal() is the only per-platform symbol.
@@ -378,10 +362,10 @@ if(WIN32)
 else()
     target_sources(zen-tui PRIVATE src/console/terminal_posix.cpp)
 endif()
-# The renderer consumes the VOCABULARY, not the console — the one-way dependency every
-# projection of this tree owes. (The console frontends link zen-tui AND zen-console side by side.)
+# The renderer consumes the TREE, not the console engine: a one-way dependency. (The console
+# frontends link zen-tui AND zen-console side by side.)
 target_link_libraries(zen-tui
-    PUBLIC  zen-ui zen-sanitize
+    PUBLIC  zen-console-tree zen-sanitize
     PRIVATE zen-warnings)
 
 # The first user seat, running: a host that boots a weaver's console, a Weaver
@@ -624,9 +608,8 @@ loom_program_code_page()
 # ---- The consumer surface: install and export (find_package(loom)) ----------------------
 # Exported: only the substrate that is Loom's for good and that a consumer outside this repository
 # needs: the core, the switchboard, the terminal core, history, the bridge crossing and, where
-# built, the kernel. The UI vocabulary, the console, the TUI and isolation stay home, so a
-# consumer that leans on one fails on the default path. The UI pair is a relational tree, not an
-# application canvas's model (no authored placement or absolute extent).
+# built, the kernel. The console with its tree, the TUI and isolation stay home, so a consumer
+# that leans on one fails on the default path.
 
 # EXPORT_NAME gives the installed targets the same spellings as the in-tree ALIASes (loom::core,
 # loom::switchboard), so a build from source and a build against the package resolve the same
@@ -657,7 +640,7 @@ if(LOOM_INSTALL)
     # targets, and LINK_ONLY keeps Loom's -Werror and -Wconversion off a consumer's sources.
     # zen-terminal, zen-history, zen-bridge and zen-host-policy qualify on their contents:
     # participant semantics, a history lens, a crossing and a host's standing decisions, with no
-    # console, UI vocabulary or renderer in any of them.
+    # console or renderer in any of them.
     install(TARGETS ${LOOM_PACKAGE_LIBRARIES} zen-sanitize zen-warnings
         EXPORT loomTargets
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -665,8 +648,8 @@ if(LOOM_INSTALL)
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
     # The one installed executable, not in the export set: a consumer links libraries, not a
-    # host. The libraries it links and Loom does not export (zen-console, zen-ui) stay unexported;
-    # a static host binary carries its own copy.
+    # host. The libraries it links and Loom does not export (zen-console, zen-console-tree) stay
+    # unexported; a static host binary carries its own copy.
     install(TARGETS loom-host RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
     # THE SESSION TOOLING, WHERE IT WAS BUILT: the run manager and, beside it, the Python runtime
@@ -714,8 +697,7 @@ if(LOOM_INSTALL)
             PATTERN "*.h"
             PATTERN "remote_console.hpp" EXCLUDE
             PATTERN "console"   EXCLUDE
-            PATTERN "isolation" EXCLUDE
-            PATTERN "ui"        EXCLUDE)
+            PATTERN "isolation" EXCLUDE)
 
     install(EXPORT loomTargets
         FILE loomTargets.cmake
