@@ -6,7 +6,8 @@ Zengine's Timer, are defined in their own repositories.
 
 | Term | Meaning | Normative home |
 |---|---|---|
-| **Loom** | the substrate: gate, bus, kernel, isolation, console. One `loom::` namespace. The Loom is everyone's | [reference/](reference/) |
+| **Loom** | the substrate: gate, bus, kernel, isolation, console. The Loom is everyone's | [reference/](reference/) |
+| **`loom::`** | Loom's one root namespace. A few areas are nested in it, each named after the headers it holds: `loom::host` for `zen/host/`, `loom::observe`, `loom::session` and `loom::runs` for theirs, and `loom::link` for `zen/bridge/link.hpp` | [the installed headers](../include/zen/) |
 | **weave** | the unit of authorship-that-composes: a bus participant, native or loaded, whole and part at once | [guides/writing-a-weave.md](guides/writing-a-weave.md) |
 | **weaver (human)** | the person who writes and runs weaves and drives a host's console; the weave a host treats as that person is the **weaver seat**. Persistent human identity remains separate from runtime authority | [reference/known-seams.md](reference/known-seams.md#deferred-with-intent-the-standing-trigger-map) |
 | **`loom::Weaver`** | an ordinary policy delegate, host-appointed to administer one session's message authority within a ceiling; the session performs its own actions | [reference/weaver.md](reference/weaver.md) |
@@ -22,6 +23,8 @@ Zengine's Timer, are defined in their own repositories.
 | **answer** | the one authorized response to an ask; provenance is a delivery fact (`answers_ask()`) | [laws/answer-authority-laws.md](laws/answer-authority-laws.md) |
 | **deferred answer** | the same one right, retained by the exact incarnation that earned it; bounded Loom-wide (64) | [laws/answer-authority-laws.md](laws/answer-authority-laws.md) (ANS-02) |
 | **correlation** | a conversation-naming number; identifies, never authenticates | [laws/answer-authority-laws.md](laws/answer-authority-laws.md) (ANS-05) |
+| **call** | a weave asking, inside its own turn, for what a function another weave provides makes of one argument: `mail.call<Out>(role, In{...})`, resolved to the role's holder at that moment. It needs a call rule, delivers nothing, and ends with the answer or a `loom::CallRefusal` | [reference/messaging.md](reference/messaging.md#calls-a-function-of-its-argument-alone) (MSG-14) |
+| **provided function** | a function a weave offers others to call, named by its argument's shape: `Provides<In>` beside a static `Out provide(const In&)`, held by the bus as a `loom::ProvidedFunction`. Handed the argument the gate admitted and nothing else: no instance, no bus, no claim | [reference/messaging.md](reference/messaging.md#calls-a-function-of-its-argument-alone) (MSG-14) |
 | **life / incarnation** | two counters: a life ends at death; an incarnation ends at code replacement behind a stable id | [reference/lifecycle.md](reference/lifecycle.md) |
 | **lifecycle authority** | the host-minted, board-relative capability to attest lifecycle facts | [laws/lifecycle-laws.md](laws/lifecycle-laws.md) (LIFE-04) |
 | **`zen.Activated`** | Loom's authenticated statement that a new incarnation committed at this address — exactly that | [laws/lifecycle-laws.md](laws/lifecycle-laws.md) (LIFE-01) |

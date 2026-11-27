@@ -5,10 +5,11 @@ owner: the law, reference page, guide, root document or check that states the ru
 reasons for it, which this page never restates. [Taking an issue](taking-an-issue.md) is the path
 from an issue to a pull request, and [the guide](../../CONTRIBUTING.md) holds the build rules.
 
-Each section belongs to one area of the repository and stands alone, naming its own owners, so
-that a section can move into its area's own document. A section opens with its owners: the laws,
-the reference pages, and the main suites and other CTest entries that witness it, which
-[CONTEXT.md](../CONTEXT.md) lists in full. A suite runs alone with
+Each section belongs to one area of the repository and stands alone, naming its own owners, so that
+a section can move into its area's own document. The last, [designing a program on
+Loom](#designing-a-program-on-loom), is for a program built on Loom, here or in another repository.
+A section opens with its owners: the laws, the reference pages, and the main suites and other CTest
+entries that witness it, which [CONTEXT.md](../CONTEXT.md) lists in full. A suite runs alone with
 `build/tests/zen-tests --test-suite=<suite>`, and any entry through the lane with
 `-DZEN_SELECT='^<entry>$'`.
 
@@ -284,3 +285,41 @@ Laws POP-01 to POP-05 in [population](../laws/population-laws.md); the manifests
   [Comments and documents](../../CONTRIBUTING.md#comments-and-documents)
 - **What no check can see is a reviewer's**: history told in other words, and a comment's truth.
   [The checks](../../CONTRIBUTING.md#the-checks)
+
+## Designing a program on Loom
+
+The guide [designing a program](../guides/designing-a-program.md); law
+[MSG-14](../laws/messaging-laws.md#msg-14--a-call-is-a-function-of-its-argument-alone); reference
+[calls](../reference/messaging.md#calls-a-function-of-its-argument-alone) and
+[a call rule](../reference/capabilities.md#a-call-rule); the suites `call` and `call_loaded`.
+
+### Identifying a provided function
+
+Split a piece until it is too small to be useful alone, and judge each part by what it is for,
+never by a count. No list decides it: these are the signs that usually do, and a part may be a
+weave for a reason they do not name.
+
+- **A part that keeps state of its own, answers others, or is replaced while the program runs is
+  a weave of its own.** It needs a role to be found by, a grant to speak with and a story for its
+  replacement, and each of those is worth having only for a part that something else uses alone.
+- **A part that keeps nothing and answers with what it is handed is a provided function**:
+  `Provides<In>` on the weave that offers it, and a call from the weave that needs the answer in
+  its own turn. It costs the caller one call rule, and the provider's state stays its own.
+- **A part that only passes one weave's messages to another is folded into one of them.** Its
+  door is the other's door, so every driver of the other reaches it as well without it.
+
+Zengine's snake game is a program divided this way
+([its parts](https://github.com/Krealsion/Zengine/blob/main/examples/snake/README.md)):
+
+- The **world** is a weave: it holds the whole game, its rules, its keys and its beat, and every
+  driver steers it through its own doors, `SnakeTurn` and `SnakeTick`.
+- The **board** is a provided function. It is handed the board's data and answers what the board
+  draws, keeping nothing
+  ([its source](https://github.com/Krealsion/Zengine/blob/main/examples/snake/board.cpp)), and
+  the world calls it inside its own turn whenever that data changed. A weave that drew the board
+  by messages would answer a turn later, and the world's picture would trail its game.
+- The **pilot**, which plays the game, is a weave of its own, because it is replaced while the
+  game runs: it is flown in the player's place and landed again, and once it lands the world's
+  keys steer again.
+- The **keys and the beat** are not weaves. A weave for each would only pass keys and ticks to the
+  world's doors, which a pilot, a replay and a stepper already reach, so the world keeps its own.
