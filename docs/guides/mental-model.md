@@ -38,5 +38,6 @@ grants it reach. Holding a `Mail` is being *a weave*; holding the
 boundary ([capabilities](../reference/capabilities.md)).
 
 Where next: [write your first weave](writing-a-weave.md) · then
-[messaging](messaging.md). Exact semantics live in
-[reference](../reference/), invariants in [laws](../laws/README.md).
+[designing a program](designing-a-program.md) · then [messaging](messaging.md).
+Exact semantics live in [reference](../reference/), invariants in
+[laws](../laws/README.md).

@@ -14,7 +14,8 @@ each to the page section that already answers it.
 
 **I am new.** Start with the [mental model](guides/mental-model.md), then
 [write your first weave](guides/writing-a-weave.md) — working code in two
-pages, no history required.
+pages, no history required. When a program needs more than one,
+[designing a program](guides/designing-a-program.md) says how to divide it.
 
 **I am implementing something.**
 [Messaging](guides/messaging.md) ·
